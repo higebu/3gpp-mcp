@@ -1,0 +1,62 @@
+{{define "index.html"}}
+<div class="page-header">
+    <h1>3GPP Specifications</h1>
+    <p class="subtitle">{{.TotalCount}} specifications available</p>
+</div>
+
+<form class="filter-form" method="get" action="/">
+    <label for="series">Filter by series:</label>
+    <select name="series" id="series" onchange="this.form.submit()">
+        <option value="">All series</option>
+        {{$currentSeries := .Series}}
+        {{range $_, $s := (seq 99)}}
+        <option value="{{$s}}" {{if eq (printf "%d" $s) $currentSeries}}selected{{end}}>{{$s}}</option>
+        {{end}}
+    </select>
+</form>
+
+<div class="table-responsive">
+    <table class="specs-table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Title</th>
+                <th>Version</th>
+                <th>Release</th>
+                <th>Series</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Specs}}
+            <tr>
+                <td><a href="{{specURL .ID}}">{{.ID}}</a></td>
+                <td class="title-cell">{{.Title}}</td>
+                <td>{{.Version}}</td>
+                <td>{{.Release}}</td>
+                <td>{{.Series}}</td>
+            </tr>
+            {{else}}
+            <tr><td colspan="5" class="empty">No specifications found.</td></tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+
+{{if gt .TotalPages 1}}
+<nav class="pagination" aria-label="Pagination">
+    {{if .HasPrev}}
+        <a href="/?page={{sub .Page 1}}{{if .Series}}&series={{.Series}}{{end}}" class="page-link">&laquo; Previous</a>
+    {{else}}
+        <span class="page-link disabled">&laquo; Previous</span>
+    {{end}}
+
+    <span class="page-info">Page {{.Page}} of {{.TotalPages}}</span>
+
+    {{if .HasNext}}
+        <a href="/?page={{add .Page 1}}{{if .Series}}&series={{.Series}}{{end}}" class="page-link">Next &raquo;</a>
+    {{else}}
+        <span class="page-link disabled">Next &raquo;</span>
+    {{end}}
+</nav>
+{{end}}
+{{end}}

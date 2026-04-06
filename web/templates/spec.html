@@ -1,0 +1,62 @@
+{{define "spec.html"}}
+<div class="spec-layout">
+    <button class="toc-toggle" id="toc-toggle" aria-label="Toggle table of contents">&#9776; TOC</button>
+
+    <aside class="toc-sidebar" id="toc-sidebar">
+        <div class="toc-header">
+            <h3>{{.Spec.ID}}</h3>
+        </div>
+        <nav class="toc-nav">
+            <ul class="toc-list">
+                {{range .TOC}}
+                <li class="toc-item {{if isActive $.Current .Number}}active{{end}}" style="padding-left: {{indent .Level}}px">
+                    <a href="{{sectionURL $.Spec.ID .Number}}" title="{{.Number}} {{.Title}}">
+                        <span class="toc-number">{{.Number}}</span>
+                        <span class="toc-title">{{.Title}}</span>
+                    </a>
+                </li>
+                {{end}}
+            </ul>
+        </nav>
+        {{if .OpenAPIs}}
+        <div class="toc-openapi">
+            <h4>OpenAPI Definitions</h4>
+            <ul>
+                {{range .OpenAPIs}}
+                <li><a href="{{specURL .SpecID}}/openapi/{{.APIName}}">{{.APIName}}</a></li>
+                {{end}}
+            </ul>
+        </div>
+        {{end}}
+    </aside>
+
+    <div class="section-content">
+        {{range .Sections}}
+        <article class="section">
+            <h{{add .Level 1}} id="section-{{.Number}}">
+                <span class="section-number">{{.Number}}</span> {{.Title}}
+            </h{{add .Level 1}}>
+            <div class="section-body">
+                {{.Content}}
+            </div>
+        </article>
+        {{end}}
+
+        {{if .References}}
+        <div class="references">
+            <h3>References from this section</h3>
+            <ul class="ref-list">
+                {{range .References}}
+                <li>
+                    <a href="{{refURL .}}" {{if isExternalRef .}}target="_blank" rel="noopener"{{end}}>
+                        {{.TargetSpec}}{{if .TargetSection}} &sect;{{.TargetSection}}{{end}}
+                    </a>
+                    {{if .Context}}<span class="ref-context">{{.Context}}</span>{{end}}
+                </li>
+                {{end}}
+            </ul>
+        </div>
+        {{end}}
+    </div>
+</div>
+{{end}}

@@ -1,0 +1,23 @@
+# Build artifacts
+bin/
+coverage.out
+coverage.html
+
+# 3GPP specification files
+specs/
+
+# Database files
+data/*.db
+data/*.db-shm
+data/*.db-wal
+!data/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code
+.claude/
+
+# Mac
+.DS_Store

@@ -1,0 +1,20 @@
+version: "2"
+linters:
+  default: standard
+  settings:
+    errcheck:
+      exclude-functions:
+        - io.WriteString
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Sscanf
+        - encoding/xml.EscapeText
+        - (*encoding/xml.Decoder).Skip
+        - (net/http.ResponseWriter).Write
+  exclusions:
+    rules:
+      - linters: [errcheck]
+        source: "defer "
+      - linters: [errcheck]
+        path: _test\.go

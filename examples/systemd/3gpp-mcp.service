@@ -1,0 +1,22 @@
+[Unit]
+Description=3GPP MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=3gpp-mcp
+Group=3gpp-mcp
+ExecStart=/usr/local/bin/3gpp-mcp --db /var/lib/3gpp-mcp/3gpp.db --transport http --addr :8080
+EnvironmentFile=-/etc/3gpp-mcp/env
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/3gpp-mcp
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

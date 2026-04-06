@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly update of 3GPP specifications
+
+[Timer]
+OnCalendar=Mon 03:00
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

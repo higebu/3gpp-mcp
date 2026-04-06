@@ -1,0 +1,31 @@
+{{define "search.html"}}
+<div class="search-page">
+    <h1>Search Specifications</h1>
+
+    <form class="search-form" method="get" action="/search">
+        <div class="search-input-group">
+            <input type="text" name="q" value="{{.Query}}" placeholder="Search across all specifications..." class="search-input" autofocus>
+            <input type="text" name="spec_id" value="{{.SpecID}}" placeholder="Filter by spec ID (optional)" class="search-filter">
+            <button type="submit" class="search-btn">Search</button>
+        </div>
+    </form>
+
+    {{if .Query}}
+    <div class="search-results">
+        <p class="results-count">{{len .Results}} result{{if ne (len .Results) 1}}s{{end}} for "{{.Query}}"</p>
+
+        {{range .Results}}
+        <div class="search-result">
+            <h3>
+                <a href="{{sectionURL .SpecID .Number}}">{{.SpecID}} &sect;{{.Number}}</a>
+                <span class="result-title">{{.Title}}</span>
+            </h3>
+            <p class="result-snippet">{{safeHTML .Snippet}}</p>
+        </div>
+        {{else}}
+        <p class="no-results">No results found. Try a different search term.</p>
+        {{end}}
+    </div>
+    {{end}}
+</div>
+{{end}}

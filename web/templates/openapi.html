@@ -1,0 +1,40 @@
+{{define "openapi_list.html"}}
+<div class="openapi-page">
+    <h1>OpenAPI Definitions for {{.SpecID}}</h1>
+    <p><a href="{{specURL .SpecID}}">&larr; Back to {{.SpecID}}</a></p>
+
+    {{if .APIs}}
+    <div class="table-responsive">
+        <table class="specs-table">
+            <thead>
+                <tr>
+                    <th>API Name</th>
+                    <th>Version</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .APIs}}
+                <tr>
+                    <td><a href="{{specURL .SpecID}}/openapi/{{.APIName}}">{{.APIName}}</a></td>
+                    <td>{{.Version}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{else}}
+    <p>No OpenAPI definitions found for this specification.</p>
+    {{end}}
+</div>
+{{end}}
+
+{{define "openapi.html"}}
+<div class="openapi-page">
+    <h1>{{.APIName}}</h1>
+    <p><a href="{{specURL .SpecID}}/openapi">&larr; Back to API list</a> | <a href="{{specURL .SpecID}}">&larr; Back to {{.SpecID}}</a></p>
+
+    <div class="openapi-content">
+        {{.Content}}
+    </div>
+</div>
+{{end}}

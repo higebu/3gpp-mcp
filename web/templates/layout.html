@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3GPP Spec Viewer</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="navbar">
+        <div class="navbar-inner">
+            <a href="/" class="navbar-brand">3GPP Spec Viewer</a>
+            <nav class="navbar-nav">
+                <a href="/" class="nav-link">Specs</a>
+                <a href="/search" class="nav-link">Search</a>
+                <button id="theme-toggle" class="theme-toggle" aria-label="Toggle dark mode">
+                    <span class="theme-icon-light">&#9788;</span>
+                    <span class="theme-icon-dark">&#9789;</span>
+                </button>
+            </nav>
+        </div>
+    </header>
+    <main class="container">
+        {{if eq .Page "index"}}
+            {{template "index.html" .Data}}
+        {{else if eq .Page "spec"}}
+            {{template "spec.html" .Data}}
+        {{else if eq .Page "search"}}
+            {{template "search.html" .Data}}
+        {{else if eq .Page "openapi_list"}}
+            {{template "openapi_list.html" .Data}}
+        {{else if eq .Page "openapi"}}
+            {{template "openapi.html" .Data}}
+        {{else if eq .Page "error"}}
+            <div class="error-page">
+                <h1>{{.Data.Code}}</h1>
+                <p>{{.Data.Message}}</p>
+                <a href="/">Back to home</a>
+            </div>
+        {{end}}
+    </main>
+    <script src="/static/app.js"></script>
+</body>
+</html>
