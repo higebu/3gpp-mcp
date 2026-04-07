@@ -51,6 +51,10 @@ homebrew_casks:
     homepage: "https://github.com/higebu/3gpp-mcp"
     description: "MCP server for 3GPP specification documents"
     skip_upload: auto
+    generate_completions_from_executable:
+      args: ["completion"]
+      shells: ["bash", "zsh", "fish"]
+      shell_parameter_format: argument
 
 release:
   footer: >-

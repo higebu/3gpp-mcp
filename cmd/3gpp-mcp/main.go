@@ -38,7 +38,7 @@ func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: 3gpp-mcp <command> [options]")
-		fmt.Fprintln(os.Stderr, "Commands: serve, build, download, import, import-dir, update")
+		fmt.Fprintln(os.Stderr, "Commands: serve, build, download, import, import-dir, update, completion")
 		os.Exit(1)
 	}
 
@@ -58,9 +58,11 @@ func main() {
 		cmdPipeline(args)
 	case "update":
 		cmdUpdate(args)
+	case "completion":
+		cmdCompletion(args)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", command)
-		fmt.Fprintln(os.Stderr, "Commands: serve, build, download, import, import-dir, update")
+		fmt.Fprintln(os.Stderr, "Commands: serve, build, download, import, import-dir, update, completion")
 		os.Exit(1)
 	}
 }
@@ -343,6 +345,59 @@ func cmdPipeline(args []string) {
 
 	if err := p.Run(ctx, filtered); err != nil {
 		log.Fatalf("Pipeline failed: %v", err)
+	}
+}
+
+func cmdCompletion(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: 3gpp-mcp completion <bash|zsh|fish>")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "bash":
+		fmt.Print(`# bash completion for 3gpp-mcp
+_3gpp_mcp() {
+    local commands="serve build download import import-dir update completion"
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    if [[ ${COMP_CWORD} -eq 1 ]]; then
+        COMPREPLY=($(compgen -W "${commands}" -- "${cur}"))
+    fi
+}
+complete -F _3gpp_mcp 3gpp-mcp
+`)
+	case "zsh":
+		fmt.Print(`#compdef 3gpp-mcp
+
+_3gpp_mcp() {
+    local -a commands
+    commands=(
+        'serve:Start the MCP server'
+        'build:Download and import specs into database'
+        'download:Download spec files from 3GPP archive'
+        'import:Import a single DOCX file into database'
+        'import-dir:Import a directory of DOCX files into database'
+        'update:Update database to latest spec versions'
+        'completion:Generate shell completion scripts'
+    )
+    _describe '3gpp-mcp command' commands
+}
+
+_3gpp_mcp
+`)
+	case "fish":
+		fmt.Print(`# fish completion for 3gpp-mcp
+complete -c 3gpp-mcp -f
+complete -c 3gpp-mcp -n "not __fish_seen_subcommand_from serve build download import import-dir update completion" -a serve      -d 'Start the MCP server'
+complete -c 3gpp-mcp -n "not __fish_seen_subcommand_from serve build download import import-dir update completion" -a build      -d 'Download and import specs into database'
+complete -c 3gpp-mcp -n "not __fish_seen_subcommand_from serve build download import import-dir update completion" -a download   -d 'Download spec files from 3GPP archive'
+complete -c 3gpp-mcp -n "not __fish_seen_subcommand_from serve build download import import-dir update completion" -a import     -d 'Import a single DOCX file into database'
+complete -c 3gpp-mcp -n "not __fish_seen_subcommand_from serve build download import import-dir update completion" -a import-dir -d 'Import a directory of DOCX files into database'
+complete -c 3gpp-mcp -n "not __fish_seen_subcommand_from serve build download import import-dir update completion" -a update     -d 'Update database to latest spec versions'
+complete -c 3gpp-mcp -n "not __fish_seen_subcommand_from serve build download import import-dir update completion" -a completion -d 'Generate shell completion scripts'
+`)
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown shell: %s (supported: bash, zsh, fish)\n", args[0])
+		os.Exit(1)
 	}
 }
 
