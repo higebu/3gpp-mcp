@@ -21,3 +21,6 @@ data/*.db-wal
 
 # Mac
 .DS_Store
+
+# Added by goreleaser init:
+dist/
