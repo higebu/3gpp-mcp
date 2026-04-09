@@ -1,5 +1,11 @@
 # 3gpp-mcp
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/higebu/3gpp-mcp.svg)](https://pkg.go.dev/github.com/higebu/3gpp-mcp)
+[![Go Report Card](https://goreportcard.com/badge/github.com/higebu/3gpp-mcp)](https://goreportcard.com/report/github.com/higebu/3gpp-mcp)
+[![CI](https://github.com/higebu/3gpp-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/higebu/3gpp-mcp/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/github/higebu/3gpp-mcp/graph/badge.svg?token=cgYIUH4xwz)](https://codecov.io/github/higebu/3gpp-mcp)
+![GitHub Release](https://img.shields.io/github/v/release/higebu/3gpp-mcp)
+
 An MCP (Model Context Protocol) server that makes 3GPP specifications accessible to LLMs.
 
 ## Background
