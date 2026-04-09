@@ -375,6 +375,62 @@ func TestConvertDir_MissingDir(t *testing.T) {
 	}
 }
 
+// TestConvertSingleFile exercises the ConvertSingleFile public API end to end
+// using the shared testdata .docx file, verifying that the spec, sections,
+// and derived release number all land in the target database.
+func TestConvertSingleFile(t *testing.T) {
+	docxPath := testdataDocxPath(t)
+	if _, err := os.Stat(docxPath); err != nil {
+		t.Skipf("testdata docx not available: %v", err)
+	}
+	d := setupTestDB(t)
+
+	if err := ConvertSingleFile(context.Background(), d, docxPath, false); err != nil {
+		t.Fatalf("ConvertSingleFile: %v", err)
+	}
+
+	// Parser pulls spec ID from metadata; testdata file is TS 23.274.
+	sections, err := d.GetTOC("TS 23.274")
+	if err != nil {
+		t.Fatalf("GetTOC: %v", err)
+	}
+	if len(sections) == 0 {
+		t.Error("expected sections for TS 23.274 after ConvertSingleFile")
+	}
+
+	specs, err := d.ListSpecs("", -1, 0)
+	if err != nil {
+		t.Fatalf("ListSpecs: %v", err)
+	}
+	found := false
+	for _, s := range specs.Specs {
+		if s.ID == "TS 23.274" {
+			found = true
+			// releaseFromDocxFilename derives release from the i-prefix.
+			if s.Release != "18" {
+				t.Errorf("Release = %q, want 18", s.Release)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("TS 23.274 missing from ListSpecs result")
+	}
+}
+
+// TestConvertSingleFile_BadPath verifies the error path when the docx file
+// cannot be parsed (missing file).
+func TestConvertSingleFile_BadPath(t *testing.T) {
+	d := setupTestDB(t)
+	err := ConvertSingleFile(context.Background(), d, filepath.Join(t.TempDir(), "missing.docx"), false)
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+	if !strings.Contains(err.Error(), "parse") {
+		t.Errorf("error = %v, want to contain 'parse'", err)
+	}
+}
+
 // TestReleaseFromDocxFilename pins down the version-letter → release mapping
 // used to populate the Release column when importing single files.
 func TestReleaseFromDocxFilename(t *testing.T) {

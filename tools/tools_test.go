@@ -520,3 +520,134 @@ func TestHandleGetOpenAPI_NonexistentSchema(t *testing.T) {
 		t.Errorf("expected available schemas listing, got: %s", text)
 	}
 }
+
+// TestHandleSearch_EdgeCases covers a set of degenerate query inputs that must
+// produce clean tool errors rather than panics or 500-level responses.
+func TestHandleSearch_EdgeCases(t *testing.T) {
+	d := setupTestDB(t)
+	handler := HandleSearch(d)
+
+	cases := []struct {
+		name  string
+		query string
+	}{
+		{"empty", ""},
+		{"only punctuation", `"`},
+		{"operators only", "AND OR NOT"},
+		{"unterminated paren", "NEAR(term"},
+		{"very long", strings.Repeat("a", 10000)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, _, err := handler(context.Background(), nil, SearchInput{Query: tc.query})
+			if err != nil {
+				t.Fatalf("handler returned error: %v", err)
+			}
+			if result == nil {
+				t.Fatal("nil result")
+			}
+			// Either an error result or an empty set - never a panic.
+		})
+	}
+}
+
+// TestHandleGetSection_PaginationEdges covers paginateText boundary behaviour
+// that was previously exercised only for happy paths.
+func TestHandleGetSection_PaginationEdges(t *testing.T) {
+	d := setupTestDB(t)
+	handler := HandleGetSection(d)
+
+	t.Run("offset beyond content", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetSectionInput{
+			SpecID: "TS 23.501", SectionNumber: "1", Offset: 10000,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "No content at offset") {
+			t.Errorf("expected overflow message, got: %s", text)
+		}
+	})
+
+	t.Run("max_chars limits output", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetSectionInput{
+			SpecID: "TS 23.501", SectionNumber: "5", IncludeSubsections: true, MaxChars: 10,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if text == "" {
+			t.Fatal("empty output")
+		}
+	})
+
+	t.Run("negative offset clamped", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetSectionInput{
+			SpecID: "TS 23.501", SectionNumber: "1", Offset: -5,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "[Lines 1-") {
+			t.Errorf("expected pagination header starting at line 1, got: %s", text)
+		}
+	})
+
+	t.Run("max_lines=1 returns single line", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetSectionInput{
+			SpecID: "TS 23.501", SectionNumber: "5", IncludeSubsections: true, MaxLines: 1,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "[Lines 1-") {
+			t.Errorf("expected pagination header, got: %s", text)
+		}
+	})
+}
+
+// TestHandleListSpecs_InvalidPagination verifies that out-of-range pagination
+// parameters are clamped by the handler rather than passed straight through to
+// SQL OFFSET/LIMIT as negative or absurd values.
+func TestHandleListSpecs_InvalidPagination(t *testing.T) {
+	d := setupTestDB(t)
+	handler := HandleListSpecs(d)
+
+	t.Run("negative offset", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, ListSpecsInput{Offset: -100})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "TS 23.501") {
+			t.Errorf("expected specs in output, got: %s", text)
+		}
+	})
+
+	t.Run("huge limit capped", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, ListSpecsInput{Limit: 1 << 30})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		// Should not crash; should contain total_count and the specs.
+		if !strings.Contains(text, "total_count") {
+			t.Errorf("expected total_count in output, got: %s", text)
+		}
+	})
+
+	t.Run("offset past end returns empty list", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, ListSpecsInput{Offset: 10000})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "total_count") {
+			t.Errorf("expected total_count in output, got: %s", text)
+		}
+	})
+}

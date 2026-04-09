@@ -285,6 +285,42 @@ func TestParseDocx_26274(t *testing.T) {
 	t.Logf("Parsed %d sections from %s", len(sections), metadata.SpecID)
 }
 
+// TestParseDocxFromBytes covers the byte-slice entrypoint alongside ParseDocx,
+// exercising the in-memory code path without touching the filesystem loader.
+func TestParseDocxFromBytes(t *testing.T) {
+	data, err := os.ReadFile(testdataPath("23274-i20.docx"))
+	if err != nil {
+		t.Fatalf("read testdata: %v", err)
+	}
+
+	t.Run("valid docx", func(t *testing.T) {
+		result, err := ParseDocxFromBytes(data, "23274-i20.docx")
+		if err != nil {
+			t.Fatalf("ParseDocxFromBytes: %v", err)
+		}
+		if result.Metadata.SpecID != "TS 23.274" {
+			t.Errorf("SpecID = %q, want TS 23.274", result.Metadata.SpecID)
+		}
+		if len(result.Sections) == 0 {
+			t.Error("expected at least one parsed section")
+		}
+	})
+
+	t.Run("empty bytes", func(t *testing.T) {
+		_, err := ParseDocxFromBytes(nil, "empty.docx")
+		if err == nil {
+			t.Fatal("expected error for empty bytes")
+		}
+	})
+
+	t.Run("garbage bytes", func(t *testing.T) {
+		_, err := ParseDocxFromBytes([]byte("not a zip"), "bogus.docx")
+		if err == nil {
+			t.Fatal("expected error for non-zip payload")
+		}
+	})
+}
+
 // TestParseDocx_22839 exercises parsing of TS 22.839, which uses Strict OOXML
 // namespaces (purl.oclc.org/ooxml). Go's xml.Decoder only uses Name.Local and
 // the parser reads ZIP entries by fixed paths, so Strict OOXML files are parsed

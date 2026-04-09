@@ -850,3 +850,298 @@ func TestInsertSpecWithSections_BracketedRefs(t *testing.T) {
 		t.Errorf("missing expected bracket references: %v, got refs: %+v", expect, refs)
 	}
 }
+
+// TestOpen_ReadOnly verifies the public Open constructor returns a working
+// handle that can query previously persisted data.
+func TestOpen_ReadOnly(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "readonly.db")
+
+	// Seed the database in read-write mode first.
+	rw, err := OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadWrite: %v", err)
+	}
+	if err := rw.InitSchema(); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+	if err := rw.UpsertSpec(Spec{ID: "TS 23.501", Title: "Arch", Series: "23"}); err != nil {
+		t.Fatalf("UpsertSpec: %v", err)
+	}
+	rw.Close()
+
+	// Re-open through the Open entrypoint and verify queries still work.
+	ro, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer ro.Close()
+
+	result, err := ro.ListSpecs("", 0, 0)
+	if err != nil {
+		t.Fatalf("ListSpecs: %v", err)
+	}
+	if len(result.Specs) != 1 || result.Specs[0].ID != "TS 23.501" {
+		t.Errorf("expected TS 23.501, got %+v", result.Specs)
+	}
+}
+
+// TestInitSchema_FreshDB covers the public InitSchema entrypoint that the CLI
+// commands use, separate from the ExecScript(Schema) shortcut used in tests.
+func TestInitSchema_FreshDB(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "init.db")
+	d, err := OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadWrite: %v", err)
+	}
+	defer d.Close()
+
+	if err := d.InitSchema(); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+	// Calling InitSchema twice should be idempotent.
+	if err := d.InitSchema(); err != nil {
+		t.Fatalf("InitSchema (second call): %v", err)
+	}
+
+	// Verify all expected tables exist by running a probe query on each.
+	for _, table := range []string{"specs", "sections", "sections_fts", "images", "openapi_specs", "spec_references"} {
+		if err := d.Exec("SELECT 1 FROM " + table + " WHERE 0 = 1"); err != nil {
+			t.Errorf("table %q missing or query failed: %v", table, err)
+		}
+	}
+}
+
+// TestExec_DirectSQL covers the exported Exec helper used for ad-hoc writes.
+func TestExec_DirectSQL(t *testing.T) {
+	d := setupTestDB(t)
+
+	// Insert a new spec via Exec directly.
+	if err := d.Exec(
+		"INSERT INTO specs (id, title, series) VALUES (?, ?, ?)",
+		"TS 99.123", "Exec-inserted", "99",
+	); err != nil {
+		t.Fatalf("Exec insert: %v", err)
+	}
+
+	result, err := d.ListSpecs("99", 0, 0)
+	if err != nil {
+		t.Fatalf("ListSpecs: %v", err)
+	}
+	if len(result.Specs) != 1 || result.Specs[0].ID != "TS 99.123" {
+		t.Errorf("expected TS 99.123 in series 99, got %+v", result.Specs)
+	}
+
+	// An invalid statement should surface an error.
+	if err := d.Exec("NOT VALID SQL"); err == nil {
+		t.Error("expected error for invalid SQL")
+	}
+}
+
+// TestUpsertSpec_Replaces verifies that UpsertSpec overwrites an existing row
+// with the new fields (INSERT OR REPLACE behavior).
+func TestUpsertSpec_Replaces(t *testing.T) {
+	d := setupTestDB(t)
+
+	// Existing spec from seed data: TS 23.501 version 18.6.0
+	if err := d.UpsertSpec(Spec{
+		ID: "TS 23.501", Title: "Updated", Version: "k10", Release: "Rel-20", Series: "23",
+	}); err != nil {
+		t.Fatalf("UpsertSpec: %v", err)
+	}
+
+	result, err := d.ListSpecs("", 0, 0)
+	if err != nil {
+		t.Fatalf("ListSpecs: %v", err)
+	}
+	var found *Spec
+	for i := range result.Specs {
+		if result.Specs[i].ID == "TS 23.501" {
+			found = &result.Specs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("TS 23.501 missing after upsert")
+	}
+	if found.Title != "Updated" || found.Version != "k10" || found.Release != "Rel-20" {
+		t.Errorf("upsert did not overwrite fields: %+v", found)
+	}
+}
+
+// TestUpsertSection_ReplacesContent verifies UpsertSection deletes and
+// re-inserts a section, and that the FTS index is updated accordingly.
+func TestUpsertSection_ReplacesContent(t *testing.T) {
+	d := setupTestDB(t)
+
+	// TS 23.501 section 1 seed content talks about "system architecture".
+	// Replace it with completely unrelated content and confirm the FTS row
+	// follows suit.
+	if err := d.UpsertSection(Section{
+		SpecID:  "TS 23.501",
+		Number:  "1",
+		Title:   "Scope",
+		Level:   1,
+		Content: "Completely new scope content about zucchini and tomatoes.",
+	}); err != nil {
+		t.Fatalf("UpsertSection: %v", err)
+	}
+
+	sections, err := d.GetSection("TS 23.501", "1", false)
+	if err != nil {
+		t.Fatalf("GetSection: %v", err)
+	}
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(sections))
+	}
+	if !strings.Contains(sections[0].Content, "zucchini") {
+		t.Errorf("content not replaced: %q", sections[0].Content)
+	}
+
+	// FTS should pick up the new token.
+	results, err := d.Search("zucchini", []string{"TS 23.501"}, 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) == 0 {
+		t.Error("expected FTS hit for zucchini after upsert")
+	}
+}
+
+// TestImageCRUD exercises the image public API end to end: UpsertImage,
+// GetImage, and ListImages.
+func TestImageCRUD(t *testing.T) {
+	d := setupTestDB(t)
+
+	payload := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xde, 0xad}
+	img := Image{
+		SpecID:      "TS 23.501",
+		Name:        "fig1.png",
+		MIMEType:    "image/png",
+		Data:        payload,
+		LLMReadable: true,
+	}
+	if err := d.UpsertImage(img); err != nil {
+		t.Fatalf("UpsertImage: %v", err)
+	}
+
+	// UpsertImage again should replace cleanly.
+	img.MIMEType = "image/png"
+	if err := d.UpsertImage(img); err != nil {
+		t.Fatalf("UpsertImage (replace): %v", err)
+	}
+
+	got, err := d.GetImage("TS 23.501", "fig1.png")
+	if err != nil {
+		t.Fatalf("GetImage: %v", err)
+	}
+	if got == nil || got.Name != "fig1.png" || got.MIMEType != "image/png" {
+		t.Errorf("GetImage returned %+v", got)
+	}
+	if !got.LLMReadable {
+		t.Error("LLMReadable flag lost")
+	}
+	if len(got.Data) != len(payload) {
+		t.Errorf("image bytes length = %d, want %d", len(got.Data), len(payload))
+	}
+
+	// Missing image.
+	if _, err := d.GetImage("TS 23.501", "missing.png"); err == nil {
+		t.Error("expected error for missing image")
+	}
+
+	// ListImages returns only the inserted image.
+	infos, err := d.ListImages("TS 23.501")
+	if err != nil {
+		t.Fatalf("ListImages: %v", err)
+	}
+	if len(infos) != 1 || infos[0].Name != "fig1.png" {
+		t.Errorf("ListImages = %+v, want [fig1.png]", infos)
+	}
+
+	// Empty spec → empty result.
+	infos, err = d.ListImages("TS 00.000")
+	if err != nil {
+		t.Fatalf("ListImages empty: %v", err)
+	}
+	if len(infos) != 0 {
+		t.Errorf("expected empty list, got %+v", infos)
+	}
+}
+
+// TestGetBracketMap covers the DB helper that reads the References section and
+// returns a [N] -> spec map, plus its nil return for specs without one.
+func TestGetBracketMap(t *testing.T) {
+	d := setupTestDB(t)
+
+	// Insert a References section into TS 23.501.
+	if err := d.UpsertSection(Section{
+		SpecID: "TS 23.501", Number: "2", Title: "References", Level: 1,
+		Content: "## 2 References\n\n[1]\t3GPP TS 29.510: \"NRF\"\n[2]\t3GPP TR 23.700: \"Study\"",
+	}); err != nil {
+		t.Fatalf("UpsertSection: %v", err)
+	}
+
+	m, err := d.GetBracketMap("TS 23.501")
+	if err != nil {
+		t.Fatalf("GetBracketMap: %v", err)
+	}
+	if m["1"] != "TS 29.510" {
+		t.Errorf("bracket [1] = %q, want TS 29.510", m["1"])
+	}
+	if m["2"] != "TR 23.700" {
+		t.Errorf("bracket [2] = %q, want TR 23.700", m["2"])
+	}
+
+	// TS 29.510 has no References section in seed data → expect nil.
+	m2, err := d.GetBracketMap("TS 29.510")
+	if err != nil {
+		t.Fatalf("GetBracketMap empty: %v", err)
+	}
+	if m2 != nil {
+		t.Errorf("expected nil bracket map for spec without References section, got %+v", m2)
+	}
+}
+
+// TestInsertSpecWithSections_MultiSectionRefs covers the
+// tsMultiPrefixSpecSections and tsMultiSpecSections extractors (both 0%
+// covered until now) by inserting content with the multi-section patterns and
+// asserting ExtractReferences fanned out one reference per section.
+func TestInsertSpecWithSections_MultiSectionRefs(t *testing.T) {
+	d := setupTestDB(t)
+
+	spec := Spec{ID: "TS 99.003", Title: "Multi Section Refs Test", Series: "99"}
+	sections := []Section{
+		{
+			SpecID: "TS 99.003", Number: "5", Title: "Procedures", Level: 1,
+			Content: "The behavior is described in clauses 8.2 and 16.11 of TS 23.402 for roaming scenarios.\n" +
+				"See also TS 29.510 clauses 5.1 and 6.3 for NRF-specific behavior.",
+		},
+	}
+	if err := d.InsertSpecWithSections(spec, sections); err != nil {
+		t.Fatalf("InsertSpecWithSections: %v", err)
+	}
+
+	refs, err := d.GetReferences("TS 99.003", "5", "outgoing", false)
+	if err != nil {
+		t.Fatalf("GetReferences: %v", err)
+	}
+
+	// Collect (spec, section) pairs.
+	got := make(map[string]bool)
+	for _, r := range refs {
+		got[r.TargetSpec+"#"+r.TargetSection] = true
+	}
+
+	// tsMultiPrefixRefRE should have produced both sections of TS 23.402.
+	for _, want := range []string{"TS 23.402#8.2", "TS 23.402#16.11"} {
+		if !got[want] {
+			t.Errorf("missing multi-prefix ref %s; got: %+v", want, refs)
+		}
+	}
+	// tsMultiRefRE should have produced both sections of TS 29.510.
+	for _, want := range []string{"TS 29.510#5.1", "TS 29.510#6.3"} {
+		if !got[want] {
+			t.Errorf("missing multi-ref %s; got: %+v", want, refs)
+		}
+	}
+}

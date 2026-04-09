@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -158,6 +161,95 @@ func (rt *redirectTransport) RoundTrip(req *http.Request) (*http.Response, error
 	}
 	req.URL = target
 	return rt.base.RoundTrip(req)
+}
+
+// TestLoadSpecList covers the file-loading branch: skips blank lines,
+// trims whitespace, and surfaces scanner errors as they arise.
+func TestLoadSpecList(t *testing.T) {
+	t.Run("reads entries and skips blanks", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "list.txt")
+		data := "23_series/23.501/23501-k10.zip\n" +
+			"\n" +
+			"  29_series/29.510/29510-k10.zip  \n" +
+			"\t\n" +
+			"36_series/36.133/36133-j40.zip\n"
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		entries, err := LoadSpecList(path)
+		if err != nil {
+			t.Fatalf("LoadSpecList: %v", err)
+		}
+		want := []string{
+			"23_series/23.501/23501-k10.zip",
+			"29_series/29.510/29510-k10.zip",
+			"36_series/36.133/36133-j40.zip",
+		}
+		if len(entries) != len(want) {
+			t.Fatalf("got %d entries, want %d: %v", len(entries), len(want), entries)
+		}
+		for i, e := range entries {
+			if e != want[i] {
+				t.Errorf("entries[%d] = %q, want %q", i, e, want[i])
+			}
+		}
+	})
+
+	t.Run("missing file returns error", func(t *testing.T) {
+		_, err := LoadSpecList(filepath.Join(t.TempDir(), "nope.txt"))
+		if err == nil {
+			t.Error("expected error for missing file")
+		}
+	})
+}
+
+// TestFetchSpecZips exercises the single-spec zip listing endpoint against a
+// mock 3GPP archive, covering both the dotted and undotted specID shapes.
+func TestFetchSpecZips(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="23501-k10.zip">23501-k10.zip</a>`+"\n"+
+			`<a href="23501-j60.zip">23501-j60.zip</a>`+"\n"+
+			`<a href="README.txt">README.txt</a>`+"\n")
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	client := &http.Client{
+		Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL},
+	}
+
+	t.Run("dotted specID", func(t *testing.T) {
+		entries, err := FetchSpecZips(context.Background(), client, "23.501", false)
+		if err != nil {
+			t.Fatalf("FetchSpecZips: %v", err)
+		}
+		if len(entries) != 2 {
+			t.Fatalf("got %d zips, want 2: %v", len(entries), entries)
+		}
+		for _, e := range entries {
+			if !strings.HasPrefix(e, "23_series/23.501/") {
+				t.Errorf("entry missing series/spec prefix: %q", e)
+			}
+		}
+	})
+
+	t.Run("undotted specID normalized", func(t *testing.T) {
+		entries, err := FetchSpecZips(context.Background(), client, "23501", false)
+		if err != nil {
+			t.Fatalf("FetchSpecZips: %v", err)
+		}
+		if len(entries) != 2 {
+			t.Errorf("expected 2 entries, got %d", len(entries))
+		}
+	})
+
+	t.Run("invalid specID", func(t *testing.T) {
+		_, err := FetchSpecZips(context.Background(), client, "bogus", false)
+		if err == nil {
+			t.Error("expected error for malformed spec ID")
+		}
+	})
 }
 
 // TestFetchSpecList_Race exercises FetchSpecList with a mock 3GPP directory
