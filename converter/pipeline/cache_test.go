@@ -3,6 +3,7 @@ package pipeline
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -92,5 +93,63 @@ func TestLoadCache_Missing(t *testing.T) {
 	}
 	if loaded != nil {
 		t.Error("expected nil for missing cache")
+	}
+}
+
+// TestCacheDir covers the two branches of cacheDir: XDG_CACHE_HOME set and
+// unset (falls back to $HOME/.cache/3gpp-mcp).
+func TestCacheDir(t *testing.T) {
+	t.Run("with XDG_CACHE_HOME", func(t *testing.T) {
+		t.Setenv("XDG_CACHE_HOME", "/tmp/xdg-test")
+		dir, err := cacheDir()
+		if err != nil {
+			t.Fatalf("cacheDir: %v", err)
+		}
+		want := "/tmp/xdg-test/3gpp-mcp"
+		if dir != want {
+			t.Errorf("cacheDir = %q, want %q", dir, want)
+		}
+	})
+
+	t.Run("falls back to home .cache", func(t *testing.T) {
+		t.Setenv("XDG_CACHE_HOME", "")
+		dir, err := cacheDir()
+		if err != nil {
+			// On systems where UserHomeDir fails the function should return
+			// an error; either outcome is acceptable as long as we exercised
+			// the code path.
+			return
+		}
+		if !strings.HasSuffix(dir, "/3gpp-mcp") {
+			t.Errorf("cacheDir = %q, want suffix /3gpp-mcp", dir)
+		}
+		if !strings.Contains(dir, ".cache") {
+			t.Errorf("cacheDir = %q, want to contain .cache", dir)
+		}
+	})
+}
+
+// TestSaveCache_CreatesDir verifies SaveCache creates the cache directory
+// even when the parent does not yet exist, exercising the mkdir path.
+func TestSaveCache_CreatesDir(t *testing.T) {
+	// Point cache at a brand-new subdirectory inside t.TempDir().
+	root := filepath.Join(t.TempDir(), "freshxdg")
+	t.Setenv("XDG_CACHE_HOME", root)
+
+	if err := SaveCache(CacheKey("create"), []string{"only-entry"}); err != nil {
+		t.Fatalf("SaveCache: %v", err)
+	}
+
+	cacheDirPath := filepath.Join(root, "3gpp-mcp")
+	if _, err := os.Stat(cacheDirPath); err != nil {
+		t.Errorf("expected cache dir created: %v", err)
+	}
+
+	loaded, err := LoadCache(CacheKey("create"), time.Hour)
+	if err != nil {
+		t.Fatalf("LoadCache: %v", err)
+	}
+	if len(loaded) != 1 || loaded[0] != "only-entry" {
+		t.Errorf("round trip = %v, want [only-entry]", loaded)
 	}
 }

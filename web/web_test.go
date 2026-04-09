@@ -373,6 +373,121 @@ func TestIsExternalRef(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdown_ImageAltEscaped verifies the alt-text escaping inside the
+// custom image:// rewrite path. This covers the one place where user-provided
+// text flows through htmlpkg.EscapeString before reaching the template.
+func TestRenderMarkdown_ImageAltEscaped(t *testing.T) {
+	content := `![alt"onload=x("y")](image://fig.png?w=600&h=400)`
+	got := renderMarkdown(content, "TS 23.501", nil)
+	if strings.Contains(got, `alt"onload`) {
+		t.Errorf("alt text should be HTML-escaped, got:\n%s", got)
+	}
+	if !strings.Contains(got, `&#34;`) && !strings.Contains(got, `&quot;`) {
+		t.Errorf("expected escaped quotation mark in alt text, got:\n%s", got)
+	}
+}
+
+// TestRenderMarkdown_FigureAltEscaped exercises the figure-syntax alt escaping.
+func TestRenderMarkdown_FigureAltEscaped(t *testing.T) {
+	content := `[Figure: <script>x</script> Network (fig.png, use get_image to retrieve, 100x100)]`
+	got := renderMarkdown(content, "TS 23.501", nil)
+	if strings.Contains(got, "<script>x</script> Network") {
+		t.Errorf("figure alt text should be escaped, got:\n%s", got)
+	}
+	if !strings.Contains(got, "&lt;script&gt;") {
+		t.Errorf("expected escaped <script> in figure alt, got:\n%s", got)
+	}
+}
+
+// TestRenderMarkdown_RawHTMLPassthrough pins down the current behaviour of the
+// markdown renderer: goldmark is configured with html.WithUnsafe(), so raw
+// HTML embedded in section content is passed through verbatim. 3GPP specs are
+// officially published documents (not user-controlled input), so this is
+// considered acceptable today, but any change that would start rendering
+// user-controlled content through this path MUST first add HTML sanitization.
+// This test fails if that trust assumption silently changes.
+func TestRenderMarkdown_RawHTMLPassthrough(t *testing.T) {
+	content := "Inline <b>bold</b> and <script>alert(1)</script> here."
+	got := renderMarkdown(content, "TS 23.501", nil)
+	// Pins the current unsafe behaviour. If this ever starts escaping, it
+	// almost certainly means goldmark's WithUnsafe() was removed — verify the
+	// change is intentional before updating this expectation.
+	if !strings.Contains(got, "<b>bold</b>") {
+		t.Errorf("expected raw <b> to pass through (current behaviour), got:\n%s", got)
+	}
+	if !strings.Contains(got, "<script>alert(1)</script>") {
+		t.Errorf("expected raw <script> to pass through (current behaviour), got:\n%s", got)
+	}
+}
+
+// TestHandleOpenAPI_NotFound verifies the error path when requesting a missing
+// OpenAPI spec returns 404 rather than 500.
+func TestHandleOpenAPI_NotFound(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 29.510/openapi/DoesNotExist")
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestHandleOpenAPIList_EmptySpec verifies the empty-list branch when a valid
+// spec has no OpenAPI definitions registered.
+func TestHandleOpenAPIList_EmptySpec(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	// TS 23.501 seed data contains no openapi_specs rows.
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/openapi")
+	if err != nil {
+		t.Fatalf("GET error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestHandleSearch_Malformed exercises the query-with-only-punctuation path,
+// which the FTS5 sanitizer rewrites into a quoted token. The server must
+// either return results or a clean error page, never a 500.
+func TestHandleSearch_Malformed(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	for _, q := range []string{`"`, `()`, strings.Repeat("a", 10000)} {
+		resp, err := http.Get(ts.URL + "/search?q=" + urlEncode(q))
+		if err != nil {
+			t.Fatalf("GET error: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode >= 500 {
+			t.Errorf("query %q produced HTTP %d, want < 500", q, resp.StatusCode)
+		}
+	}
+}
+
+func urlEncode(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == ' ' {
+			b.WriteByte('+')
+			continue
+		}
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			continue
+		}
+		_, _ = b.WriteString("%")
+		const hex = "0123456789ABCDEF"
+		b.WriteByte(hex[byte(r)>>4])
+		b.WriteByte(hex[byte(r)&0x0F])
+	}
+	return b.String()
+}
+
 func readBody(t *testing.T, resp *http.Response) string {
 	t.Helper()
 	data, err := io.ReadAll(resp.Body)
