@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -285,6 +286,109 @@ func TestPipelineRun_Race(t *testing.T) {
 	}
 	if len(sections) == 0 {
 		t.Error("expected sections for TS 23.274 after pipeline run")
+	}
+}
+
+// TestPipelineRun_ContextCancel verifies Pipeline.Run honors context
+// cancellation. The fake server blocks indefinitely on the download request,
+// the test cancels the context, and Pipeline.Run must return promptly.
+func TestPipelineRun_ContextCancel(t *testing.T) {
+	requested := make(chan struct{}, 1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case requested <- struct{}{}:
+		default:
+		}
+		// Block until the client cancels the request.
+		<-r.Context().Done()
+	}))
+	defer ts.Close()
+
+	d := setupTestDB(t)
+
+	specs := []*SpecVersion{{
+		Series:        "23",
+		SpecID:        "23.274",
+		Filename:      "23274-i20.zip",
+		VersionLetter: "i",
+		VersionMinor:  20,
+		Release:       18,
+		URL:           ts.URL + "/blocking.zip",
+	}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	p := &Pipeline{
+		DB:      d,
+		Client:  ts.Client(),
+		Workers: 1,
+		Timeout: 30 * time.Second,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- p.Run(ctx, specs)
+	}()
+
+	// Wait until the server has actually started serving the request, then
+	// cancel.
+	select {
+	case <-requested:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("server never received a request")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		// Pipeline.Run swallows individual goroutine cancel errors and returns
+		// nil; the only contract is that it returns promptly.
+		_ = err
+	case <-time.After(10 * time.Second):
+		t.Fatal("Pipeline.Run did not return within 10s after cancel")
+	}
+}
+
+// TestConvertDir_EmptyDirError verifies ConvertDir returns an error when no
+// .docx files are present.
+func TestConvertDir_EmptyDirError(t *testing.T) {
+	dir := t.TempDir()
+	d := setupTestDB(t)
+	err := ConvertDir(context.Background(), d, dir, 1, false)
+	if err == nil {
+		t.Fatal("expected error for empty directory")
+	}
+	if !strings.Contains(err.Error(), "no .docx files") {
+		t.Errorf("error = %v, want 'no .docx files'", err)
+	}
+}
+
+// TestConvertDir_MissingDir verifies ConvertDir surfaces filesystem errors
+// when the directory does not exist.
+func TestConvertDir_MissingDir(t *testing.T) {
+	d := setupTestDB(t)
+	err := ConvertDir(context.Background(), d, filepath.Join(t.TempDir(), "nope"), 1, false)
+	if err == nil {
+		t.Fatal("expected error for missing directory")
+	}
+}
+
+// TestReleaseFromDocxFilename pins down the version-letter → release mapping
+// used to populate the Release column when importing single files.
+func TestReleaseFromDocxFilename(t *testing.T) {
+	cases := map[string]int{
+		"23501-i30.docx": 18,
+		"24229-h50.docx": 17,
+		"29510-f60.docx": 15,
+		"weirdname.docx": 0,
+		"23501.docx":     0,
+	}
+	for in, want := range cases {
+		if got := releaseFromDocxFilename(in); got != want {
+			t.Errorf("releaseFromDocxFilename(%q) = %d, want %d", in, got, want)
+		}
 	}
 }
 

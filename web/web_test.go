@@ -286,6 +286,68 @@ func TestHandleReferences(t *testing.T) {
 	}
 }
 
+func TestHandleImage(t *testing.T) {
+	ts, d := setupTestServer(t)
+
+	imgData := []byte("\x89PNG\r\n\x1a\nfake-png-bytes")
+	if err := d.UpsertImage(db.Image{
+		SpecID:      "TS 23.501",
+		Name:        "fig1.png",
+		MIMEType:    "image/png",
+		Data:        imgData,
+		LLMReadable: true,
+	}); err != nil {
+		t.Fatalf("seed image: %v", err)
+	}
+
+	t.Run("returns image bytes with headers", func(t *testing.T) {
+		resp, err := http.Get(ts.URL + "/specs/TS 23.501/images/fig1.png")
+		if err != nil {
+			t.Fatalf("GET image error: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("status = %d, want 200", resp.StatusCode)
+		}
+		if ct := resp.Header.Get("Content-Type"); ct != "image/png" {
+			t.Errorf("Content-Type = %q, want image/png", ct)
+		}
+		if cc := resp.Header.Get("Cache-Control"); cc != "public, max-age=86400" {
+			t.Errorf("Cache-Control = %q, want public, max-age=86400", cc)
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		if string(body) != string(imgData) {
+			t.Errorf("body length = %d, want %d", len(body), len(imgData))
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		resp, err := http.Get(ts.URL + "/specs/TS 23.501/images/missing.png")
+		if err != nil {
+			t.Fatalf("GET error: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", resp.StatusCode)
+		}
+	})
+
+	t.Run("not found for unknown spec", func(t *testing.T) {
+		resp, err := http.Get(ts.URL + "/specs/NONEXISTENT/images/fig1.png")
+		if err != nil {
+			t.Fatalf("GET error: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", resp.StatusCode)
+		}
+	})
+}
+
 func TestStaticFiles(t *testing.T) {
 	ts, _ := setupTestServer(t)
 
