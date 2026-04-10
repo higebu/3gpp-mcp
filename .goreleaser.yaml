@@ -45,8 +45,7 @@ notarize:
         issuer_id: "{{.Env.AC_API_ISSUER_ID}}"
         key_id: "{{.Env.AC_API_KEY_ID}}"
         key: "{{.Env.AC_API_KEY_P8}}"
-        wait: true
-        timeout: 20m
+        wait: false
 
 changelog:
   sort: asc
