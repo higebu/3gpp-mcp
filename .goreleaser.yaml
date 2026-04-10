@@ -35,6 +35,19 @@ archives:
       - goos: windows
         formats: [zip]
 
+notarize:
+  macos:
+    - enabled: true
+      sign:
+        certificate: "{{.Env.APPLE_CERTIFICATE_P12}}"
+        password: "{{.Env.APPLE_CERTIFICATE_PASSWORD}}"
+      notarize:
+        issuer_id: "{{.Env.AC_API_ISSUER_ID}}"
+        key_id: "{{.Env.AC_API_KEY_ID}}"
+        key: "{{.Env.AC_API_KEY_P8}}"
+        wait: true
+        timeout: 20m
+
 changelog:
   sort: asc
   filters:

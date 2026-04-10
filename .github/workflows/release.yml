@@ -23,6 +23,22 @@ jobs:
         with:
           go-version-file: go.mod
       -
+        name: Install rcodesign
+        run: |
+          cd /tmp
+          curl -LO https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F0.27.0/apple-codesign-0.27.0-x86_64-unknown-linux-musl.tar.gz
+          tar xzf apple-codesign-0.27.0-x86_64-unknown-linux-musl.tar.gz
+          sudo mv apple-codesign-0.27.0-x86_64-unknown-linux-musl/rcodesign /usr/local/bin/
+          rm -rf apple-codesign-0.27.0-x86_64-unknown-linux-musl*
+      -
+        name: Decode Apple credentials
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          AC_API_KEY_P8_BASE64: ${{ secrets.AC_API_KEY_P8_BASE64 }}
+        run: |
+          echo "$APPLE_CERTIFICATE_P12_BASE64" | base64 -d > /tmp/certificate.p12
+          echo "$AC_API_KEY_P8_BASE64" | base64 -d > /tmp/api_key.p8
+      -
         name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -32,3 +48,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          APPLE_CERTIFICATE_P12: /tmp/certificate.p12
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_KEY_P8: /tmp/api_key.p8
