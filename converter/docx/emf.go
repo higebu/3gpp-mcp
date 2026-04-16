@@ -197,8 +197,16 @@ func stripEMFPlus(data []byte) []byte {
 	return out
 }
 
-// batchConvertToPNG converts multiple images to PNG in a single LibreOffice
-// invocation. Each item's pngData and err fields are populated after conversion.
+// sofficeBatchLimit caps the number of files passed to a single
+// `soffice --convert-to png` invocation. LibreOffice silently drops files
+// past ~247 arguments in one run, so we keep below that threshold.
+const sofficeBatchLimit = 200
+
+// batchConvertToPNG converts multiple images to PNG using LibreOffice.
+// Inputs are written to a shared temp directory, then passed to soffice in
+// chunks of sofficeBatchLimit to avoid LibreOffice silently dropping files
+// in large invocations. Each item's pngData and err fields are populated
+// after conversion.
 func batchConvertToPNG(ctx context.Context, items []*batchItem) error {
 	tmpDir, err := os.MkdirTemp("", "3gpp-img-batch-*")
 	if err != nil {
@@ -206,19 +214,7 @@ func batchConvertToPNG(ctx context.Context, items []*batchItem) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	profileDir, err := os.MkdirTemp("", "lo-profile-")
-	if err != nil {
-		return fmt.Errorf("create profile dir: %w", err)
-	}
-	defer os.RemoveAll(profileDir)
-
-	args := []string{
-		"--headless",
-		"--norestore",
-		"-env:UserInstallation=file://" + profileDir,
-		"--convert-to", "png",
-		"--outdir", tmpDir,
-	}
+	var inputPaths []string
 	for _, item := range items {
 		name := item.original.Name
 		data := item.original.Data
@@ -245,13 +241,19 @@ func batchConvertToPNG(ctx context.Context, items []*batchItem) error {
 			continue
 		}
 		item.convertedName = name
-		args = append(args, inputPath)
+		inputPaths = append(inputPaths, inputPath)
 	}
 
-	cmd := exec.CommandContext(ctx, "soffice", args...)
-	output, cmdErr := cmd.CombinedOutput()
-	if cmdErr != nil {
-		log.Printf("  soffice batch warning: %v (output: %s)", cmdErr, string(output))
+	var lastErr error
+	for start := 0; start < len(inputPaths); start += sofficeBatchLimit {
+		end := start + sofficeBatchLimit
+		if end > len(inputPaths) {
+			end = len(inputPaths)
+		}
+		if err := runSofficeBatch(ctx, tmpDir, inputPaths[start:end]); err != nil {
+			log.Printf("  soffice batch [%d:%d] warning: %v", start, end, err)
+			lastErr = err
+		}
 	}
 
 	anySuccess := false
@@ -269,8 +271,38 @@ func batchConvertToPNG(ctx context.Context, items []*batchItem) error {
 		anySuccess = true
 	}
 
-	if !anySuccess && cmdErr != nil {
-		return fmt.Errorf("soffice batch conversion failed: %w (output: %s)", cmdErr, string(output))
+	if !anySuccess && lastErr != nil {
+		return fmt.Errorf("soffice batch conversion failed: %w", lastErr)
+	}
+	return nil
+}
+
+// runSofficeBatch invokes `soffice --convert-to png` with the given inputs,
+// writing PNG outputs to outDir. Each invocation uses a fresh user profile
+// so that repeated calls do not contend for LibreOffice's per-profile lock.
+func runSofficeBatch(ctx context.Context, outDir string, inputs []string) error {
+	if len(inputs) == 0 {
+		return nil
+	}
+	profileDir, err := os.MkdirTemp("", "lo-profile-")
+	if err != nil {
+		return fmt.Errorf("create profile dir: %w", err)
+	}
+	defer os.RemoveAll(profileDir)
+
+	args := []string{
+		"--headless",
+		"--norestore",
+		"-env:UserInstallation=file://" + profileDir,
+		"--convert-to", "png",
+		"--outdir", outDir,
+	}
+	args = append(args, inputs...)
+
+	cmd := exec.CommandContext(ctx, "soffice", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w (output: %s)", err, string(output))
 	}
 	return nil
 }
