@@ -116,6 +116,12 @@ func (d *DB) Close() error {
 	return d.conn.Close()
 }
 
+// VacuumInto creates a compact, consistent copy of the database at path.
+func (d *DB) VacuumInto(path string) error {
+	_, err := d.conn.Exec("VACUUM INTO ?", path)
+	return err
+}
+
 // DefaultSearchLimit is the default number of results returned by Search.
 const DefaultSearchLimit = 10
 

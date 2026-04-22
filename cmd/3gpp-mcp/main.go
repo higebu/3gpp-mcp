@@ -412,19 +412,29 @@ func cmdUpdate(args []string) {
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP timeout")
 	_ = fs.Parse(args)
 
-	d, err := db.OpenReadWrite(*dbPath)
+	newPath := *dbPath + ".new"
+	_ = os.Remove(newPath) // remove stale copy from any previous failed run
+
+	// Open live DB (WAL mode allows one concurrent writer alongside serve's readers)
+	// to snapshot current spec versions and create a working copy via VACUUM INTO.
+	src, err := db.OpenReadWrite(*dbPath)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	defer d.Close()
-
-	// Get current specs from DB
-	currentResult, err := d.ListSpecs("", -1, 0)
+	currentResult, err := src.ListSpecs("", -1, 0)
 	if err != nil || len(currentResult.Specs) == 0 {
+		_ = src.Close()
 		fmt.Println("No specs in database. Use 'build' command first.")
 		return
 	}
 	fmt.Printf("Found %d specs in database\n", len(currentResult.Specs))
+
+	fmt.Println("Creating working copy of database...")
+	if err := src.VacuumInto(newPath); err != nil {
+		_ = src.Close()
+		log.Fatalf("Failed to create working copy: %v", err)
+	}
+	_ = src.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -440,6 +450,7 @@ func cmdUpdate(args []string) {
 		entries, err = pipeline.FetchSpecList(ctx, client, nil, useCache)
 	}
 	if err != nil {
+		_ = os.Remove(newPath)
 		log.Fatalf("Failed to fetch spec list: %v", err)
 	}
 
@@ -477,10 +488,17 @@ func cmdUpdate(args []string) {
 
 	if len(updates) == 0 {
 		fmt.Println("All specs are up to date.")
+		_ = os.Remove(newPath)
 		return
 	}
 
 	fmt.Printf("\n%d specs to update\n", len(updates))
+
+	d, err := db.OpenReadWrite(newPath)
+	if err != nil {
+		_ = os.Remove(newPath)
+		log.Fatalf("Failed to open working copy: %v", err)
+	}
 
 	p := &pipeline.Pipeline{
 		DB:           d,
@@ -492,6 +510,22 @@ func cmdUpdate(args []string) {
 	}
 
 	if err := p.Run(ctx, updates); err != nil {
+		_ = d.Close()
+		_ = os.Remove(newPath)
 		log.Fatalf("Update failed: %v", err)
 	}
+
+	// Checkpoint WAL into the main file so the renamed DB is self-contained.
+	_ = d.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	_ = d.Close()
+	_ = os.Remove(newPath + "-wal")
+	_ = os.Remove(newPath + "-shm")
+
+	// Atomically replace the live database. The serve process retains its old
+	// inode until restarted; ExecStartPost in the systemd unit handles that.
+	if err := os.Rename(newPath, *dbPath); err != nil {
+		_ = os.Remove(newPath)
+		log.Fatalf("Failed to replace database: %v", err)
+	}
+	fmt.Println("Database updated successfully.")
 }
