@@ -20,8 +20,9 @@ import (
 )
 
 var (
-	imageRE  = regexp.MustCompile(`!\[([^\]]*)\]\(image://([^?)]+)(?:\?w=(\d+)&h=(\d+))?\)`)
-	figureRE = regexp.MustCompile(`\[Figure:\s*([^(]+?)\s*\(([^,]+),\s*use get_image to retrieve(?:,\s*(\d+)x(\d+))?\)\]`)
+	imageRE     = regexp.MustCompile(`!\[([^\]]*)\]\(image://([^?)]+)(?:\?w=(\d+)&h=(\d+))?\)`)
+	figureRE    = regexp.MustCompile(`\[Figure:\s*([^(]+?)\s*\(([^,]+),\s*use get_image to retrieve(?:,\s*(\d+)x(\d+))?\)\]`)
+	htmlImageRE = regexp.MustCompile(`(<img\s+[^>]*?\bsrc=")image://([^"?]+)(?:\?[^"]*)?("[^>]*>)`)
 )
 
 var md goldmark.Markdown
@@ -74,6 +75,12 @@ func renderMarkdown(content, specID string, bracketMap map[string]string) string
 				src, htmlpkg.EscapeString(alt), sub[3], sub[4])
 		}
 		return fmt.Sprintf("![%s](%s)", alt, src)
+	})
+	content = htmlImageRE.ReplaceAllStringFunc(content, func(match string) string {
+		sub := htmlImageRE.FindStringSubmatch(match)
+		prefix, name, suffix := sub[1], sub[2], sub[3]
+		src := "/specs/" + escapedSpec + "/images/" + url.PathEscape(name)
+		return prefix + src + suffix
 	})
 	content = figureRE.ReplaceAllStringFunc(content, func(match string) string {
 		sub := figureRE.FindStringSubmatch(match)
