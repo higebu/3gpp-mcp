@@ -186,13 +186,13 @@ func TestParseDocx(t *testing.T) {
 	} else {
 		hasTable := false
 		for _, c := range s.Content {
-			if strings.Contains(c, "|") && strings.Contains(c, "---") {
+			if strings.Contains(c, "<table>") {
 				hasTable = true
 				break
 			}
 		}
 		if !hasTable {
-			t.Error("Section 3.2 should contain a markdown table")
+			t.Error("Section 3.2 should contain an HTML table")
 		}
 	}
 
@@ -240,7 +240,7 @@ func TestParseDocx(t *testing.T) {
 	} else {
 		hasTable := false
 		for _, c := range s.Content {
-			if strings.Contains(c, "|") {
+			if strings.Contains(c, "<table>") {
 				hasTable = true
 				break
 			}
@@ -381,33 +381,34 @@ func TestSectionToMarkdown_ConsecutiveTables(t *testing.T) {
 		Title:  "Create Session Request",
 		Level:  3,
 		Content: []string{
-			"| H1 | H2 |\n| --- | --- |\n| A | B |",
-			"| H3 | H4 |\n| --- | --- |\n| C | D |",
+			"<table><tbody><tr><td><p>A</p></td><td><p>B</p></td></tr></tbody></table>",
+			"<table><tbody><tr><td><p>C</p></td><td><p>D</p></td></tr></tbody></table>",
 		},
 	}
 	md := SectionToMarkdown(section)
-	// Two tables must be separated by a blank line
-	if !strings.Contains(md, "| A | B |\n\n| H3 | H4 |") {
+	// Two HTML tables must be separated by a blank line so goldmark treats
+	// them as separate raw HTML blocks.
+	if !strings.Contains(md, "</table>\n\n<table>") {
 		t.Errorf("Consecutive tables not properly separated:\n%s", md)
 	}
 }
 
-func TestTableToMarkdown(t *testing.T) {
-	// Simple table XML
+func TestTableToHTML(t *testing.T) {
 	tableXML := `<tbl>
 		<tr><tc><p><r><t>Header1</t></r></p></tc><tc><p><r><t>Header2</t></r></p></tc></tr>
 		<tr><tc><p><r><t>Cell1</t></r></p></tc><tc><p><r><t>Cell2</t></r></p></tc></tr>
 	</tbl>`
 
-	md := tableToMarkdown([]byte(tableXML))
-	if !strings.Contains(md, "| Header1 | Header2 |") {
-		t.Errorf("Expected header row, got:\n%s", md)
-	}
-	if !strings.Contains(md, "| --- | --- |") {
-		t.Errorf("Expected separator row, got:\n%s", md)
-	}
-	if !strings.Contains(md, "| Cell1 | Cell2 |") {
-		t.Errorf("Expected data row, got:\n%s", md)
+	info := extractTable([]byte(tableXML))
+	html := tableToHTML(info, imageContext{})
+	for _, want := range []string{
+		"<table>",
+		"<tr><td><p>Header1</p></td><td><p>Header2</p></td></tr>",
+		"<tr><td><p>Cell1</p></td><td><p>Cell2</p></td></tr>",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("Expected output to contain %q, got:\n%s", want, html)
+		}
 	}
 }
 

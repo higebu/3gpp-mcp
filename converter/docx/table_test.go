@@ -5,83 +5,49 @@ import (
 	"testing"
 )
 
-func TestRowsToMarkdown(t *testing.T) {
-	tests := []struct {
-		name string
-		rows [][]string
-		want string
-	}{
-		{
-			name: "empty rows returns empty string",
-			rows: nil,
-			want: "",
-		},
-		{
-			name: "single header row",
-			rows: [][]string{{"a", "b"}},
-			want: "| a | b |\n| --- | --- |",
-		},
-		{
-			name: "header with data row",
-			rows: [][]string{{"H1", "H2"}, {"v1", "v2"}},
-			want: "| H1 | H2 |\n| --- | --- |\n| v1 | v2 |",
-		},
-		{
-			name: "row padding when fewer cells than header",
-			rows: [][]string{{"H1", "H2", "H3"}, {"v1"}},
-			want: "| H1 | H2 | H3 |\n| --- | --- | --- |\n| v1 |  |  |",
-		},
-		{
-			name: "row truncation when more cells than header",
-			rows: [][]string{{"H1"}, {"v1", "v2", "v3"}},
-			want: "| H1 |\n| --- |\n| v1 |",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := rowsToMarkdown(tt.rows)
-			if got != tt.want {
-				t.Errorf("rowsToMarkdown:\nwant:\n%s\ngot:\n%s", tt.want, got)
-			}
-		})
+func TestTableToHTML_Empty(t *testing.T) {
+	if got := tableToHTML(tableInfo{}, imageContext{}); got != "" {
+		t.Errorf("tableToHTML(empty) = %q, want empty", got)
 	}
 }
 
-func TestExtractTableRows_Simple(t *testing.T) {
+func TestTableToHTML_BasicTwoRows(t *testing.T) {
 	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 		<w:tr><w:tc><w:p><w:r><w:t>H1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>H2</w:t></w:r></w:p></w:tc></w:tr>
 		<w:tr><w:tc><w:p><w:r><w:t>v1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>v2</w:t></w:r></w:p></w:tc></w:tr>
 	</w:tbl>`
-	rows := extractTableRows([]byte(xml))
-	if len(rows) != 2 {
-		t.Fatalf("rows = %d, want 2", len(rows))
+	info := extractTable([]byte(xml))
+	if len(info.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(info.Rows))
 	}
-	if len(rows[0]) != 2 || rows[0][0] != "H1" || rows[0][1] != "H2" {
-		t.Errorf("header row = %v", rows[0])
-	}
-	if len(rows[1]) != 2 || rows[1][0] != "v1" || rows[1][1] != "v2" {
-		t.Errorf("data row = %v", rows[1])
+	html := tableToHTML(info, imageContext{})
+	for _, want := range []string{
+		"<table>",
+		"<tbody>",
+		"<tr><td><p>H1</p></td><td><p>H2</p></td></tr>",
+		"<tr><td><p>v1</p></td><td><p>v2</p></td></tr>",
+		"</tbody></table>",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected output to contain %q\ngot: %s", want, html)
+		}
 	}
 }
 
-func TestExtractTableRows_EmptyCell(t *testing.T) {
+func TestTableToHTML_EmptyCell(t *testing.T) {
 	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 		<w:tr><w:tc><w:p><w:r><w:t>H1</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>
 	</w:tbl>`
-	rows := extractTableRows([]byte(xml))
-	if len(rows) != 1 || len(rows[0]) != 2 {
-		t.Fatalf("rows = %v", rows)
-	}
-	if rows[0][1] != "" {
-		t.Errorf("empty cell = %q, want empty string", rows[0][1])
+	info := extractTable([]byte(xml))
+	html := tableToHTML(info, imageContext{})
+	if !strings.Contains(html, "<td><p>H1</p></td><td><p></p></td>") {
+		t.Errorf("empty cell HTML not as expected: %s", html)
 	}
 }
 
-func TestExtractTableRows_NestedTable(t *testing.T) {
-	// The parser does not track table nesting, so a nested w:tbl inside a cell
-	// causes the inner <w:tr>/<w:tc> tokens to reset the outer row state. This
-	// test pins down that behavior and asserts the parser does not panic on
-	// nested input.
+func TestTableToHTML_NestedTableSkipped(t *testing.T) {
+	// Nested tables are skipped to avoid corrupting outer row/cell state. The
+	// outer cell's own paragraph is preserved; the inner table's text is dropped.
 	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 		<w:tr><w:tc>
 			<w:p><w:r><w:t>outer</w:t></w:r></w:p>
@@ -90,80 +56,88 @@ func TestExtractTableRows_NestedTable(t *testing.T) {
 			</w:tbl>
 		</w:tc></w:tr>
 	</w:tbl>`
-	rows := extractTableRows([]byte(xml))
-	if len(rows) == 0 {
-		t.Fatal("expected at least one row from nested-table input")
+	info := extractTable([]byte(xml))
+	html := tableToHTML(info, imageContext{})
+	if !strings.Contains(html, "<p>outer</p>") {
+		t.Errorf("expected outer paragraph to survive: %s", html)
 	}
-	if rows[0][0] != "inner" {
-		t.Errorf("expected inner row to win over outer (current behavior), got %v", rows[0])
+	if strings.Contains(html, "inner") {
+		t.Errorf("expected nested-table content to be dropped: %s", html)
 	}
 }
 
-func TestExtractTableRows_MultiParagraphCell(t *testing.T) {
+func TestTableToHTML_MultiParagraphCell(t *testing.T) {
 	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 		<w:tr><w:tc>
 			<w:p><w:r><w:t>first</w:t></w:r></w:p>
 			<w:p><w:r><w:t>second</w:t></w:r></w:p>
 		</w:tc></w:tr>
 	</w:tbl>`
-	rows := extractTableRows([]byte(xml))
-	if len(rows) != 1 || len(rows[0]) != 1 {
-		t.Fatalf("rows = %v", rows)
-	}
-	if !strings.Contains(rows[0][0], "first") || !strings.Contains(rows[0][0], "second") {
-		t.Errorf("cell text = %q, expected to contain both paragraphs", rows[0][0])
+	info := extractTable([]byte(xml))
+	html := tableToHTML(info, imageContext{})
+	if !strings.Contains(html, "<p>first</p><p>second</p>") {
+		t.Errorf("expected two <p> tags in cell, got: %s", html)
 	}
 }
 
-func TestExtractTableRows_BoldRunInCell(t *testing.T) {
+func TestTableToHTML_BoldRunInCell(t *testing.T) {
 	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 		<w:tr><w:tc><w:p>
 			<w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r>
 			<w:r><w:t> plain</w:t></w:r>
 		</w:p></w:tc></w:tr>
 	</w:tbl>`
-	rows := extractTableRows([]byte(xml))
-	if len(rows) != 1 {
-		t.Fatalf("rows = %v", rows)
-	}
-	if rows[0][0] != "bold plain" {
-		t.Errorf("cell text = %q, want %q", rows[0][0], "bold plain")
+	info := extractTable([]byte(xml))
+	html := tableToHTML(info, imageContext{})
+	if !strings.Contains(html, "<strong>bold</strong> plain") {
+		t.Errorf("expected bold run wrapped in <strong>: %s", html)
 	}
 }
 
-func TestExtractTableRows_Malformed(t *testing.T) {
-	// Garbage input must not panic or hang. The function returns nil if no
-	// w:tbl token is found.
-	rows := extractTableRows([]byte("not xml at all"))
-	if rows != nil {
-		t.Errorf("expected nil rows for malformed input, got %v", rows)
-	}
-}
-
-func TestTableToMarkdown_RoundTrip(t *testing.T) {
+func TestTableToHTML_ItalicAndBoldItalic(t *testing.T) {
 	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-		<w:tr><w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Type</w:t></w:r></w:p></w:tc></w:tr>
-		<w:tr><w:tc><w:p><w:r><w:t>foo</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>string</w:t></w:r></w:p></w:tc></w:tr>
+		<w:tr><w:tc><w:p>
+			<w:r><w:rPr><w:i/></w:rPr><w:t>italic</w:t></w:r>
+			<w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>both</w:t></w:r>
+		</w:p></w:tc></w:tr>
 	</w:tbl>`
-	md := tableToMarkdown([]byte(xml))
-	for _, want := range []string{"| Name | Type |", "| --- | --- |", "| foo | string |"} {
-		if !strings.Contains(md, want) {
-			t.Errorf("expected output to contain %q\n%s", want, md)
-		}
+	info := extractTable([]byte(xml))
+	html := tableToHTML(info, imageContext{})
+	if !strings.Contains(html, "<em>italic</em>") {
+		t.Errorf("expected italic run: %s", html)
+	}
+	if !strings.Contains(html, "<strong><em>both</em></strong>") {
+		t.Errorf("expected bold+italic run: %s", html)
 	}
 }
 
-func TestTableToMarkdown_NoTable(t *testing.T) {
-	if md := tableToMarkdown([]byte("garbage")); md != "" {
-		t.Errorf("expected empty markdown for invalid input, got %q", md)
+func TestTableToHTML_HTMLEscape(t *testing.T) {
+	// Cell text containing HTML special characters must be escaped.
+	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+		<w:tr><w:tc><w:p><w:r><w:t>a &lt;b&gt; &amp; "c"</w:t></w:r></w:p></w:tc></w:tr>
+	</w:tbl>`
+	info := extractTable([]byte(xml))
+	html := tableToHTML(info, imageContext{})
+	// The XML decoder unescapes entities, so the text we receive is literal
+	// `a <b> & "c"`. tableToHTML must re-escape it.
+	if !strings.Contains(html, `a &lt;b&gt; &amp; &#34;c&#34;`) {
+		t.Errorf("expected HTML-escaped cell content, got: %s", html)
 	}
 }
 
-// TestExtractTableRows_GridSpanMergedCells pins down current behaviour for
-// tables with horizontally merged cells (w:gridSpan). 3GPP protocol flow
-// tables rely on gridSpan for header rows, so this documents how the parser
-// treats them today — if the behaviour changes, review the diff carefully.
-func TestExtractTableRows_GridSpanMergedCells(t *testing.T) {
+func TestTableToHTML_Malformed(t *testing.T) {
+	info := extractTable([]byte("not xml at all"))
+	if len(info.Rows) != 0 {
+		t.Errorf("expected empty rows for malformed input, got %d", len(info.Rows))
+	}
+	if got := tableToHTML(info, imageContext{}); got != "" {
+		t.Errorf("expected empty HTML for empty info, got %q", got)
+	}
+}
+
+// TestTableToHTML_GridSpanMergedCells verifies horizontal cell merges via
+// w:gridSpan are translated to colspan attributes.
+func TestTableToHTML_GridSpanMergedCells(t *testing.T) {
 	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 		<w:tr>
 			<w:tc>
@@ -176,22 +150,19 @@ func TestExtractTableRows_GridSpanMergedCells(t *testing.T) {
 			<w:tc><w:p><w:r><w:t>a2</w:t></w:r></w:p></w:tc>
 		</w:tr>
 	</w:tbl>`
-
-	rows := extractTableRows([]byte(xml))
-	if len(rows) != 2 {
-		t.Fatalf("rows = %d, want 2", len(rows))
+	info := extractTable([]byte(xml))
+	html := tableToHTML(info, imageContext{})
+	if !strings.Contains(html, `<td colspan="2"><p>merged-header</p></td>`) {
+		t.Errorf("expected colspan=2 cell, got: %s", html)
 	}
-	if rows[0][0] != "merged-header" {
-		t.Errorf("row[0] cell[0] = %q, want 'merged-header'", rows[0][0])
-	}
-	if len(rows[1]) != 2 || rows[1][0] != "a1" || rows[1][1] != "a2" {
-		t.Errorf("row[1] = %v, want [a1 a2]", rows[1])
+	if !strings.Contains(html, `<td><p>a1</p></td><td><p>a2</p></td>`) {
+		t.Errorf("expected unmerged data row, got: %s", html)
 	}
 }
 
-// TestExtractTableRows_VMergedCells pins down behaviour for vertically merged
-// cells (w:vMerge). The parser currently treats continuation cells as empty.
-func TestExtractTableRows_VMergedCells(t *testing.T) {
+// TestTableToHTML_VMergedCells verifies vertical cell merges via w:vMerge are
+// translated to rowspan on the restart cell, with continuation cells skipped.
+func TestTableToHTML_VMergedCells(t *testing.T) {
 	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 		<w:tr>
 			<w:tc>
@@ -208,24 +179,20 @@ func TestExtractTableRows_VMergedCells(t *testing.T) {
 			<w:tc><w:p><w:r><w:t>r2</w:t></w:r></w:p></w:tc>
 		</w:tr>
 	</w:tbl>`
-
-	rows := extractTableRows([]byte(xml))
-	if len(rows) != 2 {
-		t.Fatalf("rows = %d, want 2", len(rows))
+	info := extractTable([]byte(xml))
+	html := tableToHTML(info, imageContext{})
+	if !strings.Contains(html, `<td rowspan="2"><p>top</p></td>`) {
+		t.Errorf("expected rowspan=2 on restart cell, got: %s", html)
 	}
-	if rows[0][0] != "top" || rows[0][1] != "r1" {
-		t.Errorf("row[0] = %v, want [top r1]", rows[0])
-	}
-	// The continuation row has an empty first cell (current behaviour, pinned).
-	if rows[1][0] != "" || rows[1][1] != "r2" {
-		t.Errorf("row[1] = %v, want ['' r2]", rows[1])
+	// Continuation row should only emit the second cell, not the merged one.
+	if !strings.Contains(html, `<tr><td><p>r2</p></td></tr>`) {
+		t.Errorf("expected continuation row with only r2, got: %s", html)
 	}
 }
 
-// TestExtractTableRows_VaryingRowWidths verifies the parser accepts rows with
-// differing cell counts without panicking, and that rowsToMarkdown pads/trims
-// to the header width when rendering.
-func TestExtractTableRows_VaryingRowWidths(t *testing.T) {
+// TestTableToHTML_VaryingRowWidths checks that rows with differing cell counts
+// are emitted as-is (each row reflects what was in the source).
+func TestTableToHTML_VaryingRowWidths(t *testing.T) {
 	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 		<w:tr>
 			<w:tc><w:p><w:r><w:t>H1</w:t></w:r></w:p></w:tc>
@@ -242,31 +209,25 @@ func TestExtractTableRows_VaryingRowWidths(t *testing.T) {
 			<w:tc><w:p><w:r><w:t>extra</w:t></w:r></w:p></w:tc>
 		</w:tr>
 	</w:tbl>`
-
-	rows := extractTableRows([]byte(xml))
-	if len(rows) != 3 {
-		t.Fatalf("rows = %d, want 3", len(rows))
+	info := extractTable([]byte(xml))
+	if len(info.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(info.Rows))
 	}
-	md := rowsToMarkdown(rows)
-	// Header defines width=3, so the single-cell row pads to 3 and the 4-cell
-	// row truncates to 3.
+	html := tableToHTML(info, imageContext{})
 	for _, want := range []string{
-		"| H1 | H2 | H3 |",
-		"| only-one |  |  |",
-		"| a | b | c |",
+		"<tr><td><p>H1</p></td><td><p>H2</p></td><td><p>H3</p></td></tr>",
+		"<tr><td><p>only-one</p></td></tr>",
+		"<tr><td><p>a</p></td><td><p>b</p></td><td><p>c</p></td><td><p>extra</p></td></tr>",
 	} {
-		if !strings.Contains(md, want) {
-			t.Errorf("expected markdown to contain %q, got:\n%s", want, md)
+		if !strings.Contains(html, want) {
+			t.Errorf("expected HTML to contain %q, got:\n%s", want, html)
 		}
-	}
-	if strings.Contains(md, "extra") {
-		t.Errorf("expected extra cell to be dropped, got:\n%s", md)
 	}
 }
 
-// TestExtractTableRows_StyledHeaderRow exercises a header row with tblHeader
-// styling applied via tcPr — the parser should still include it as row[0].
-func TestExtractTableRows_StyledHeaderRow(t *testing.T) {
+// TestTableToHTML_StyledHeaderRow verifies a row with w:trPr/w:tblHeader is
+// emitted inside <thead> using <th>.
+func TestTableToHTML_StyledHeaderRow(t *testing.T) {
 	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 		<w:tr>
 			<w:trPr><w:tblHeader/></w:trPr>
@@ -284,15 +245,54 @@ func TestExtractTableRows_StyledHeaderRow(t *testing.T) {
 			<w:tc><w:p><w:r><w:t>v1</w:t></w:r></w:p></w:tc>
 		</w:tr>
 	</w:tbl>`
+	info := extractTable([]byte(xml))
+	if len(info.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(info.Rows))
+	}
+	if !info.Rows[0].IsHeader {
+		t.Errorf("row[0] IsHeader = false, want true")
+	}
+	html := tableToHTML(info, imageContext{})
+	if !strings.Contains(html, "<thead>") || !strings.Contains(html, "</thead>") {
+		t.Errorf("expected <thead> wrapper, got: %s", html)
+	}
+	if !strings.Contains(html, "<th><p><strong>Name</strong></p></th>") {
+		t.Errorf("expected <th> with bold Name, got: %s", html)
+	}
+	if !strings.Contains(html, "<tr><td><p>k1</p></td><td><p>v1</p></td></tr>") {
+		t.Errorf("expected data row in tbody with <td>, got: %s", html)
+	}
+}
 
-	rows := extractTableRows([]byte(xml))
-	if len(rows) != 2 {
-		t.Fatalf("rows = %d, want 2", len(rows))
+// TestTableToHTML_ImageInCell verifies that an image reference inside a cell
+// is emitted as an <img src="image://..."> tag using the relMap/images context.
+func TestTableToHTML_ImageInCell(t *testing.T) {
+	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+		xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+		xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+		xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+		<w:tr><w:tc>
+			<w:p><w:r>
+				<w:drawing>
+					<wp:inline>
+						<wp:extent cx="952500" cy="952500"/>
+						<a:graphic><a:graphicData>
+							<a:blip r:embed="rId7"/>
+						</a:graphicData></a:graphic>
+					</wp:inline>
+				</w:drawing>
+			</w:r></w:p>
+		</w:tc></w:tr>
+	</w:tbl>`
+	info := extractTable([]byte(xml))
+	ctx := imageContext{
+		relMap: map[string]string{"rId7": "media/image1.png"},
+		images: map[string]*EmbeddedImage{
+			"media/image1.png": {Name: "image1.png", LLMReadable: true},
+		},
 	}
-	if rows[0][0] != "Name" || rows[0][1] != "Value" {
-		t.Errorf("header row = %v, want [Name Value]", rows[0])
-	}
-	if rows[1][0] != "k1" || rows[1][1] != "v1" {
-		t.Errorf("data row = %v, want [k1 v1]", rows[1])
+	html := tableToHTML(info, ctx)
+	if !strings.Contains(html, `<img src="image://image1.png?w=100&h=100" alt="Figure" width="100" height="100">`) {
+		t.Errorf("expected <img> tag with image:// src in cell, got: %s", html)
 	}
 }

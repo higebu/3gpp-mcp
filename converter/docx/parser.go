@@ -218,9 +218,9 @@ func parseSections(elements []bodyElement, styleMap map[string]string, relMap ma
 		switch elem.Tag {
 		case "tbl":
 			flushCodeBlock()
-			md := rowsToMarkdown(elem.Table.Rows)
-			if md != "" && currentSection != nil {
-				currentSection.Content = append(currentSection.Content, md)
+			html := tableToHTML(elem.Table, imageContext{relMap: relMap, images: images})
+			if html != "" && currentSection != nil {
+				currentSection.Content = append(currentSection.Content, html)
 			}
 		case "p":
 			info := elem.Paragraph

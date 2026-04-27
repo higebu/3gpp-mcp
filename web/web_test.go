@@ -420,6 +420,20 @@ func TestRenderMarkdown_RawHTMLPassthrough(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdown_HTMLImageRewrite verifies that <img src="image://...">
+// tags embedded in raw HTML (used inside HTML tables emitted by the docx
+// converter) are rewritten to a real /specs/<id>/images/<name> URL.
+func TestRenderMarkdown_HTMLImageRewrite(t *testing.T) {
+	content := `<table><tbody><tr><td><img src="image://fig.png?w=200&h=100" alt="diag" width="200" height="100"></td></tr></tbody></table>`
+	got := renderMarkdown(content, "TS 23.501", nil)
+	if !strings.Contains(got, `src="/specs/TS%2023.501/images/fig.png"`) {
+		t.Errorf("expected image:// to be rewritten to spec-relative URL, got:\n%s", got)
+	}
+	if strings.Contains(got, "image://") {
+		t.Errorf("expected no remaining image:// URL, got:\n%s", got)
+	}
+}
+
 // TestHandleOpenAPI_NotFound verifies the error path when requesting a missing
 // OpenAPI spec returns 404 rather than 500.
 func TestHandleOpenAPI_NotFound(t *testing.T) {
