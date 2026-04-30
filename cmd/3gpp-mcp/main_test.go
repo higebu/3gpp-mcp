@@ -176,6 +176,7 @@ func TestResolveSpecs_FromSpecList(t *testing.T) {
 			0,     // release
 			false, // allVersions
 			false, // useCache
+			0,     // scrapeConcurrency
 		)
 		if len(specs) == 0 {
 			t.Error("expected at least one spec, got 0")
@@ -218,6 +219,7 @@ func TestResolveSpecs_FetchBySpecFlag(t *testing.T) {
 			0,        // release
 			false,    // allVersions
 			false,    // useCache
+			0,        // scrapeConcurrency
 		)
 		if len(specs) != 1 {
 			t.Fatalf("expected 1 spec, got %d", len(specs))
@@ -464,6 +466,7 @@ func TestResolveSpecs_FetchAllSeries(t *testing.T) {
 			0,     // release
 			false, // allVersions (latestOnly=true)
 			false, // useCache
+			0,     // scrapeConcurrency
 		)
 		if len(specs) != 1 {
 			t.Fatalf("expected 1 spec, got %d", len(specs))

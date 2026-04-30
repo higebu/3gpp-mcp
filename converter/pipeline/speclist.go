@@ -214,9 +214,13 @@ func FetchSpecZips(ctx context.Context, client *http.Client, specID string, useC
 
 // FetchSpecList scrapes the 3GPP FTP directory for all spec zip files.
 // If useCache is true, results are cached to disk with a 24h TTL.
-func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []string, useCache bool) ([]string, error) {
+// scrapeConcurrency controls parallel HTTP requests; 0 uses defaultConcurrency().
+func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []string, useCache bool, scrapeConcurrency int) ([]string, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	if scrapeConcurrency <= 0 {
+		scrapeConcurrency = defaultConcurrency()
 	}
 
 	// Check cache
@@ -260,7 +264,7 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 	var allSpecPairs []specPair
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, defaultConcurrency())
+	sem := make(chan struct{}, scrapeConcurrency)
 
 	for _, sd := range seriesDirs {
 		sd := sd
