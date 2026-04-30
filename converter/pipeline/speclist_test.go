@@ -318,7 +318,7 @@ func TestFetchSpecList_Race(t *testing.T) {
 		},
 	}
 
-	entries, err := FetchSpecList(context.Background(), client, nil, false)
+	entries, err := FetchSpecList(context.Background(), client, nil, false, 0)
 	if err != nil {
 		t.Fatalf("FetchSpecList: %v", err)
 	}

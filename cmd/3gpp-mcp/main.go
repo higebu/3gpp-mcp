@@ -207,7 +207,7 @@ func cmdConvertDir(args []string) {
 }
 
 // resolveSpecs fetches, parses, and filters specs based on CLI flags.
-func resolveSpecs(ctx context.Context, client *http.Client, specList, specFlag, seriesFlag string, release int, allVersions, useCache bool) []*pipeline.SpecVersion {
+func resolveSpecs(ctx context.Context, client *http.Client, specList, specFlag, seriesFlag string, release int, allVersions, useCache bool, scrapeConcurrency int) []*pipeline.SpecVersion {
 	var seriesFilter []string
 	if seriesFlag != "" {
 		seriesFilter = strings.Split(seriesFlag, ",")
@@ -229,7 +229,7 @@ func resolveSpecs(ctx context.Context, client *http.Client, specList, specFlag, 
 		}
 	} else {
 		fmt.Println("Fetching spec list from 3GPP archive...")
-		entries, err = pipeline.FetchSpecList(ctx, client, seriesFilter, useCache)
+		entries, err = pipeline.FetchSpecList(ctx, client, seriesFilter, useCache, scrapeConcurrency)
 		if err != nil {
 			log.Fatalf("Failed to fetch spec list: %v", err)
 		}
@@ -258,6 +258,7 @@ func cmdDownload(args []string) {
 	convertDoc := fs.Bool("convert-doc", false, "Convert .doc to .docx using LibreOffice")
 	specList := fs.String("spec-list", "", "Use spec list file instead of scraping")
 	noCache := fs.Bool("no-cache", false, "Disable spec list cache")
+	scrapeWorkers := fs.Int("scrape-workers", 0, "Concurrency for scraping spec listings (0 = auto)")
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP timeout")
 	_ = fs.Parse(args)
 
@@ -269,7 +270,7 @@ func cmdDownload(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	client := &http.Client{Timeout: *timeout}
-	filtered := resolveSpecs(ctx, client, *specList, *specFlag, *seriesFlag, *release, *allVersions, !*noCache)
+	filtered := resolveSpecs(ctx, client, *specList, *specFlag, *seriesFlag, *release, *allVersions, !*noCache, *scrapeWorkers)
 
 	if len(filtered) == 0 {
 		fmt.Println("No specs matched the filters.")
@@ -304,6 +305,7 @@ func cmdPipeline(args []string) {
 	convertImage := fs.Bool("convert-image", false, "Convert EMF/WMF images to PNG using LibreOffice (requires soffice)")
 	specList := fs.String("spec-list", "", "Use spec list file instead of scraping")
 	noCache := fs.Bool("no-cache", false, "Disable spec list cache")
+	scrapeWorkers := fs.Int("scrape-workers", 0, "Concurrency for scraping spec listings (0 = auto)")
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP timeout")
 	_ = fs.Parse(args)
 
@@ -325,7 +327,7 @@ func cmdPipeline(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	client := &http.Client{Timeout: *timeout}
-	filtered := resolveSpecs(ctx, client, *specList, *specFlag, *seriesFlag, *release, *allVersions, !*noCache)
+	filtered := resolveSpecs(ctx, client, *specList, *specFlag, *seriesFlag, *release, *allVersions, !*noCache, *scrapeWorkers)
 
 	if len(filtered) == 0 {
 		fmt.Println("No specs matched the filters.")
@@ -409,6 +411,7 @@ func cmdUpdate(args []string) {
 	convertImage := fs.Bool("convert-image", false, "Convert EMF/WMF images to PNG using LibreOffice (requires soffice)")
 	specList := fs.String("spec-list", "", "Use spec list file instead of scraping")
 	noCache := fs.Bool("no-cache", false, "Disable spec list cache")
+	scrapeWorkers := fs.Int("scrape-workers", 0, "Concurrency for scraping spec listings (0 = auto)")
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP timeout")
 	_ = fs.Parse(args)
 
@@ -447,7 +450,7 @@ func cmdUpdate(args []string) {
 		entries, err = pipeline.LoadSpecList(*specList)
 	} else {
 		fmt.Println("Fetching spec list from 3GPP archive...")
-		entries, err = pipeline.FetchSpecList(ctx, client, nil, useCache)
+		entries, err = pipeline.FetchSpecList(ctx, client, nil, useCache, *scrapeWorkers)
 	}
 	if err != nil {
 		_ = os.Remove(newPath)

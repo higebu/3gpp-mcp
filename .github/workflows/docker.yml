@@ -33,7 +33,7 @@ jobs:
         run: CGO_ENABLED=0 go build -o bin/3gpp-mcp ./cmd/3gpp-mcp
 
       - name: Build DB
-        run: bin/3gpp-mcp build --release 19 --db 3gpp.db --convert-doc --convert-image --timeout 120s
+        run: bin/3gpp-mcp build --release 19 --db 3gpp.db --convert-doc --convert-image --timeout 120s --scrape-workers 4
 
       - name: Upload DB artifact
         uses: actions/upload-artifact@v4
