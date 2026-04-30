@@ -11,6 +11,7 @@ data/*.db
 data/*.db-shm
 data/*.db-wal
 !data/.gitkeep
+3gpp.db
 
 # IDE
 .vscode/
