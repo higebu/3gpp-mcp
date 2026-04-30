@@ -1,0 +1,6 @@
+.git
+.github
+bin
+data
+specs
+*.md

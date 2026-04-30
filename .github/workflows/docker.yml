@@ -1,0 +1,66 @@
+name: Docker
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          sudo docker image prune -af
+          df -h
+
+      - name: Install LibreOffice
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice
+
+      - name: Build binary
+        run: CGO_ENABLED=0 go build -o bin/3gpp-mcp ./cmd/3gpp-mcp
+
+      - name: Build DB
+        run: bin/3gpp-mcp build --release 19 --db 3gpp.db --convert-doc --convert-image --timeout 120s
+
+      - name: Upload DB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3gpp-rel19-db
+          path: 3gpp.db
+          retention-days: 7
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/higebu/3gpp-mcp:latest
+            ghcr.io/higebu/3gpp-mcp:rel19
