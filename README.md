@@ -34,6 +34,52 @@ This tool takes a structure-aware approach: it preserves the document hierarchy,
 
 ## Getting Started
 
+### Using the pre-built Docker image
+
+A pre-built Docker image with the Release 19 database baked in is available at `ghcr.io/higebu/3gpp-mcp`. It is updated weekly and supports `linux/amd64` and `linux/arm64` (Apple Silicon).
+
+**Steps 1 and 2 below are not required when using the Docker image.**
+
+#### Claude Code
+
+```bash
+claude mcp add --scope user 3gpp -- docker run --rm -i ghcr.io/higebu/3gpp-mcp:latest
+```
+
+#### VS Code / GitHub Copilot
+
+```bash
+code --add-mcp '{"name":"3gpp","command":"docker","args":["run","--rm","-i","ghcr.io/higebu/3gpp-mcp:latest"]}'
+```
+
+#### Claude Desktop
+
+```json
+{
+  "mcpServers": {
+    "3gpp": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "ghcr.io/higebu/3gpp-mcp:latest"]
+    }
+  }
+}
+```
+
+#### HTTP transport
+
+```bash
+docker run --rm -p 8080:8080 ghcr.io/higebu/3gpp-mcp:latest serve --db /3gpp.db --transport http --addr :8080
+```
+
+Available tags:
+
+| Tag | Description |
+|-----|-------------|
+| `latest` | Latest weekly build (Release 19) |
+| `rel19` | Release 19 |
+
+---
+
 ### 1. Install
 
 ```bash
