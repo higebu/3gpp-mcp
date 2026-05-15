@@ -4,14 +4,46 @@ on:
   schedule:
     - cron: '0 0 * * 0'
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Release to build (leave empty to build all)'
+        required: false
+        type: choice
+        default: ''
+        options:
+          - ''
+          - '15'
+          - '16'
+          - '17'
+          - '18'
+          - '19'
 
 jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      releases: ${{ steps.set.outputs.releases }}
+    steps:
+      - id: set
+        run: |
+          if [ -n "${{ github.event.inputs.release }}" ]; then
+            echo 'releases=["${{ github.event.inputs.release }}"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'releases=["15","16","17","18","19"]' >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: matrix
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        release: ${{ fromJSON(needs.matrix.outputs.releases) }}
     steps:
       - uses: actions/checkout@v6
 
@@ -33,14 +65,27 @@ jobs:
         run: CGO_ENABLED=0 go build -o bin/3gpp-mcp ./cmd/3gpp-mcp
 
       - name: Build DB
-        run: bin/3gpp-mcp build --release 19 --db 3gpp.db --convert-doc --convert-image --timeout 120s --scrape-workers 4
+        run: bin/3gpp-mcp build --release ${{ matrix.release }} --db 3gpp.db --convert-doc --convert-image --timeout 120s --scrape-workers 4
 
       - name: Upload DB artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 3gpp-rel19-db
+          name: 3gpp-rel${{ matrix.release }}-db
           path: 3gpp.db
           retention-days: 7
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          TAGS="ghcr.io/higebu/3gpp-mcp:rel${{ matrix.release }}"
+          if [ "${{ matrix.release }}" = "19" ]; then
+            TAGS="${TAGS}"$'\n'"ghcr.io/higebu/3gpp-mcp:latest"
+          fi
+          {
+            echo "tags<<EOF"
+            echo "$TAGS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -61,6 +106,4 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/higebu/3gpp-mcp:latest
-            ghcr.io/higebu/3gpp-mcp:rel19
+          tags: ${{ steps.tags.outputs.tags }}
