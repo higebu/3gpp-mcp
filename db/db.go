@@ -753,11 +753,12 @@ const (
 // which appear in 3GPP DOCX documents as word separators.
 const sp = `[\s\x{00a0}\x{00b0}]`
 
-// secNum matches section numbers: digit-first (5.1.2a) or letter-first for annexes (H, A.1).
-const secNum = `([A-Z](?:\.\d+)*|\d+(?:\.\d+)*[A-Za-z]?)`
+// secNum matches section numbers: digit-first (5.1.2a, 5.3A.2) or letter-first for annexes (H, A.1).
+// A letter suffix is allowed on every segment to handle mid-number letters such as 5.3A.2 or 4.2.2.2A.1.
+const secNum = `([A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 
 // secNumRaw is secNum without capture group, used for multi-section list matching.
-const secNumRaw = `(?:[A-Z](?:\.\d+)*|\d+(?:\.\d+)*[A-Za-z]?)`
+const secNumRaw = `(?:[A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 
 var (
 	// "TS 23.501 clause 5.1" or "3GPP TS 33.203 Annex H"

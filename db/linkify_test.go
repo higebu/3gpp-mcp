@@ -55,6 +55,21 @@ func TestLinkifyRefs_TS(t *testing.T) {
 			input: "See TS 33.203 Annex H for security.",
 			want:  "See [TS 33.203 Annex H](/specs/TS 33.203/sections/H) for security.",
 		},
+		{
+			name:  "section number with mid letter (TS 24.502)",
+			input: "See clause 5.3A.2 of TS 24.502 for details.",
+			want:  "See [clause 5.3A.2 of TS 24.502](/specs/TS 24.502/sections/5.3A.2) for details.",
+		},
+		{
+			name:  "subclause with mid letter spec first",
+			input: "See TS 24.502 subclause 5.3A.2 for details.",
+			want:  "See [TS 24.502 subclause 5.3A.2](/specs/TS 24.502/sections/5.3A.2) for details.",
+		},
+		{
+			name:  "deeply nested mid letter",
+			input: "See clause 4.2.2.2A.1 of TS 24.502.",
+			want:  "See [clause 4.2.2.2A.1 of TS 24.502](/specs/TS 24.502/sections/4.2.2.2A.1).",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
