@@ -134,7 +134,10 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to `main`:
 
 | Variable | Description |
 |----------|-------------|
+| `THREEGPP_MCP_TRANSPORT` | Transport type for `serve` (`stdio` or `http`); overridden by `--transport` |
+| `THREEGPP_MCP_ADDR` | HTTP listen address for `serve` (e.g. `:8080`); overridden by `--addr` |
 | `THREEGPP_MCP_BEARER_TOKEN` | Bearer token for HTTP transport auth |
+| `PORT` | PaaS convention (Cloud Run / Heroku). When set, `serve` defaults to HTTP transport and binds to `:$PORT`. `THREEGPP_MCP_*` and CLI flags take precedence |
 | `THREEGPP_MAX_ZIP_SIZE_MB` | Max ZIP download size (default: 512 MB) |
 | `THREEGPP_CACHE_TTL_HOURS` | Spec list cache TTL in hours |
 | `XDG_CACHE_HOME` | Override cache directory (follows XDG Base Directory spec) |

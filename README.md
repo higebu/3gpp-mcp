@@ -309,12 +309,14 @@ Start the MCP server.
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--db` | Path to SQLite database | `3gpp.db` |
-| `--transport` | Transport type: `stdio` or `http` | `stdio` |
-| `--addr` | HTTP listen address | `:8080` |
+| `--transport` | Transport type: `stdio` or `http` (env: `THREEGPP_MCP_TRANSPORT`; defaults to `http` when `PORT` is set) | `stdio` |
+| `--addr` | HTTP listen address (env: `THREEGPP_MCP_ADDR`, or `PORT` interpreted as `:$PORT`) | `:8080` |
 | `--bearer-token` | Bearer token for HTTP auth (env: `THREEGPP_MCP_BEARER_TOKEN`) | |
 | `--web` | Enable web viewer alongside MCP server (HTTP transport only) | `false` |
 
 When `--web` is enabled with HTTP transport, the MCP endpoint is served at `/mcp/` and the web viewer at `/`.
+
+For container platforms like Cloud Run or Heroku that inject a `PORT` environment variable, the server automatically switches to HTTP transport and binds to `:$PORT`. Explicit flags or `THREEGPP_MCP_TRANSPORT` / `THREEGPP_MCP_ADDR` always take precedence.
 
 ### `build`
 

@@ -68,10 +68,25 @@ func main() {
 }
 
 func cmdServe(args []string) {
+	defaultTransport := "stdio"
+	if v := os.Getenv("THREEGPP_MCP_TRANSPORT"); v != "" {
+		defaultTransport = v
+	} else if os.Getenv("PORT") != "" {
+		// PaaS like Cloud Run / Heroku inject PORT and expect an HTTP server.
+		defaultTransport = "http"
+	}
+
+	defaultAddr := ":8080"
+	if v := os.Getenv("THREEGPP_MCP_ADDR"); v != "" {
+		defaultAddr = v
+	} else if p := os.Getenv("PORT"); p != "" {
+		defaultAddr = ":" + p
+	}
+
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	dbPath := fs.String("db", "3gpp.db", "Path to SQLite database")
-	transport := fs.String("transport", "stdio", "Transport type: stdio or http")
-	addr := fs.String("addr", ":8080", "HTTP listen address")
+	transport := fs.String("transport", defaultTransport, "Transport type: stdio or http (env: THREEGPP_MCP_TRANSPORT, or PORT to force http)")
+	addr := fs.String("addr", defaultAddr, "HTTP listen address (env: THREEGPP_MCP_ADDR, or PORT)")
 	bearerToken := fs.String("bearer-token", "", "Bearer token for HTTP auth (env: THREEGPP_MCP_BEARER_TOKEN)")
 	enableWeb := fs.Bool("web", false, "Enable web viewer alongside MCP server (HTTP transport only)")
 	_ = fs.Parse(args)
