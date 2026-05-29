@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -22,6 +23,12 @@ import (
 
 // version is set at build time via -ldflags "-X main.version=x.y.z".
 var version = "dev"
+
+func healthHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, "ok")
+}
 
 func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
 	expected := []byte("Bearer " + token)
@@ -137,21 +144,20 @@ func cmdServe(args []string) {
 			log.Println("WARNING: HTTP transport running without authentication. Set -bearer-token or THREEGPP_MCP_BEARER_TOKEN to secure the server.")
 		}
 
+		mux := http.NewServeMux()
+		mux.HandleFunc("/health", healthHandler)
 		if *enableWeb {
-			mux := http.NewServeMux()
 			mux.Handle("/mcp/", http.StripPrefix("/mcp", mcpH))
 			mux.Handle("/", web.NewServer(d))
 			log.Printf("Starting 3gpp-mcp server on %s (HTTP + Web viewer)...", *addr)
 			log.Printf("  MCP endpoint: http://localhost%s/mcp/", *addr)
 			log.Printf("  Web viewer:   http://localhost%s/", *addr)
-			if err := http.ListenAndServe(*addr, mux); err != nil {
-				log.Fatalf("Server error: %v", err)
-			}
 		} else {
+			mux.Handle("/", mcpH)
 			log.Printf("Starting 3gpp-mcp server on %s (HTTP)...", *addr)
-			if err := http.ListenAndServe(*addr, mcpH); err != nil {
-				log.Fatalf("Server error: %v", err)
-			}
+		}
+		if err := http.ListenAndServe(*addr, mux); err != nil {
+			log.Fatalf("Server error: %v", err)
 		}
 	default:
 		log.Fatalf("Unknown transport: %s", *transport)

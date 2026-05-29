@@ -316,6 +316,8 @@ Start the MCP server.
 
 When `--web` is enabled with HTTP transport, the MCP endpoint is served at `/mcp/` and the web viewer at `/`.
 
+HTTP transport also exposes `GET /health`, which returns `200 OK` without authentication. Use this path for platform health checks (Cloud Run, Sakura AppRun, Kubernetes liveness/readiness probes, etc.).
+
 For container platforms like Cloud Run or Heroku that inject a `PORT` environment variable, the server automatically switches to HTTP transport and binds to `:$PORT`. Explicit flags or `THREEGPP_MCP_TRANSPORT` / `THREEGPP_MCP_ADDR` always take precedence.
 
 ### `build`

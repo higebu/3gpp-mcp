@@ -17,6 +17,18 @@ import (
 	"github.com/higebu/3gpp-mcp/db"
 )
 
+func TestHealthHandler(t *testing.T) {
+	req := httptest.NewRequest("GET", "/health", nil)
+	w := httptest.NewRecorder()
+	healthHandler(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	if body := w.Body.String(); body != "ok" {
+		t.Errorf("expected body \"ok\", got %q", body)
+	}
+}
+
 func TestBearerAuthMiddleware(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
