@@ -1,9 +1,15 @@
-# Cloud Build pipeline: build the image with the 3GPP database baked in,
-# push it to Artifact Registry, and deploy it to Cloud Run.
+# Cloud Build pipeline: clone the public repo, build the image with the 3GPP
+# database baked in, push it to Artifact Registry, and deploy it to Cloud Run.
 #
-# Usage:
-#   gcloud builds submit --config cloudbuild.yaml \
-#     --substitutions=_RELEASE=19,_REGION=asia-northeast1,_REPO=3gpp-mcp,_SERVICE=3gpp-mcp
+# The build clones the repo itself (rather than relying on uploaded source), so
+# it is not associated with a GitHub commit and posts no GitHub status check.
+# The same config works for both one-off and scheduled deploys.
+#
+# Manual run:
+#   gcloud builds submit --no-source --config cloudbuild.yaml \
+#     --substitutions=_REF=main,_RELEASE=19,_REGION=asia-northeast1,_REPO=3gpp-mcp,_SERVICE=3gpp-mcp
+#
+# Scheduled run: start it from Cloud Scheduler via the Cloud Build API.
 #
 # Prerequisites:
 #   - An Artifact Registry Docker repository named ${_REPO} in ${_REGION}.
@@ -11,6 +17,7 @@
 #     roles/iam.serviceAccountUser (to deploy to Cloud Run).
 
 substitutions:
+  _REF: "main"
   _RELEASE: "19"
   _REGION: "asia-northeast1"
   _REPO: "3gpp-mcp"
@@ -28,8 +35,18 @@ options:
 timeout: 7200s
 
 steps:
+  - id: clone
+    name: gcr.io/cloud-builders/git
+    args:
+      - clone
+      - --depth=1
+      - --branch=${_REF}
+      - https://github.com/higebu/3gpp-mcp
+      - repo
+
   - id: build
     name: gcr.io/cloud-builders/docker
+    dir: repo
     args:
       - build
       - --build-arg=RELEASE=${_RELEASE}
@@ -49,6 +66,7 @@ steps:
   - id: deploy
     name: gcr.io/google.cloud-sdk:slim
     entrypoint: bash
+    dir: repo
     args:
       - -c
       - |
