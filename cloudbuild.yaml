@@ -40,14 +40,20 @@ steps:
       - push
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}
 
+  # Deploy via a service spec so we can configure the startup/liveness probes
+  # (gcloud run deploy has no flags for probes). add-iam-policy-binding replaces
+  # the convenience of --allow-unauthenticated.
   - id: deploy
     name: gcr.io/google.cloud-sdk:slim
-    entrypoint: gcloud
+    entrypoint: bash
     args:
-      - run
-      - deploy
-      - ${_SERVICE}
-      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}
-      - --region=${_REGION}
-      - --platform=managed
-      - --allow-unauthenticated
+      - -c
+      - |
+        set -euo pipefail
+        sed \
+          -e "s|__SERVICE__|${_SERVICE}|g" \
+          -e "s|__IMAGE__|${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}|g" \
+          service.yaml > /workspace/service.rendered.yaml
+        gcloud run services replace /workspace/service.rendered.yaml --region=${_REGION}
+        gcloud run services add-iam-policy-binding ${_SERVICE} \
+          --region=${_REGION} --member=allUsers --role=roles/run.invoker

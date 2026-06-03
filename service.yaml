@@ -1,0 +1,33 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: __SERVICE__
+spec:
+  template:
+    metadata:
+      annotations:
+        # Give the container full CPU during startup to shorten cold starts.
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      containers:
+        - image: __IMAGE__
+          ports:
+            - containerPort: 8080
+          # Startup probe: the image is large and the server needs time to come
+          # up, so wait before the first check and keep polling until it is ready.
+          # Effective startup grace = initialDelaySeconds + periodSeconds * failureThreshold
+          #                         = 10 + 10 * 30 = 310s. Tune these as needed.
+          startupProbe:
+            httpGet:
+              path: /health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          # Liveness probe takes over once the container is started.
+          livenessProbe:
+            httpGet:
+              path: /health
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3

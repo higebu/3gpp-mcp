@@ -73,6 +73,12 @@ Building the full release database takes a while, so `cloudbuild.yaml` raises
 the build timeout and uses a higher-CPU machine. Re-run with a different
 `_RELEASE` to publish another release or refresh the database.
 
+The image is large and the server takes time to start, so deployment uses
+`service.yaml` (via `gcloud run services replace`) to configure a startup probe
+against `/health` plus startup CPU boost. Adjust the startup grace period by
+editing the probe's `initialDelaySeconds`, `periodSeconds`, and
+`failureThreshold` in `service.yaml`.
+
 ---
 
 ### 1. Install
