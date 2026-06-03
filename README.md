@@ -52,11 +52,6 @@ docker run --rm -i 3gpp-mcp:rel19
 docker run --rm -p 8080:8080 3gpp-mcp:rel19 serve --db /3gpp.db --transport http --addr :8080
 ```
 
-> [!NOTE]
-> 3GPP specifications are redistributed under 3GPP's terms. Build and host the
-> image within your own infrastructure rather than publishing it to a public
-> registry.
-
 ### Deploy to Cloud Run with Cloud Build
 
 `cloudbuild.yaml` builds the image (with the database baked in), pushes it to
