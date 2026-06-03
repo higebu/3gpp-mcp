@@ -19,6 +19,9 @@ substitutions:
 options:
   # The database build downloads and converts many specs; give it plenty of CPU.
   machineType: E2_HIGHCPU_8
+  # Required when the build runs as a user-specified service account; without a
+  # logs bucket, logs must go to Cloud Logging.
+  logging: CLOUD_LOGGING_ONLY
 
 # Building the full release database (download + .doc/.docx + image conversion)
 # takes a while, so raise the default 10-minute timeout.
