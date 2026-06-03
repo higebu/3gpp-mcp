@@ -34,49 +34,28 @@ This tool takes a structure-aware approach: it preserves the document hierarchy,
 
 ## Getting Started
 
-### Using the pre-built Docker image
+### Build a self-contained Docker image
 
-A pre-built Docker image with the Release 19 database baked in is available at `ghcr.io/higebu/3gpp-mcp`. It is updated weekly and supports `linux/amd64` and `linux/arm64` (Apple Silicon).
-
-**Steps 1 and 2 below are not required when using the Docker image.**
-
-#### Claude Code
-
-```bash
-claude mcp add --scope user 3gpp -- docker run --rm -i ghcr.io/higebu/3gpp-mcp:latest
-```
-
-#### VS Code / GitHub Copilot
+The `Dockerfile` is multi-stage and builds the database for a release directly,
+producing a self-contained image with the SQLite database (sections, OpenAPI
+definitions, and embedded images) baked in. No pre-built database is needed in
+the build context.
 
 ```bash
-code --add-mcp '{"name":"3gpp","command":"docker","args":["run","--rm","-i","ghcr.io/higebu/3gpp-mcp:latest"]}'
+# Build an image with the Release 19 database baked in (default RELEASE=19)
+docker build --build-arg RELEASE=19 -t 3gpp-mcp:rel19 .
+
+# stdio transport (Claude Code / IDE integration)
+docker run --rm -i 3gpp-mcp:rel19
+
+# HTTP transport
+docker run --rm -p 8080:8080 3gpp-mcp:rel19 serve --db /3gpp.db --transport http --addr :8080
 ```
 
-#### Claude Desktop
+### Deploy to Cloud Run
 
-```json
-{
-  "mcpServers": {
-    "3gpp": {
-      "command": "docker",
-      "args": ["run", "--rm", "-i", "ghcr.io/higebu/3gpp-mcp:latest"]
-    }
-  }
-}
-```
-
-#### HTTP transport
-
-```bash
-docker run --rm -p 8080:8080 ghcr.io/higebu/3gpp-mcp:latest serve --db /3gpp.db --transport http --addr :8080
-```
-
-Available tags:
-
-| Tag | Description |
-|-----|-------------|
-| `latest` | Latest weekly build (Release 19) |
-| `rel19` | Release 19 |
+To run on Cloud Run, see `cloudbuild.yaml` (build + push + deploy) and
+`service.yaml` (Cloud Run service spec).
 
 ---
 

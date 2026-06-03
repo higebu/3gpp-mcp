@@ -1,0 +1,80 @@
+# Cloud Build pipeline: clone the public repo, build the image with the 3GPP
+# database baked in, push it to Artifact Registry, and deploy it to Cloud Run.
+#
+# The build clones the repo itself (rather than relying on uploaded source), so
+# it is not associated with a GitHub commit and posts no GitHub status check.
+# The same config works for both one-off and scheduled deploys.
+#
+# Manual run:
+#   gcloud builds submit --no-source --config cloudbuild.yaml \
+#     --substitutions=_REF=main,_RELEASE=19,_REGION=asia-northeast1,_REPO=3gpp-mcp,_SERVICE=3gpp-mcp
+#
+# Scheduled run: start it from Cloud Scheduler via the Cloud Build API.
+#
+# Prerequisites:
+#   - An Artifact Registry Docker repository named ${_REPO} in ${_REGION}.
+#   - The Cloud Build service account has roles/run.admin and
+#     roles/iam.serviceAccountUser (to deploy to Cloud Run).
+
+substitutions:
+  _REF: "main"
+  _RELEASE: "19"
+  _REGION: "asia-northeast1"
+  _REPO: "3gpp-mcp"
+  _SERVICE: "3gpp-mcp"
+
+options:
+  # The database build downloads and converts many specs; give it plenty of CPU.
+  machineType: E2_HIGHCPU_8
+  # Required when the build runs as a user-specified service account; without a
+  # logs bucket, logs must go to Cloud Logging.
+  logging: CLOUD_LOGGING_ONLY
+
+# Building the full release database (download + .doc/.docx + image conversion)
+# takes a while, so raise the default 10-minute timeout.
+timeout: 7200s
+
+steps:
+  - id: clone
+    name: gcr.io/cloud-builders/git
+    args:
+      - clone
+      - --depth=1
+      - --branch=${_REF}
+      - https://github.com/higebu/3gpp-mcp
+      - repo
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    dir: repo
+    args:
+      - build
+      - --build-arg=RELEASE=${_RELEASE}
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}
+      - .
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}
+
+  # Deploy via a service spec so we can configure the startup/liveness probes
+  # (gcloud run deploy has no flags for probes). add-iam-policy-binding replaces
+  # the convenience of --allow-unauthenticated.
+  - id: deploy
+    name: gcr.io/google.cloud-sdk:slim
+    entrypoint: bash
+    dir: repo
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        sed \
+          -e "s|__SERVICE__|${_SERVICE}|g" \
+          -e "s|__IMAGE__|${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}|g" \
+          service.yaml > /workspace/service.rendered.yaml
+        gcloud run services replace /workspace/service.rendered.yaml --region=${_REGION}
+        gcloud run services add-iam-policy-binding ${_SERVICE} \
+          --region=${_REGION} --member=allUsers --role=roles/run.invoker
