@@ -1,0 +1,53 @@
+# Cloud Build pipeline: build the image with the 3GPP database baked in,
+# push it to Artifact Registry, and deploy it to Cloud Run.
+#
+# Usage:
+#   gcloud builds submit --config cloudbuild.yaml \
+#     --substitutions=_RELEASE=19,_REGION=asia-northeast1,_REPO=3gpp-mcp,_SERVICE=3gpp-mcp
+#
+# Prerequisites:
+#   - An Artifact Registry Docker repository named ${_REPO} in ${_REGION}.
+#   - The Cloud Build service account has roles/run.admin and
+#     roles/iam.serviceAccountUser (to deploy to Cloud Run).
+
+substitutions:
+  _RELEASE: "19"
+  _REGION: "asia-northeast1"
+  _REPO: "3gpp-mcp"
+  _SERVICE: "3gpp-mcp"
+
+options:
+  # The database build downloads and converts many specs; give it plenty of CPU.
+  machineType: E2_HIGHCPU_8
+
+# Building the full release database (download + .doc/.docx + image conversion)
+# takes a while, so raise the default 10-minute timeout.
+timeout: 7200s
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg=RELEASE=${_RELEASE}
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}
+      - .
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}
+
+  - id: deploy
+    name: gcr.io/google.cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated

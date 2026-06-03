@@ -34,49 +34,49 @@ This tool takes a structure-aware approach: it preserves the document hierarchy,
 
 ## Getting Started
 
-### Using the pre-built Docker image
+### Build a self-contained Docker image
 
-A pre-built Docker image with the Release 19 database baked in is available at `ghcr.io/higebu/3gpp-mcp`. It is updated weekly and supports `linux/amd64` and `linux/arm64` (Apple Silicon).
-
-**Steps 1 and 2 below are not required when using the Docker image.**
-
-#### Claude Code
-
-```bash
-claude mcp add --scope user 3gpp -- docker run --rm -i ghcr.io/higebu/3gpp-mcp:latest
-```
-
-#### VS Code / GitHub Copilot
+The `Dockerfile` is multi-stage and builds the database for a release directly,
+producing a self-contained image with the SQLite database (sections, OpenAPI
+definitions, and embedded images) baked in. No pre-built database is needed in
+the build context.
 
 ```bash
-code --add-mcp '{"name":"3gpp","command":"docker","args":["run","--rm","-i","ghcr.io/higebu/3gpp-mcp:latest"]}'
+# Build an image with the Release 19 database baked in (default RELEASE=19)
+docker build --build-arg RELEASE=19 -t 3gpp-mcp:rel19 .
+
+# stdio transport (Claude Code / IDE integration)
+docker run --rm -i 3gpp-mcp:rel19
+
+# HTTP transport
+docker run --rm -p 8080:8080 3gpp-mcp:rel19 serve --db /3gpp.db --transport http --addr :8080
 ```
 
-#### Claude Desktop
+> [!NOTE]
+> 3GPP specifications are redistributed under 3GPP's terms. Build and host the
+> image within your own infrastructure rather than publishing it to a public
+> registry.
 
-```json
-{
-  "mcpServers": {
-    "3gpp": {
-      "command": "docker",
-      "args": ["run", "--rm", "-i", "ghcr.io/higebu/3gpp-mcp:latest"]
-    }
-  }
-}
-```
+### Deploy to Cloud Run with Cloud Build
 
-#### HTTP transport
+`cloudbuild.yaml` builds the image (with the database baked in), pushes it to
+Artifact Registry, and deploys it to Cloud Run — entirely within Google Cloud
+managed services. The server automatically switches to HTTP transport when
+Cloud Run injects `PORT`.
 
 ```bash
-docker run --rm -p 8080:8080 ghcr.io/higebu/3gpp-mcp:latest serve --db /3gpp.db --transport http --addr :8080
+# Create an Artifact Registry repository once
+gcloud artifacts repositories create 3gpp-mcp \
+  --repository-format=docker --location=asia-northeast1
+
+# Build + push + deploy
+gcloud builds submit --config cloudbuild.yaml \
+  --substitutions=_RELEASE=19,_REGION=asia-northeast1,_REPO=3gpp-mcp,_SERVICE=3gpp-mcp
 ```
 
-Available tags:
-
-| Tag | Description |
-|-----|-------------|
-| `latest` | Latest weekly build (Release 19) |
-| `rel19` | Release 19 |
+Building the full release database takes a while, so `cloudbuild.yaml` raises
+the build timeout and uses a higher-CPU machine. Re-run with a different
+`_RELEASE` to publish another release or refresh the database.
 
 ---
 
