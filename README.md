@@ -52,35 +52,10 @@ docker run --rm -i 3gpp-mcp:rel19
 docker run --rm -p 8080:8080 3gpp-mcp:rel19 serve --db /3gpp.db --transport http --addr :8080
 ```
 
-### Deploy to Cloud Run with Cloud Build
+### Deploy to Cloud Run
 
-`cloudbuild.yaml` clones the repository, builds the image (with the database
-baked in), pushes it to Artifact Registry, and deploys it to Cloud Run — entirely
-within Google Cloud managed services. The server automatically switches to HTTP
-transport when Cloud Run injects `PORT`. Because the build clones the repo itself
-rather than relying on a GitHub App connection, it posts no build status check on
-GitHub, and the same config works for both one-off and scheduled deploys.
-
-```bash
-# Create an Artifact Registry repository once
-gcloud artifacts repositories create 3gpp-mcp \
-  --repository-format=docker --location=asia-northeast1
-
-# Build + push + deploy (the build clones the repo, so no local source is uploaded)
-gcloud builds submit --no-source --config cloudbuild.yaml \
-  --substitutions=_REF=main,_RELEASE=19,_REGION=asia-northeast1,_REPO=3gpp-mcp,_SERVICE=3gpp-mcp
-```
-
-Building the full release database takes a while, so `cloudbuild.yaml` raises
-the build timeout and uses a higher-CPU machine. Re-run with a different
-`_RELEASE` to publish another release or refresh the database, or a different
-`_REF` to build another branch or tag.
-
-The image is large and the server takes time to start, so deployment uses
-`service.yaml` (via `gcloud run services replace`) to configure a startup probe
-against `/health` plus startup CPU boost. Adjust the startup grace period by
-editing the probe's `initialDelaySeconds`, `periodSeconds`, and
-`failureThreshold` in `service.yaml`.
+To run on Cloud Run, see `cloudbuild.yaml` (build + push + deploy) and
+`service.yaml` (Cloud Run service spec).
 
 ---
 
