@@ -5,7 +5,15 @@
 # it is not associated with a GitHub commit and posts no GitHub status check.
 # The same config works for both one-off and scheduled deploys.
 #
-# Manual run:
+# _RELEASE defaults to "latest", baking in the latest version of every spec
+# across all releases. Set it to a release number (e.g. _RELEASE=19) to restrict
+# the database to a single release.
+#
+# Manual run (latest of every spec):
+#   gcloud builds submit --no-source --config cloudbuild.yaml \
+#     --substitutions=_REF=main,_REGION=asia-northeast1,_REPO=3gpp-mcp,_SERVICE=3gpp-mcp
+#
+# Manual run (single release):
 #   gcloud builds submit --no-source --config cloudbuild.yaml \
 #     --substitutions=_REF=main,_RELEASE=19,_REGION=asia-northeast1,_REPO=3gpp-mcp,_SERVICE=3gpp-mcp
 #
@@ -18,7 +26,9 @@
 
 substitutions:
   _REF: "main"
-  _RELEASE: "19"
+  # "latest" = latest version of every spec across all releases; or a release
+  # number such as "19" to restrict the database to a single release.
+  _RELEASE: "latest"
   _REGION: "asia-northeast1"
   _REPO: "3gpp-mcp"
   _SERVICE: "3gpp-mcp"

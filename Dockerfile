@@ -8,18 +8,23 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w" \
     -o /3gpp-mcp ./cmd/3gpp-mcp
 
-# 2) Build the database for the requested release. LibreOffice is required for
-#    --convert-doc / --convert-image but lives only in this stage, so it never
-#    bloats the final image. Temp files are deleted as each spec is processed,
-#    keeping disk usage low.
+# 2) Build the database. By default the latest version of every spec across all
+#    releases is baked in; pass --build-arg RELEASE=19 to restrict to a single
+#    release. LibreOffice is required for --convert-doc / --convert-image but
+#    lives only in this stage, so it never bloats the final image. Temp files are
+#    deleted as each spec is processed, keeping disk usage low.
 FROM golang:1.26-bookworm AS db-builder
-ARG RELEASE=19
+ARG RELEASE=latest
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libreoffice ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=go-builder /3gpp-mcp /3gpp-mcp
-RUN /3gpp-mcp build \
-    --release ${RELEASE} \
+RUN if [ "${RELEASE}" = "latest" ] || [ -z "${RELEASE}" ]; then \
+        SELECT="--latest"; \
+    else \
+        SELECT="--release ${RELEASE}"; \
+    fi \
+    && /3gpp-mcp build ${SELECT} \
     --db /3gpp.db \
     --convert-doc \
     --convert-image \

@@ -42,15 +42,22 @@ definitions, and embedded images) baked in. No pre-built database is needed in
 the build context.
 
 ```bash
-# Build an image with the Release 19 database baked in (default RELEASE=19)
+# Build an image with the latest version of every spec baked in (default)
+docker build -t 3gpp-mcp:latest .
+
+# ...or restrict the database to a single release
 docker build --build-arg RELEASE=19 -t 3gpp-mcp:rel19 .
 
 # stdio transport (Claude Code / IDE integration)
-docker run --rm -i 3gpp-mcp:rel19
+docker run --rm -i 3gpp-mcp:latest
 
 # HTTP transport
-docker run --rm -p 8080:8080 3gpp-mcp:rel19 serve --db /3gpp.db --transport http --addr :8080
+docker run --rm -p 8080:8080 3gpp-mcp:latest serve --db /3gpp.db --transport http --addr :8080
 ```
+
+`RELEASE` defaults to `latest`, which bakes in the latest version of every spec
+across all releases. Set `--build-arg RELEASE=<n>` (e.g. `19`) to restrict the
+database to a single release.
 
 ### Deploy to Cloud Run
 
@@ -72,7 +79,10 @@ Requires Go 1.26+. LibreOffice is optional (needed for `.doc` to `.docx` convers
 Download and import specifications into the database. Temporary files are deleted after each spec is processed, minimizing disk usage.
 
 ```bash
-# Download and import all Release 19 specs
+# Download and import the latest version of every spec (all releases)
+3gpp-mcp build --latest --db data/3gpp.db --convert-doc --convert-image
+
+# ...or restrict to a single release
 3gpp-mcp build --release 19 --db data/3gpp.db --convert-doc --convert-image
 ```
 
@@ -232,7 +242,7 @@ The `build` command extracts images from DOCX files and stores them in the datab
 
 ```bash
 # Convert EMF/WMF to PNG for LLM viewing (requires LibreOffice)
-3gpp-mcp build --release 19 --db data/3gpp.db --convert-image
+3gpp-mcp build --latest --db data/3gpp.db --convert-image
 ```
 
 ## Tips
