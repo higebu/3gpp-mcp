@@ -3,7 +3,12 @@
 SPECS_DIR ?= specs
 DB_PATH ?= data/3gpp.db
 BIN_DIR ?= bin
-RELEASE ?= 19
+# RELEASE selects which versions to build/download. The default "latest" builds
+# the latest version of every spec across all releases (full coverage, including
+# specs that have no Release-19 version such as TS 34.108). Set RELEASE to a
+# number (e.g. RELEASE=19) to restrict to a single release.
+RELEASE ?= latest
+release_flag = $(if $(filter latest,$(RELEASE)),--latest,--release $(RELEASE))
 
 # Build the MCP server
 build:
@@ -21,13 +26,15 @@ import: build
 import-dir: build
 	./$(BIN_DIR)/3gpp-mcp import-dir --db $(DB_PATH) $(SPECS_DIR)
 
-# Download + import in one step (recommended)
+# Download + import in one step (recommended). Builds the latest version of
+# every spec by default; pass RELEASE=19 to restrict to a single release.
 build-db: build
-	./$(BIN_DIR)/3gpp-mcp build --release $(RELEASE) --db $(DB_PATH) --convert-doc
+	./$(BIN_DIR)/3gpp-mcp build $(release_flag) --db $(DB_PATH) --convert-doc
 
-# Download specs for a specific release (download only, no conversion)
+# Download specs (download only, no conversion). Latest of every spec by
+# default; pass RELEASE=19 to restrict to a single release.
 download-specs: build
-	./$(BIN_DIR)/3gpp-mcp download --release $(RELEASE) --output-dir $(SPECS_DIR) --convert-doc
+	./$(BIN_DIR)/3gpp-mcp download $(release_flag) --output-dir $(SPECS_DIR) --convert-doc
 
 # Download the single latest version of each spec across all releases
 download-latest-specs: build

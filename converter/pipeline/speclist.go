@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,10 +36,11 @@ func defaultConcurrency() int {
 // SpecVersion represents a specific version of a 3GPP spec available for download.
 type SpecVersion struct {
 	Series        string // e.g., "23"
-	SpecID        string // e.g., "23.501"
+	SpecID        string // e.g., "23.501" or "38.101-1"
 	Filename      string // e.g., "23501-k10.zip"
-	VersionLetter string // e.g., "k" or "" for legacy
-	VersionMinor  int    // e.g., 10
+	Version       string // raw version token, e.g. "k10", "f20", "fa0", "300"
+	VersionLetter string // first version character if it is a letter, else ""
+	VersionMinor  int    // base-36 value of the characters after the first (for sorting)
 	Release       int    // e.g., 20 or 0 for legacy
 	URL           string // full download URL
 }
@@ -48,33 +48,52 @@ type SpecVersion struct {
 const baseURL = "https://www.3gpp.org/ftp/Specs/archive/"
 
 var (
-	versionRE   = regexp.MustCompile(`(?i).+-([a-z])(\d+)\.zip$`)
-	legacyRE    = regexp.MustCompile(`.+-(\d{3,})\.zip$`)
 	seriesDirRE = regexp.MustCompile(`(\d+)_series$`)
-	specDirRE   = regexp.MustCompile(`^\d+\.\d+$`)
-	hrefRE      = regexp.MustCompile(`href="([^"]+)"`)
-	verLetterRE = regexp.MustCompile(`(?i)^([a-zA-Z])(\d+)$`)
-	verNumRE    = regexp.MustCompile(`^(\d+)$`)
+	// specDirRE matches spec directory names, including the multi-part specs
+	// that carry a numeric suffix such as "38.101-1" or "34.123-2".
+	specDirRE = regexp.MustCompile(`^\d+\.\d+(-\d+)?$`)
+	hrefRE    = regexp.MustCompile(`href="([^"]+)"`)
+	// versionTokenRE matches a 3GPP version token. The version is a base-36
+	// string where every character can be a digit or a letter, e.g. "k10",
+	// "f20", "3a0" or "fb0" — not just a letter followed by digits.
+	versionTokenRE = regexp.MustCompile(`^[0-9a-z]{2,}$`)
 )
 
-// letterToRelease converts version letter to release number: a=10, b=11, ..., j=19, k=20, ...
-func letterToRelease(letter string) int {
-	if len(letter) == 0 {
-		return 0
+// base36Digit returns the base-36 value of a single version character
+// ('0'-'9' -> 0-9, 'a'-'z' -> 10-35), or -1 if the character is invalid.
+func base36Digit(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'z':
+		return int(c-'a') + 10
+	default:
+		return -1
 	}
-	ch := strings.ToLower(letter)[0]
-	return int(ch-'a') + 10
 }
 
-// SpecVersionString returns the version string for DB comparison.
+// versionValue converts a base-36 version token into a comparable integer.
+// Returns 0 if the token contains an invalid character.
+func versionValue(v string) int64 {
+	v = strings.ToLower(strings.TrimSpace(v))
+	var n int64
+	for i := 0; i < len(v); i++ {
+		d := base36Digit(v[i])
+		if d < 0 {
+			return 0
+		}
+		n = n*36 + int64(d)
+	}
+	return n
+}
+
+// SpecVersionString returns the raw version token for DB comparison/display.
 func SpecVersionString(sv *SpecVersion) string {
-	if sv.VersionLetter != "" {
-		return fmt.Sprintf("%s%d", sv.VersionLetter, sv.VersionMinor)
-	}
-	return fmt.Sprintf("%d", sv.VersionMinor)
+	return sv.Version
 }
 
-// ParseSpecEntry parses a spec list entry like "23_series/23.501/23501-k10.zip".
+// ParseSpecEntry parses a spec list entry like "23_series/23.501/23501-k10.zip"
+// or "38_series/38.101-1/38101-1-j50.zip".
 func ParseSpecEntry(entry string) *SpecVersion {
 	entry = strings.TrimSpace(entry)
 	if entry == "" || !strings.HasSuffix(entry, ".zip") {
@@ -91,41 +110,41 @@ func ParseSpecEntry(entry string) *SpecVersion {
 	if seriesMatch == nil {
 		return nil
 	}
+	if !specDirRE.MatchString(specDir) {
+		return nil
+	}
 	series := seriesMatch[1]
 	specID := specDir
 
-	if match := versionRE.FindStringSubmatch(filename); match != nil {
-		letter := strings.ToLower(match[1])
-		minor, err := strconv.Atoi(match[2])
-		if err != nil {
-			return nil
-		}
-		return &SpecVersion{
-			Series:        series,
-			SpecID:        specID,
-			Filename:      filename,
-			VersionLetter: letter,
-			VersionMinor:  minor,
-			Release:       letterToRelease(letter),
-			URL:           baseURL + entry,
-		}
+	// The version is the final hyphen-delimited token of the filename, e.g.
+	// "k10" in "23501-k10.zip" or "j50" in "38101-1-j50.zip". Each character is
+	// a base-36 digit; the first character encodes the release (a=10, k=20, ...,
+	// and plain digits for legacy releases such as "300" -> release 3).
+	base := strings.TrimSuffix(filename, ".zip")
+	idx := strings.LastIndex(base, "-")
+	if idx < 0 {
+		return nil
+	}
+	token := strings.ToLower(base[idx+1:])
+	if !versionTokenRE.MatchString(token) {
+		return nil
 	}
 
-	if match := legacyRE.FindStringSubmatch(filename); match != nil {
-		minor, err := strconv.Atoi(match[1])
-		if err != nil {
-			return nil
-		}
-		return &SpecVersion{
-			Series:       series,
-			SpecID:       specID,
-			Filename:     filename,
-			VersionMinor: minor,
-			URL:          baseURL + entry,
-		}
+	letter := ""
+	if token[0] >= 'a' && token[0] <= 'z' {
+		letter = token[0:1]
 	}
 
-	return nil
+	return &SpecVersion{
+		Series:        series,
+		SpecID:        specID,
+		Filename:      filename,
+		Version:       token,
+		VersionLetter: letter,
+		VersionMinor:  int(versionValue(token[1:])),
+		Release:       base36Digit(token[0]),
+		URL:           baseURL + entry,
+	}
 }
 
 // IsNewerVersion compares version strings (e.g., "k10" vs "j60").
@@ -133,26 +152,7 @@ func IsNewerVersion(newVer, oldVer string) bool {
 	if oldVer == "" {
 		return true
 	}
-	return parseVer(newVer) > parseVer(oldVer)
-}
-
-func parseVer(v string) int64 {
-	if m := verLetterRE.FindStringSubmatch(v); m != nil {
-		major := int64(strings.ToLower(m[1])[0]-'a') + 10
-		minor, err := strconv.ParseInt(m[2], 10, 64)
-		if err != nil {
-			return 0
-		}
-		return major*10000 + minor
-	}
-	if m := verNumRE.FindStringSubmatch(v); m != nil {
-		n, err := strconv.ParseInt(m[1], 10, 64)
-		if err != nil {
-			return 0
-		}
-		return n
-	}
-	return 0
+	return versionValue(newVer) > versionValue(oldVer)
 }
 
 // FetchSpecZips fetches zip file entries for a single spec directly,

@@ -45,12 +45,14 @@ go vet ./...                        # Static analysis
 golangci-lint run                   # Full lint (config: .golangci.yml)
 
 # Build database (download + import)
-make build-db RELEASE=19            # Download and import specs into DB
+make build-db                       # Download + import latest version of every spec
+make build-db RELEASE=19            # ...or restrict to a single release
 make import FILE=path/to/spec.docx  # Import single file
 make import-dir SPECS_DIR=specs     # Import directory
 
 # Download only (no import)
-make download-specs RELEASE=19      # Download specs for a specific release
+make download-specs                 # Download latest version of every spec
+make download-specs RELEASE=19      # ...or restrict to a single release
 make download-latest-specs          # Download latest version of each spec
 make update-specs                   # Update DB to latest versions
 

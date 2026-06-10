@@ -19,14 +19,21 @@ import (
 	"github.com/higebu/3gpp-mcp/db"
 )
 
-// docxVersionRE matches 3GPP docx filenames like "21900-j10.docx" to extract the version letter.
-var docxVersionRE = regexp.MustCompile(`(?i).+-([a-z])\d+\.docx$`)
+// docxVersionRE matches 3GPP docx filenames like "21900-j10.docx" or
+// "38101-1-j50.docx" to capture the base-36 version token.
+var docxVersionRE = regexp.MustCompile(`(?i)-([0-9a-z]{2,})\.docx$`)
 
 // releaseFromDocxFilename extracts the release number from a 3GPP docx filename.
-// Returns 0 if the filename does not match the expected pattern.
+// The release is encoded in the first character of the version token (base-36:
+// a=10, k=20, ..., and plain digits for legacy releases). Returns 0 if the
+// filename does not match the expected pattern.
 func releaseFromDocxFilename(filename string) int {
-	if m := docxVersionRE.FindStringSubmatch(filename); m != nil {
-		return letterToRelease(m[1])
+	m := docxVersionRE.FindStringSubmatch(filename)
+	if m == nil {
+		return 0
+	}
+	if r := base36Digit(strings.ToLower(m[1])[0]); r > 0 {
+		return r
 	}
 	return 0
 }
