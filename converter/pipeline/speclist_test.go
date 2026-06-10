@@ -20,7 +20,15 @@ func TestParseSpecEntry(t *testing.T) {
 		wantRe int    // expected Release
 	}{
 		{"modern version", "23_series/23.501/23501-k10.zip", "23.501", 20},
-		{"legacy version", "23_series/23.501/23501-300.zip", "23.501", 0},
+		// Legacy all-digit versions encode the release in the first digit:
+		// "300" -> release 3 (Release 1999).
+		{"legacy version", "23_series/23.501/23501-300.zip", "23.501", 3},
+		// Suffixed (multi-part) spec directories must be accepted.
+		{"suffix spec dir", "38_series/38.101-1/38101-1-j50.zip", "38.101-1", 19},
+		{"suffix spec dir part 2", "38_series/38.521-1/38521-1-j40.zip", "38.521-1", 19},
+		// Base-36 versions with letters in the 2nd/3rd position must parse.
+		{"base36 digit-major", "34_series/34.108/34108-3a0.zip", "34.108", 3},
+		{"base36 letter-major", "34_series/34.108/34108-fb0.zip", "34.108", 15},
 		{"empty string", "", "", 0},
 		{"no zip suffix", "23_series/23.501/23501-k10.docx", "", 0},
 		{"wrong parts count", "23501-k10.zip", "", 0},
@@ -63,6 +71,10 @@ func TestIsNewerVersion(t *testing.T) {
 		{"", "", true}, // oldVer=="" always returns true
 		{"300", "200", true},
 		{"200", "300", false},
+		// Base-36 versions: "fa0" (technical=10) is newer than "f20".
+		{"fa0", "f20", true},
+		{"f20", "fa0", false},
+		{"j50", "j40", true},
 	}
 
 	for _, tt := range tests {
@@ -136,8 +148,9 @@ func TestSpecVersionString(t *testing.T) {
 		sv   *SpecVersion
 		want string
 	}{
-		{&SpecVersion{VersionLetter: "k", VersionMinor: 10}, "k10"},
-		{&SpecVersion{VersionMinor: 300}, "300"},
+		{&SpecVersion{Version: "k10"}, "k10"},
+		{&SpecVersion{Version: "300"}, "300"},
+		{&SpecVersion{Version: "fa0"}, "fa0"},
 	}
 	for _, tt := range tests {
 		got := SpecVersionString(tt.sv)
