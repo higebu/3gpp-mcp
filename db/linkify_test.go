@@ -252,3 +252,42 @@ func TestLinkifyRefs_MultipleRefs(t *testing.T) {
 		t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", input, got, want)
 	}
 }
+
+// References inside raw HTML table blocks must be rendered as HTML anchors,
+// because goldmark does not process Markdown link syntax inside raw HTML.
+func TestLinkifyRefs_InsideTable(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "single ref in table cell becomes HTML anchor",
+			input: "<table><tr><td><p>See TS 36.331 for details</p></td></tr></table>",
+			want:  `<table><tr><td><p>See <a href="/specs/TS 36.331">TS 36.331</a> for details</p></td></tr></table>`,
+		},
+		{
+			name:  "ref with clause in table cell",
+			input: "<table><tr><td>TS 23.501 clause 5.1</td></tr></table>",
+			want:  `<table><tr><td><a href="/specs/TS 23.501/sections/5.1">TS 23.501 clause 5.1</a></td></tr></table>`,
+		},
+		{
+			name:  "multi-section ref in table cell",
+			input: "<table><tr><td>TS 23.402 clauses 8.2 and 16.11</td></tr></table>",
+			want:  `<table><tr><td><a href="/specs/TS 23.402">TS 23.402</a> clauses <a href="/specs/TS 23.402/sections/8.2">8.2</a> and <a href="/specs/TS 23.402/sections/16.11">16.11</a></td></tr></table>`,
+		},
+		{
+			name:  "ref outside table stays Markdown, ref inside table is HTML",
+			input: "See TS 38.300.\n\n<table><tr><td>See TS 36.331</td></tr></table>",
+			want:  `See [TS 38.300](/specs/TS 38.300).` + "\n\n" + `<table><tr><td>See <a href="/specs/TS 36.331">TS 36.331</a></td></tr></table>`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LinkifyRefs(tt.input, nil, urlFor)
+			if got != tt.want {
+				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
