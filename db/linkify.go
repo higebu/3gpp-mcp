@@ -1,6 +1,7 @@
 package db
 
 import (
+	htmlpkg "html"
 	"regexp"
 	"sort"
 	"strings"
@@ -8,6 +9,17 @@ import (
 
 // existingLinkRE matches Markdown link syntax [text](url) to avoid double-linking.
 var existingLinkRE = regexp.MustCompile(`\[[^\]]*\]\([^)]*\)`)
+
+// mdLink renders a Markdown link.
+func mdLink(text, url string) string {
+	return "[" + text + "](" + url + ")"
+}
+
+// htmlLink renders an HTML anchor. Used inside raw HTML blocks (e.g. tables)
+// where goldmark would not process Markdown link syntax.
+func htmlLink(text, url string) string {
+	return `<a href="` + htmlpkg.EscapeString(url) + `">` + htmlpkg.EscapeString(text) + `</a>`
+}
 
 // LinkifyRefs replaces spec/RFC/bracket references in Markdown content with Markdown links.
 // bracketMap maps bracket numbers (e.g. "19") to spec IDs (e.g. "TS 33.203"); pass nil to skip.
@@ -30,6 +42,38 @@ func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec,
 		return false
 	}
 
+	// Build list of raw-HTML block regions (tables). goldmark does not process
+	// Markdown link syntax inside raw HTML blocks, so references in these regions
+	// must be emitted as HTML anchors instead of Markdown links. The DOCX→HTML
+	// pipeline always emits lowercase <table>/</table> tags, so search content
+	// directly: lowercasing first could shift byte offsets for rare Unicode
+	// characters whose lowercase form has a different byte length.
+	var htmlRegions []region
+	for i := 0; i < len(content); {
+		open := strings.Index(content[i:], "<table")
+		if open < 0 {
+			break
+		}
+		open += i
+		rel := strings.Index(content[open:], "</table>")
+		if rel < 0 {
+			htmlRegions = append(htmlRegions, region{open, len(content)})
+			break
+		}
+		end := open + rel + len("</table>")
+		htmlRegions = append(htmlRegions, region{open, end})
+		i = end
+	}
+
+	linkFor := func(start, end int) func(text, url string) string {
+		for _, r := range htmlRegions {
+			if start >= r.start && end <= r.end {
+				return htmlLink
+			}
+		}
+		return mdLink
+	}
+
 	type candidate struct {
 		start, end int
 		text       string
@@ -49,7 +93,7 @@ func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec,
 			if isExcluded(m[0], m[1]) {
 				continue
 			}
-			text, ok := pat.extract(m, content, urlFor)
+			text, ok := pat.extract(m, content, urlFor, linkFor(m[0], m[1]))
 			if !ok {
 				continue
 			}
@@ -91,7 +135,7 @@ func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec,
 			candidates = append(candidates, candidate{
 				start: m[0],
 				end:   m[1],
-				text:  "[" + matchText + "](" + u + ")",
+				text:  linkFor(m[0], m[1])(matchText, u),
 			})
 		}
 	}

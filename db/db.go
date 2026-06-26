@@ -823,15 +823,17 @@ func rfcExtractor(m []int, content string) (string, string, bool) {
 
 // multiRefExtractor converts regex submatch indices into replacement text containing multiple links.
 // urlFor is called with (targetSpec, targetSection) and returns a URL string.
+// mkLink renders a single link from (linkText, url); it lets the caller choose
+// Markdown or HTML link syntax depending on the surrounding context.
 // Returns (replacementText, ok). When ok is false, the match is skipped.
-type multiRefExtractor func(m []int, content string, urlFor func(string, string) string) (string, bool)
+type multiRefExtractor func(m []int, content string, urlFor func(string, string) string, mkLink func(text, url string) string) (string, bool)
 
 // multiRefSpecSections extracts (spec, []sections) from a multi-section regex match.
 // Returns ("", nil, false) if fewer than 2 sections are found.
 type multiRefSpecSections func(m []int, content string) (string, []string, bool)
 
 // tsMultiPrefixMRExtractor handles "clauses 8.2 and 16.11 of TS 23.402 [45]".
-func tsMultiPrefixMRExtractor(m []int, content string, urlFor func(string, string) string) (string, bool) {
+func tsMultiPrefixMRExtractor(m []int, content string, urlFor func(string, string) string, mkLink func(text, url string) string) (string, bool) {
 	keyword := content[m[2]:m[3]]
 	secList := content[m[4]:m[5]]
 	specType := content[m[6]:m[7]]
@@ -844,9 +846,9 @@ func tsMultiPrefixMRExtractor(m []int, content string, urlFor func(string, strin
 	}
 
 	linkedSecList := secNumListRE.ReplaceAllStringFunc(secList, func(sec string) string {
-		return "[" + sec + "](" + urlFor(spec, sec) + ")"
+		return mkLink(sec, urlFor(spec, sec))
 	})
-	specLink := "[" + specType + " " + specNum + "](" + urlFor(spec, "") + ")"
+	specLink := mkLink(specType+" "+specNum, urlFor(spec, ""))
 	result := keyword + " " + linkedSecList + " of " + specLink
 
 	if m[10] >= 0 {
@@ -869,7 +871,7 @@ func tsMultiPrefixSpecSections(m []int, content string) (string, []string, bool)
 }
 
 // tsMultiMRExtractor handles "TS 23.402 clauses 8.2 and 16.11".
-func tsMultiMRExtractor(m []int, content string, urlFor func(string, string) string) (string, bool) {
+func tsMultiMRExtractor(m []int, content string, urlFor func(string, string) string, mkLink func(text, url string) string) (string, bool) {
 	specType := content[m[2]:m[3]]
 	specNum := content[m[4]:m[5]]
 	keyword := content[m[6]:m[7]]
@@ -882,9 +884,9 @@ func tsMultiMRExtractor(m []int, content string, urlFor func(string, string) str
 	}
 
 	linkedSecList := secNumListRE.ReplaceAllStringFunc(secList, func(sec string) string {
-		return "[" + sec + "](" + urlFor(spec, sec) + ")"
+		return mkLink(sec, urlFor(spec, sec))
 	})
-	specLink := "[" + specType + " " + specNum + "](" + urlFor(spec, "") + ")"
+	specLink := mkLink(specType+" "+specNum, urlFor(spec, ""))
 	return specLink + " " + keyword + " " + linkedSecList, true
 }
 
