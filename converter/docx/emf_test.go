@@ -288,3 +288,43 @@ func sofficeCanConvertImages(t *testing.T) bool {
 	}
 	return false
 }
+
+// TestUpdateImagePlaceholders_TableImageRef verifies that image:// references
+// inside HTML table content (and Markdown placeholders) are rewritten to the
+// converted PNG filename after EMF/WMF conversion. Does not require soffice.
+func TestUpdateImagePlaceholders_TableImageRef(t *testing.T) {
+	result := &ParseResult{
+		Sections: []*Section{
+			{
+				Number: "6.4.1.3.1.1",
+				Content: []string{
+					`<table><tr><td><img src="image://image1.wmf?w=100&h=50" alt="Figure"></td></tr></table>`,
+					"[Figure: Figure (image2.emf, use get_image to retrieve)]",
+					`<table><tr><td><img src="image://image3.png" alt="Figure"></td></tr></table>`,
+				},
+			},
+		},
+		// Post-conversion image list: WMF/EMF replaced by PNG, plus an untouched PNG.
+		Images: []*EmbeddedImage{
+			{Name: "image1.png", MIMEType: "image/png", LLMReadable: true},
+			{Name: "image2.png", MIMEType: "image/png", LLMReadable: true},
+			{Name: "image3.png", MIMEType: "image/png", LLMReadable: true},
+		},
+	}
+
+	UpdateImagePlaceholders(result)
+
+	got := result.Sections[0].Content
+	wantTableImg := `<table><tr><td><img src="image://image1.png?w=100&h=50" alt="Figure"></td></tr></table>`
+	if got[0] != wantTableImg {
+		t.Errorf("table WMF img not rewritten:\n got:  %q\n want: %q", got[0], wantTableImg)
+	}
+	wantPlaceholder := "![Figure](image://image2.png)"
+	if got[1] != wantPlaceholder {
+		t.Errorf("placeholder not rewritten:\n got:  %q\n want: %q", got[1], wantPlaceholder)
+	}
+	wantPNG := `<table><tr><td><img src="image://image3.png" alt="Figure"></td></tr></table>`
+	if got[2] != wantPNG {
+		t.Errorf("already-PNG table img should be unchanged:\n got:  %q\n want: %q", got[2], wantPNG)
+	}
+}
