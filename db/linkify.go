@@ -44,16 +44,18 @@ func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec,
 
 	// Build list of raw-HTML block regions (tables). goldmark does not process
 	// Markdown link syntax inside raw HTML blocks, so references in these regions
-	// must be emitted as HTML anchors instead of Markdown links.
+	// must be emitted as HTML anchors instead of Markdown links. The DOCX→HTML
+	// pipeline always emits lowercase <table>/</table> tags, so search content
+	// directly: lowercasing first could shift byte offsets for rare Unicode
+	// characters whose lowercase form has a different byte length.
 	var htmlRegions []region
-	lower := strings.ToLower(content)
-	for i := 0; i < len(lower); {
-		open := strings.Index(lower[i:], "<table")
+	for i := 0; i < len(content); {
+		open := strings.Index(content[i:], "<table")
 		if open < 0 {
 			break
 		}
 		open += i
-		rel := strings.Index(lower[open:], "</table>")
+		rel := strings.Index(content[open:], "</table>")
 		if rel < 0 {
 			htmlRegions = append(htmlRegions, region{open, len(content)})
 			break
