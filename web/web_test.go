@@ -54,6 +54,18 @@ func TestRenderMarkdown(t *testing.T) {
 			specID:  "TS 23.501",
 			want:    "<table>",
 		},
+		{
+			name:    "inline math preserved for katex",
+			content: `subcarrier ${n}_{78}$ value`,
+			specID:  "TS 38.211",
+			want:    `<span class="math-inline">{n}_{78}</span>`,
+		},
+		{
+			name:    "display math preserved for katex",
+			content: `$$\frac{1}{2}$$`,
+			specID:  "TS 38.211",
+			want:    `<span class="math-display">\frac{1}{2}</span>`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -64,6 +76,34 @@ func TestRenderMarkdown(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRenderMarkdown_MathProtected verifies that LaTeX math survives goldmark
+// conversion intact. Without protection, goldmark would strip/alter backslash
+// sequences (\\ row separators, \frac) and treat & specially.
+func TestRenderMarkdown_MathProtected(t *testing.T) {
+	t.Run("paragraph matrix keeps backslashes", func(t *testing.T) {
+		content := `$\begin{matrix} 1 & j \\ -1 & j \end{matrix}$`
+		got := renderMarkdown(content, "TS 38.211", nil)
+		want := `<span class="math-inline">\begin{matrix} 1 &amp; j \\ -1 &amp; j \end{matrix}</span>`
+		if !strings.Contains(got, want) {
+			t.Errorf("math not protected, got:\n%s", got)
+		}
+	})
+
+	t.Run("pre-escaped table-cell math normalizes ampersand", func(t *testing.T) {
+		// Table HTML from the docx converter has already HTML-escaped & → &amp;.
+		content := `<table><tbody><tr><td>$1 &amp; 2$</td></tr></tbody></table>`
+		got := renderMarkdown(content, "TS 38.211", nil)
+		// The span's inner HTML must be single-escaped so textContent is "1 & 2".
+		want := `<span class="math-inline">1 &amp; 2</span>`
+		if !strings.Contains(got, want) {
+			t.Errorf("table-cell math not normalized, got:\n%s", got)
+		}
+		if strings.Contains(got, "&amp;amp;") {
+			t.Errorf("table-cell math double-escaped, got:\n%s", got)
+		}
+	})
 }
 
 func TestRefURL(t *testing.T) {
@@ -351,7 +391,13 @@ func TestHandleImage(t *testing.T) {
 func TestStaticFiles(t *testing.T) {
 	ts, _ := setupTestServer(t)
 
-	for _, path := range []string{"/static/style.css", "/static/app.js"} {
+	for _, path := range []string{
+		"/static/style.css",
+		"/static/app.js",
+		"/static/katex/katex.min.css",
+		"/static/katex/katex.min.js",
+		"/static/katex/fonts/KaTeX_Main-Regular.woff2",
+	} {
 		resp, err := http.Get(ts.URL + path)
 		if err != nil {
 			t.Fatalf("GET %s error: %v", path, err)

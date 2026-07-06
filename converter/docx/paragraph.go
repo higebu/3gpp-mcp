@@ -61,6 +61,22 @@ func parseParagraphFromDecoder(d *xml.Decoder, _ xml.StartElement) paragraphInfo
 		case xml.StartElement:
 			depth++
 			local := t.Name.Local
+			// OMML math: convert the whole m:oMath / m:oMathPara subtree to
+			// LaTeX and emit it as a run. ommlToLaTeX consumes through the
+			// matching end element, so decrement depth to rebalance (mirrors
+			// the nested-paragraph handling in parseTableFromDecoder).
+			if isMathNS(t.Name.Space) && (local == "oMath" || local == "oMathPara") {
+				latex := ommlToLaTeX(d, t)
+				depth--
+				if latex != "" {
+					delim := "$"
+					if local == "oMathPara" {
+						delim = "$$"
+					}
+					info.Runs = append(info.Runs, runInfo{Text: delim + latex + delim})
+				}
+				continue
+			}
 			switch local {
 			case "pPr":
 				inPPr = true
@@ -91,6 +107,9 @@ func parseParagraphFromDecoder(d *xml.Decoder, _ xml.StartElement) paragraphInfo
 					}
 				}
 			case "r":
+				if !isWordNS(t.Name.Space) {
+					break
+				}
 				inR = true
 				currentRun = runInfo{}
 				runTexts = nil
@@ -105,6 +124,9 @@ func parseParagraphFromDecoder(d *xml.Decoder, _ xml.StartElement) paragraphInfo
 					currentRun.Italic = val != "false" && val != "0"
 				}
 			case "t":
+				if !isWordNS(t.Name.Space) {
+					break
+				}
 				inT = true
 			case "tab":
 				if inR {
@@ -172,9 +194,11 @@ func parseParagraphFromDecoder(d *xml.Decoder, _ xml.StartElement) paragraphInfo
 				inRPr = false
 				inPPrRPr = false
 			case "t":
-				inT = false
+				if isWordNS(t.Name.Space) {
+					inT = false
+				}
 			case "r":
-				if inR {
+				if inR && isWordNS(t.Name.Space) {
 					currentRun.Text = strings.Join(runTexts, "")
 					if currentRun.Text != "" {
 						info.Runs = append(info.Runs, currentRun)

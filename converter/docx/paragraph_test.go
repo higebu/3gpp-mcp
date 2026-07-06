@@ -80,6 +80,48 @@ func TestParseParagraph_TabBetweenText(t *testing.T) {
 	}
 }
 
+func TestParseParagraph_InlineMath(t *testing.T) {
+	xml := `<w:p ` + wXMLNS + ` ` + mXMLNS + `>` +
+		`<w:r><w:t>value </w:t></w:r>` +
+		`<m:oMath><m:sSub>` +
+		`<m:e><m:r><m:t>n</m:t></m:r></m:e>` +
+		`<m:sub><m:r><m:t>78</m:t></m:r></m:sub>` +
+		`</m:sSub></m:oMath>` +
+		`</w:p>`
+	info := parseParagraph([]byte(xml))
+	if len(info.Runs) != 2 {
+		t.Fatalf("Runs = %d, want 2 (%+v)", len(info.Runs), info.Runs)
+	}
+	if info.Runs[0].Text != "value " {
+		t.Errorf("run[0].Text = %q, want %q", info.Runs[0].Text, "value ")
+	}
+	if info.Runs[1].Text != "${n}_{78}$" {
+		t.Errorf("run[1].Text = %q, want %q", info.Runs[1].Text, "${n}_{78}$")
+	}
+	// The math m:t must not leak as its own plain run.
+	for _, r := range info.Runs {
+		if r.Text == "n" || r.Text == "78" || r.Text == "n78" {
+			t.Errorf("math text leaked as plain run: %q", r.Text)
+		}
+	}
+}
+
+func TestParseParagraph_DisplayMath(t *testing.T) {
+	xml := `<w:p ` + wXMLNS + ` ` + mXMLNS + `>` +
+		`<m:oMathPara><m:oMath>` +
+		`<m:f><m:num><m:r><m:t>1</m:t></m:r></m:num>` +
+		`<m:den><m:r><m:t>2</m:t></m:r></m:den></m:f>` +
+		`</m:oMath></m:oMathPara>` +
+		`</w:p>`
+	info := parseParagraph([]byte(xml))
+	if len(info.Runs) != 1 {
+		t.Fatalf("Runs = %d, want 1 (%+v)", len(info.Runs), info.Runs)
+	}
+	if info.Runs[0].Text != "$$\\frac{1}{2}$$" {
+		t.Errorf("run[0].Text = %q, want %q", info.Runs[0].Text, "$$\\frac{1}{2}$$")
+	}
+}
+
 func TestParseParagraph_EmptyOnInvalidInput(t *testing.T) {
 	info := parseParagraph([]byte("not xml"))
 	if info.Text != "" || len(info.Runs) != 0 {

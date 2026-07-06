@@ -46,4 +46,20 @@
             tocSidebar.scrollTop += offset;
         }
     }
+
+    // Render LaTeX math emitted by the DOCX converter. The server wraps each
+    // equation in a <span class="math-inline|math-display"> whose text content
+    // is the raw LaTeX; KaTeX renders it in place.
+    if (window.katex) {
+        document.querySelectorAll('.math-inline, .math-display').forEach(function (el) {
+            try {
+                katex.render(el.textContent, el, {
+                    displayMode: el.classList.contains('math-display'),
+                    throwOnError: false,
+                });
+            } catch (e) {
+                // Leave the raw LaTeX visible if rendering fails.
+            }
+        });
+    }
 })();
