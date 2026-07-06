@@ -70,6 +70,27 @@ func TestParseParagraph_ItalicFalseAttr(t *testing.T) {
 	}
 }
 
+func TestParseParagraph_VertAlign(t *testing.T) {
+	xml := `<w:p ` + wXMLNS + `>` +
+		`<w:r><w:t>n_78</w:t></w:r>` +
+		`<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>1</w:t></w:r>` +
+		`<w:r><w:rPr><w:vertAlign w:val="subscript"/></w:rPr><w:t>2</w:t></w:r>` +
+		`</w:p>`
+	info := parseParagraph([]byte(xml))
+	if len(info.Runs) != 3 {
+		t.Fatalf("Runs = %d, want 3", len(info.Runs))
+	}
+	if info.Runs[0].VertAlign != "" {
+		t.Errorf("run[0]: VertAlign = %q, want empty", info.Runs[0].VertAlign)
+	}
+	if info.Runs[1].VertAlign != "superscript" {
+		t.Errorf("run[1]: VertAlign = %q, want superscript", info.Runs[1].VertAlign)
+	}
+	if info.Runs[2].VertAlign != "subscript" {
+		t.Errorf("run[2]: VertAlign = %q, want subscript", info.Runs[2].VertAlign)
+	}
+}
+
 func TestParseParagraph_TabBetweenText(t *testing.T) {
 	xml := `<w:p ` + wXMLNS + `>` +
 		`<w:r><w:t>a</w:t><w:tab/><w:t>b</w:t></w:r>` +
@@ -138,6 +159,43 @@ func TestParagraphToMarkdown(t *testing.T) {
 			},
 			styleName: "Normal",
 			want:      "***both***",
+		},
+		{
+			name: "superscript note mark stays separate",
+			info: paragraphInfo{
+				Text: "n_781",
+				Runs: []runInfo{
+					{Text: "n_78"},
+					{Text: "1", VertAlign: "superscript"},
+				},
+			},
+			styleName: "Normal",
+			want:      "n_78<sup>1</sup>",
+		},
+		{
+			name: "subscript run",
+			info: paragraphInfo{
+				Text: "H2O",
+				Runs: []runInfo{
+					{Text: "H"},
+					{Text: "2", VertAlign: "subscript"},
+					{Text: "O"},
+				},
+			},
+			styleName: "Normal",
+			want:      "H<sub>2</sub>O",
+		},
+		{
+			name: "bold superscript combined",
+			info: paragraphInfo{
+				Text: "x2",
+				Runs: []runInfo{
+					{Text: "x"},
+					{Text: "2", Bold: true, VertAlign: "superscript"},
+				},
+			},
+			styleName: "Normal",
+			want:      "x<sup>**2**</sup>",
 		},
 		{
 			name:      "list bullet style",

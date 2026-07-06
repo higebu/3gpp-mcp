@@ -111,6 +111,21 @@ func TestTableToHTML_ItalicAndBoldItalic(t *testing.T) {
 	}
 }
 
+func TestTableToHTML_VertAlignRunInCell(t *testing.T) {
+	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+		<w:tr><w:tc><w:p>
+			<w:r><w:t>n_78</w:t></w:r>
+			<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>1</w:t></w:r>
+			<w:r><w:rPr><w:vertAlign w:val="subscript"/></w:rPr><w:t>2</w:t></w:r>
+		</w:p></w:tc></w:tr>
+	</w:tbl>`
+	info := extractTable([]byte(xml))
+	html := tableToHTML(info, imageContext{})
+	if !strings.Contains(html, "n_78<sup>1</sup><sub>2</sub>") {
+		t.Errorf("expected superscript/subscript runs wrapped in <sup>/<sub>: %s", html)
+	}
+}
+
 func TestTableToHTML_HTMLEscape(t *testing.T) {
 	// Cell text containing HTML special characters must be escaped.
 	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">

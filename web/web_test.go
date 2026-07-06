@@ -420,6 +420,21 @@ func TestRenderMarkdown_RawHTMLPassthrough(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdown_SubSupPassthrough verifies that the <sub>/<sup> tags
+// emitted by the docx converter for subscript/superscript runs survive
+// rendering, so 3GPP notation like n_78 with a superscript note mark renders
+// correctly in the web viewer.
+func TestRenderMarkdown_SubSupPassthrough(t *testing.T) {
+	content := "n_78<sup>1</sup> and H<sub>2</sub>O"
+	got := renderMarkdown(content, "TS 23.501", nil)
+	if !strings.Contains(got, "<sup>1</sup>") {
+		t.Errorf("expected <sup> to pass through, got:\n%s", got)
+	}
+	if !strings.Contains(got, "<sub>2</sub>") {
+		t.Errorf("expected <sub> to pass through, got:\n%s", got)
+	}
+}
+
 // TestRenderMarkdown_HTMLImageRewrite verifies that <img src="image://...">
 // tags embedded in raw HTML (used inside HTML tables emitted by the docx
 // converter) are rewritten to a real /specs/<id>/images/<name> URL.

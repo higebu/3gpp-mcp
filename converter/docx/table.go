@@ -244,24 +244,21 @@ func writeParagraphInline(b *strings.Builder, p paragraphInfo, ctx imageContext)
 			esc := htmlpkg.EscapeString(r.Text)
 			switch {
 			case r.IsCode:
-				b.WriteString("<code>")
-				b.WriteString(esc)
-				b.WriteString("</code>")
+				esc = "<code>" + esc + "</code>"
 			case r.Bold && r.Italic:
-				b.WriteString("<strong><em>")
-				b.WriteString(esc)
-				b.WriteString("</em></strong>")
+				esc = "<strong><em>" + esc + "</em></strong>"
 			case r.Bold:
-				b.WriteString("<strong>")
-				b.WriteString(esc)
-				b.WriteString("</strong>")
+				esc = "<strong>" + esc + "</strong>"
 			case r.Italic:
-				b.WriteString("<em>")
-				b.WriteString(esc)
-				b.WriteString("</em>")
-			default:
-				b.WriteString(esc)
+				esc = "<em>" + esc + "</em>"
 			}
+			switch r.VertAlign {
+			case "superscript":
+				esc = "<sup>" + esc + "</sup>"
+			case "subscript":
+				esc = "<sub>" + esc + "</sub>"
+			}
+			b.WriteString(esc)
 		}
 	} else if p.Text != "" {
 		b.WriteString(htmlpkg.EscapeString(p.Text))
