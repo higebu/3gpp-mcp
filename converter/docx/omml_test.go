@@ -116,6 +116,62 @@ func TestOMMLToLaTeX(t *testing.T) {
 			want: "\\left(x\\right)",
 		},
 		{
+			name: "delimiter custom bars",
+			xml: `<m:oMath ` + mXMLNS + `><m:d>` +
+				`<m:dPr><m:begChr m:val="|"/><m:endChr m:val="|"/></m:dPr>` +
+				`<m:e>` + mrun("x") + `</m:e></m:d></m:oMath>`,
+			want: "\\left|x\\right|",
+		},
+		{
+			name: "delimiter multi-element uses default separator",
+			xml: `<m:oMath ` + mXMLNS + `><m:d>` +
+				`<m:e>` + mrun("a") + `</m:e><m:e>` + mrun("b") + `</m:e>` +
+				`</m:d></m:oMath>`,
+			want: "\\left(a|b\\right)",
+		},
+		{
+			name: "function with known name",
+			xml: `<m:oMath ` + mXMLNS + `><m:func>` +
+				`<m:fName>` + mrun("sin") + `</m:fName>` +
+				`<m:e>` + mrun("x") + `</m:e></m:func></m:oMath>`,
+			want: "\\sin x",
+		},
+		{
+			name: "function with unknown name",
+			xml: `<m:oMath ` + mXMLNS + `><m:func>` +
+				`<m:fName>` + mrun("erf") + `</m:fName>` +
+				`<m:e>` + mrun("x") + `</m:e></m:func></m:oMath>`,
+			want: "\\operatorname{erf} x",
+		},
+		{
+			name: "accent hat",
+			xml: `<m:oMath ` + mXMLNS + `><m:acc>` +
+				`<m:accPr><m:chr m:val="^"/></m:accPr>` +
+				`<m:e>` + mrun("x") + `</m:e></m:acc></m:oMath>`,
+			want: "\\hat{x}",
+		},
+		{
+			name: "accent default bar",
+			xml: `<m:oMath ` + mXMLNS + `><m:acc>` +
+				`<m:e>` + mrun("y") + `</m:e></m:acc></m:oMath>`,
+			want: "\\bar{y}",
+		},
+		{
+			name: "nary product default int when no chr",
+			xml: `<m:oMath ` + mXMLNS + `><m:nary>` +
+				`<m:sub>` + mrun("a") + `</m:sub><m:sup>` + mrun("b") + `</m:sup>` +
+				`<m:e>` + mrun("f") + `</m:e></m:nary></m:oMath>`,
+			want: "\\int_{a}^{b}f",
+		},
+		{
+			name: "nary product with supHide",
+			xml: `<m:oMath ` + mXMLNS + `><m:nary>` +
+				`<m:naryPr><m:chr m:val="∏"/><m:supHide m:val="1"/></m:naryPr>` +
+				`<m:sub>` + mrun("k") + `</m:sub><m:sup>` + mrun("n") + `</m:sup>` +
+				`<m:e>` + mrun("k") + `</m:e></m:nary></m:oMath>`,
+			want: "\\prod_{k}k",
+		},
+		{
 			name: "nested fraction over subscript",
 			xml: `<m:oMath ` + mXMLNS + `><m:f><m:num><m:sSub>` +
 				`<m:e>` + mrun("n") + `</m:e><m:sub>` + mrun("78") + `</m:sub>` +
@@ -157,6 +213,14 @@ func TestEscapeMathText(t *testing.T) {
 		{"x&y", "x\\&y"},
 		{"−5", "-5"}, // U+2212 minus → ASCII hyphen
 		{"plain", "plain"},
+		{"#1", "\\#1"},
+		{`a\b`, "a\\backslash b"},
+		{"{x}", "\\{x\\}"},
+		{"a~b", "a\\textasciitilde b"},
+		{"a^b", "a\\textasciicircum b"},
+		{"$x", "\\$x"},
+		{"β≥γ", "\\beta \\geq \\gamma "},
+		{"a×b", "a\\times b"},
 	}
 	for _, tt := range tests {
 		if got := escapeMathText(tt.in); got != tt.want {

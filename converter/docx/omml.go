@@ -208,7 +208,9 @@ func renderFraction(n *ommlNode) string {
 
 func renderDelimiter(n *ommlNode) string {
 	dPr := child(n, "dPr")
-	beg, sep, end := "(", "", ")"
+	// OMML defaults: begChr "(", endChr ")", sepChr "|". The separator only
+	// matters when a single delimiter wraps multiple <m:e> children.
+	beg, sep, end := "(", "|", ")"
 	if v, ok := mVal(dPr, "begChr"); ok {
 		beg = v
 	}
@@ -285,7 +287,12 @@ func renderFunc(n *ommlNode) string {
 	default:
 		op = "\\operatorname{" + name + "}"
 	}
-	return op + arg
+	if op == "" {
+		return arg
+	}
+	// Separate the command from its argument so a bare identifier does not
+	// form an invalid token (e.g. "\sin" + "x" must not become "\sinx").
+	return op + " " + arg
 }
 
 func renderAccent(n *ommlNode) string {
