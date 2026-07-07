@@ -23,6 +23,9 @@ var (
 	imageRE     = regexp.MustCompile(`!\[([^\]]*)\]\(image://([^?)]+)(?:\?w=(\d+)&h=(\d+))?\)`)
 	figureRE    = regexp.MustCompile(`\[Figure:\s*([^(]+?)\s*\(([^,]+),\s*use get_image to retrieve(?:,\s*(\d+)x(\d+))?\)\]`)
 	htmlImageRE = regexp.MustCompile(`(<img\s+[^>]*?\bsrc=")image://([^"?]+)(?:\?[^"]*)?("[^>]*>)`)
+	// mathRE matches LaTeX math emitted by the DOCX converter: display
+	// ($$...$$) is tried before inline ($...$). Inline math may not span lines.
+	mathRE = regexp.MustCompile(`\$\$([^$]+)\$\$|\$([^$\n]+)\$`)
 )
 
 var md goldmark.Markdown
@@ -95,11 +98,48 @@ func renderMarkdown(content, specID string, bracketMap map[string]string) string
 			src, escapedAlt, dimAttrs, escapedAlt)
 	})
 
+	// Protect LaTeX math from goldmark, which would otherwise mangle backslash
+	// sequences (e.g. \\, \{) and emphasis characters. Each math span is
+	// replaced with an inert placeholder and re-injected after conversion as a
+	// <span> that the client-side KaTeX renderer targets. The inner LaTeX is
+	// normalized to single HTML-escaping so both raw (paragraph) and
+	// pre-escaped (table cell) math produce correct textContent.
+	content, mathSpans := protectMath(content)
+
 	var buf bytes.Buffer
 	if err := md.Convert([]byte(content), &buf); err != nil {
 		return "<p>Error rendering content</p>"
 	}
-	return buf.String()
+	out := buf.String()
+	for i, span := range mathSpans {
+		out = strings.ReplaceAll(out, mathPlaceholder(i), span)
+	}
+	return out
+}
+
+// mathPlaceholder returns an inert token that survives goldmark conversion
+// unchanged (plain alphanumerics trigger no Markdown syntax).
+func mathPlaceholder(i int) string {
+	return fmt.Sprintf("xxkatexmathxx%dxxkatexmathxx", i)
+}
+
+// protectMath extracts LaTeX math spans, replacing each with a placeholder, and
+// returns the rewritten content plus the <span> HTML to re-inject afterwards.
+func protectMath(content string) (string, []string) {
+	var spans []string
+	rewritten := mathRE.ReplaceAllStringFunc(content, func(match string) string {
+		sub := mathRE.FindStringSubmatch(match)
+		display := sub[1] != ""
+		latex, class := sub[2], "math-inline"
+		if display {
+			latex, class = sub[1], "math-display"
+		}
+		latex = htmlpkg.EscapeString(htmlpkg.UnescapeString(latex))
+		i := len(spans)
+		spans = append(spans, fmt.Sprintf(`<span class="%s">%s</span>`, class, latex))
+		return mathPlaceholder(i)
+	})
+	return rewritten, spans
 }
 
 // highlightYAML applies Chroma syntax highlighting to YAML content.
