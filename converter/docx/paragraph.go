@@ -24,6 +24,9 @@ type runInfo struct {
 	Bold   bool
 	Italic bool
 	IsCode bool // true if the run uses a monospace/code font
+	// VertAlign holds the vertical alignment of the run, either
+	// "superscript", "subscript", or "" (baseline).
+	VertAlign string
 }
 
 // parseParagraph parses a w:p XML element from raw bytes into paragraphInfo.
@@ -122,6 +125,10 @@ func parseParagraphFromDecoder(d *xml.Decoder, _ xml.StartElement) paragraphInfo
 				if inRPr && inR {
 					val := getAttrVal(t, "val")
 					currentRun.Italic = val != "false" && val != "0"
+				}
+			case "vertAlign":
+				if inRPr && inR {
+					currentRun.VertAlign = getAttrVal(t, "val")
 				}
 			case "t":
 				if !isWordNS(t.Name.Space) {
@@ -298,14 +305,19 @@ func paragraphToMarkdown(info paragraphInfo, styleName string) string {
 				continue
 			}
 			if run.Bold && run.Italic {
-				parts = append(parts, "***"+runText+"***")
+				runText = "***" + runText + "***"
 			} else if run.Bold {
-				parts = append(parts, "**"+runText+"**")
+				runText = "**" + runText + "**"
 			} else if run.Italic {
-				parts = append(parts, "*"+runText+"*")
-			} else {
-				parts = append(parts, runText)
+				runText = "*" + runText + "*"
 			}
+			switch run.VertAlign {
+			case "superscript":
+				runText = "<sup>" + runText + "</sup>"
+			case "subscript":
+				runText = "<sub>" + runText + "</sub>"
+			}
+			parts = append(parts, runText)
 		}
 		if len(parts) > 0 {
 			return strings.Join(parts, "")
