@@ -293,7 +293,9 @@ func batchConvertToPNG(ctx context.Context, items []*batchItem) error {
 			item.err = fmt.Errorf("read converted PNG: %w", err)
 			continue
 		}
-		item.pngData = pngData
+		// Trim the large white/transparent margins LibreOffice leaves around
+		// EMF/WMF renders (notably equations and matrices, see issue #18).
+		item.pngData = autoCropPNG(pngData)
 		anySuccess = true
 	}
 
