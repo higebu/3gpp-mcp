@@ -237,7 +237,7 @@ func writeCellContent(b *strings.Builder, c tableCell, ctx imageContext) {
 
 func writeParagraphInline(b *strings.Builder, p paragraphInfo, ctx imageContext) {
 	if len(p.Runs) > 0 {
-		for _, r := range p.Runs {
+		for _, r := range mergeAdjacentRuns(p.Runs) {
 			if r.Text == "" {
 				continue
 			}

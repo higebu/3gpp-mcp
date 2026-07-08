@@ -16,6 +16,14 @@ type paragraphInfo struct {
 	Runs    []runInfo
 	Images  []imageRef
 	IsCode  bool // true if the paragraph uses a monospace/code font
+	// SkippedDiagramLabels holds text-box labels found inside a grouped
+	// vector diagram (VML v:group, or DrawingML wpg:wgp reached through
+	// mc:AlternateContent) that had no embeddable raster image anywhere in
+	// it. Such diagrams can't be rendered by this converter, and the raw XML
+	// order of their labels rarely matches the visual reading order, so the
+	// labels are kept out of Text/Runs to avoid emitting garbled prose; see
+	// diagramPlaceholder in parser.go.
+	SkippedDiagramLabels []string
 }
 
 // runInfo holds extracted information from a w:r element.
@@ -77,6 +85,35 @@ func parseParagraphFromDecoder(d *xml.Decoder, _ xml.StartElement) paragraphInfo
 						delim = "$$"
 					}
 					info.Runs = append(info.Runs, runInfo{Text: delim + latex + delim})
+				}
+				continue
+			}
+			// Grouped vector diagrams (VML v:group, or DrawingML wpg:wgp
+			// reached through mc:AlternateContent) are not embeddable
+			// pictures: their text-box labels are ordinary WordprocessingML
+			// runs with no ancestor markers, so without this interception
+			// they'd flatten straight into info.Runs in raw XML document
+			// order, which rarely matches the diagram's visual reading order
+			// (see issue #25). scanDrawingSubtree consumes the whole subtree
+			// itself, so rebalance depth afterwards like the OMML case above.
+			if local == "group" || local == "AlternateContent" {
+				imgs, labels, hasGroup, hasRaster := scanDrawingSubtree(d, t)
+				depth--
+				if local == "group" {
+					hasGroup = true
+				}
+				info.Images = append(info.Images, imgs...)
+				if hasGroup && !hasRaster {
+					info.SkippedDiagramLabels = append(info.SkippedDiagramLabels, labels...)
+				} else {
+					// Not a pure-vector group diagram (either a plain
+					// annotated shape with no grouping, or a group that also
+					// contains a raster image): preserve the pre-existing
+					// behavior of folding any text-box labels into the
+					// paragraph's own text.
+					for _, label := range labels {
+						info.Runs = append(info.Runs, runInfo{Text: label})
+					}
 				}
 				continue
 			}
@@ -257,6 +294,96 @@ func parseParagraphFromDecoder(d *xml.Decoder, _ xml.StartElement) paragraphInfo
 	return info
 }
 
+// scanDrawingSubtree walks a VML v:group/v:shape subtree — or an
+// mc:AlternateContent wrapper around one — looking for embedded raster
+// images and text-box labels. It recurses into every unrecognized child so
+// the decoder always stays balanced, regardless of how deeply the shapes
+// are nested (3GPP diagrams commonly nest v:group three or four levels
+// deep). hasGroup reports whether a v:group was found anywhere in the
+// subtree (including the root, if the caller already knows that); hasRaster
+// reports whether any embeddable picture was found.
+//
+// mc:Choice is always skipped via d.Skip(): Word emits it alongside an
+// equivalent mc:Fallback in the legacy VML form for compatibility, and this
+// converter only understands VML shapes, so processing both would double
+// every label and image.
+func scanDrawingSubtree(d *xml.Decoder, _ xml.StartElement) (imgs []imageRef, labels []string, hasGroup, hasRaster bool) {
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			return
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "Choice":
+				_ = d.Skip()
+			case "imagedata":
+				// VML image: <v:imagedata r:id="rId9" o:title="..."/>
+				rid := getAttrValNS(t, "id")
+				if rid == "" {
+					rid = getAttrVal(t, "id")
+				}
+				if rid != "" {
+					imgs = append(imgs, imageRef{RID: rid, AltText: getAttrVal(t, "title")})
+					hasRaster = true
+				}
+				_ = d.Skip()
+			case "blip":
+				// DrawingML image: <a:blip r:embed="rId5"/>
+				rid := getAttrValNS(t, "embed")
+				if rid == "" {
+					rid = getAttrVal(t, "embed")
+				}
+				if rid != "" {
+					imgs = append(imgs, imageRef{RID: rid})
+					hasRaster = true
+				}
+				_ = d.Skip()
+			case "txbxContent":
+				labels = append(labels, scanTextBoxLabels(d)...)
+			default:
+				if t.Name.Local == "group" {
+					hasGroup = true
+				}
+				subImgs, subLabels, subHasGroup, subHasRaster := scanDrawingSubtree(d, t)
+				imgs = append(imgs, subImgs...)
+				labels = append(labels, subLabels...)
+				hasGroup = hasGroup || subHasGroup
+				hasRaster = hasRaster || subHasRaster
+			}
+		case xml.EndElement:
+			return
+		}
+	}
+}
+
+// scanTextBoxLabels consumes a w:txbxContent element (the start element has
+// already been consumed by the caller) and returns the trimmed text of each
+// paragraph inside it, in document order.
+func scanTextBoxLabels(d *xml.Decoder) []string {
+	var labels []string
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			return labels
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "p" {
+				pInfo := parseParagraphFromDecoder(d, t)
+				if text := strings.TrimSpace(pInfo.Text); text != "" {
+					labels = append(labels, text)
+				}
+			} else {
+				_ = d.Skip()
+			}
+		case xml.EndElement:
+			return labels
+		}
+	}
+}
+
 // getAttrValNS returns the value of a namespaced attribute by its local name,
 // ignoring the namespace prefix. This is needed for attributes like r:id or r:embed
 // where the namespace varies.
@@ -343,7 +470,12 @@ func paragraphToMarkdown(info paragraphInfo, styleName string) string {
 			parts = append(parts, runText)
 		}
 		if len(parts) > 0 {
-			return strings.Join(parts, "")
+			// Trim leading/trailing whitespace (e.g. a leading <w:tab/> used
+			// to center an equation via tab stops): a line that starts with
+			// a tab or 4+ spaces is parsed as an indented code block by
+			// CommonMark, inside which HTML tags like <sub> are never
+			// interpreted and show up as literal text (see issue #25).
+			return strings.TrimSpace(strings.Join(parts, ""))
 		}
 	}
 

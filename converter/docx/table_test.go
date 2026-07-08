@@ -126,6 +126,27 @@ func TestTableToHTML_VertAlignRunInCell(t *testing.T) {
 	}
 }
 
+func TestTableToHTML_CoalesceAdjacentVertAlignRuns(t *testing.T) {
+	// Two adjacent subscript runs (as Word commonly splits at a spell-check
+	// boundary) must merge into a single <sub> tag instead of fragmenting
+	// into <sub>edge,high</sub><sub> </sub> (issue #25).
+	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+		<w:tr><w:tc><w:p>
+			<w:r><w:t>F</w:t></w:r>
+			<w:r><w:rPr><w:vertAlign w:val="subscript"/></w:rPr><w:t>edge,high</w:t></w:r>
+			<w:r><w:rPr><w:vertAlign w:val="subscript"/></w:rPr><w:t xml:space="preserve"> </w:t></w:r>
+		</w:p></w:tc></w:tr>
+	</w:tbl>`
+	info := extractTable([]byte(xml))
+	html := tableToHTML(info, imageContext{})
+	if !strings.Contains(html, "F<sub>edge,high </sub>") {
+		t.Errorf("expected adjacent subscript runs merged into one <sub> tag: %s", html)
+	}
+	if strings.Contains(html, "<sub>edge,high</sub><sub>") {
+		t.Errorf("expected no fragmented adjacent <sub> tags: %s", html)
+	}
+}
+
 func TestTableToHTML_HTMLEscape(t *testing.T) {
 	// Cell text containing HTML special characters must be escaped.
 	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
