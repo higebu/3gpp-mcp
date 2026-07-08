@@ -263,6 +263,81 @@ func TestParagraphToMarkdown(t *testing.T) {
 			styleName: "Normal",
 			want:      "fallback",
 		},
+		{
+			name: "word split across adjacent italic runs merges into one emphasis",
+			info: paragraphInfo{
+				Text: "mpe-Reporting-FR2",
+				Runs: []runInfo{
+					{Text: "mpe-Reporting", Italic: true},
+					{Text: "-FR2", Italic: true},
+				},
+			},
+			styleName: "Normal",
+			want:      "*mpe-Reporting-FR2*",
+		},
+		{
+			name: "italic fragment split across runs surrounded by plain text",
+			info: paragraphInfo{
+				Text: "preAABBpost",
+				Runs: []runInfo{
+					{Text: "pre"},
+					{Text: "AA", Italic: true},
+					{Text: "BB", Italic: true},
+					{Text: "post"},
+				},
+			},
+			styleName: "Normal",
+			want:      "pre*AABB*post",
+		},
+		{
+			name: "adjacent bold+italic runs merge into one wrapper",
+			info: paragraphInfo{
+				Text: "ab",
+				Runs: []runInfo{
+					{Text: "a", Bold: true, Italic: true},
+					{Text: "b", Bold: true, Italic: true},
+				},
+			},
+			styleName: "Normal",
+			want:      "***ab***",
+		},
+		{
+			name: "adjacent same-superscript runs merge into one tag",
+			info: paragraphInfo{
+				Text: "ab",
+				Runs: []runInfo{
+					{Text: "a", VertAlign: "superscript"},
+					{Text: "b", VertAlign: "superscript"},
+				},
+			},
+			styleName: "Normal",
+			want:      "<sup>ab</sup>",
+		},
+		{
+			name: "empty run between same-styled italic runs still merges",
+			info: paragraphInfo{
+				Text: "ab",
+				Runs: []runInfo{
+					{Text: "a", Italic: true},
+					{Text: ""},
+					{Text: "b", Italic: true},
+				},
+			},
+			styleName: "Normal",
+			want:      "*ab*",
+		},
+		{
+			name: "adjacent runs differing only in VertAlign do not merge",
+			info: paragraphInfo{
+				Text: "ab",
+				Runs: []runInfo{
+					{Text: "a", VertAlign: "superscript"},
+					{Text: "b", VertAlign: "subscript"},
+				},
+			},
+			styleName: "Normal",
+			want:      "<sup>a</sup><sub>b</sub>",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
