@@ -187,6 +187,22 @@ func imagePlaceholder(relMap map[string]string, images map[string]*EmbeddedImage
 	return fmt.Sprintf("[Figure: %s (%s, use get_image to retrieve)]", alt, img.Name)
 }
 
+// diagramPlaceholder returns a markdown placeholder for a grouped vector
+// diagram that had no embeddable raster image (see paragraphInfo.
+// SkippedDiagramLabels). Unlike imagePlaceholder, get_image can't retrieve
+// this figure since there is no extracted image file for it — the
+// placeholder says so, and lists any text-box labels found so the
+// information isn't lost entirely, in document order (not necessarily the
+// diagram's visual reading order).
+func diagramPlaceholder(labels []string) string {
+	if len(labels) == 0 {
+		return "[Figure: diagram not extracted — this converter cannot render grouped vector shapes/text boxes; see the original document for this figure]"
+	}
+	return fmt.Sprintf(
+		"[Figure: diagram not extracted (vector shapes/arrows not rendered); extracted text labels, order not guaranteed: %s]",
+		strings.Join(labels, "; "))
+}
+
 // parseSections walks the body elements and creates a section hierarchy.
 func parseSections(elements []bodyElement, styleMap map[string]string, relMap map[string]string, images map[string]*EmbeddedImage) []*Section {
 	var sections []*Section
@@ -319,6 +335,12 @@ func parseSections(elements []bodyElement, styleMap map[string]string, relMap ma
 								currentSection.Content = append(currentSection.Content, ph)
 							}
 						}
+					}
+					// Surface any grouped vector diagram this converter
+					// couldn't render as an image (see issue #25), instead
+					// of silently dropping it.
+					if currentSection != nil && info.SkippedDiagramLabels != nil {
+						currentSection.Content = append(currentSection.Content, diagramPlaceholder(info.SkippedDiagramLabels))
 					}
 				}
 			}

@@ -1,6 +1,7 @@
 package docx
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -365,6 +366,97 @@ func TestIsMonospaceFont(t *testing.T) {
 		if got := isMonospaceFont(font); got != want {
 			t.Errorf("isMonospaceFont(%q) = %v, want %v", font, got, want)
 		}
+	}
+}
+
+func TestParagraphToMarkdown_LeadingTabTrimmed(t *testing.T) {
+	// A leading <w:tab/> (e.g. used to center an equation via a paragraph
+	// style's tab stops) must not survive into the returned markdown: a
+	// line starting with a tab is parsed as an indented code block by
+	// CommonMark, inside which raw HTML tags like <sub> are never
+	// interpreted and show up as literal text (issue #25).
+	info := paragraphInfo{
+		Text: "\tBW= F",
+		Runs: []runInfo{
+			{Text: "\t"},
+			{Text: "BW"},
+			{Text: "Channel_CA", VertAlign: "subscript"},
+			{Text: " ", VertAlign: "subscript"},
+			{Text: "= F"},
+		},
+	}
+	got := paragraphToMarkdown(info, "Normal")
+	want := "BW<sub>Channel_CA </sub>= F"
+	if got != want {
+		t.Errorf("paragraphToMarkdown = %q, want %q", got, want)
+	}
+	if strings.HasPrefix(got, "\t") || strings.HasPrefix(got, " ") {
+		t.Errorf("expected no leading whitespace, got %q", got)
+	}
+}
+
+func TestParseParagraph_GroupShapeNoImage_SkipsLabels(t *testing.T) {
+	// A grouped VML diagram (v:group containing several v:shape/v:textbox
+	// labels) with no embedded picture anywhere inside it must not have its
+	// labels flattened into the paragraph's own text/runs.
+	xml := `<w:p ` + wXMLNS + `>` +
+		`<w:r><w:pict><group>` +
+		`<shape><textbox><txbxContent><w:p><w:r><w:t>Lower Edge</w:t></w:r></w:p></txbxContent></textbox></shape>` +
+		`<shape><textbox><txbxContent><w:p><w:r><w:t>Resource block</w:t></w:r></w:p></txbxContent></textbox></shape>` +
+		`</group></w:pict></w:r>` +
+		`</w:p>`
+	info := parseParagraph([]byte(xml))
+	if strings.Contains(info.Text, "Lower Edge") || strings.Contains(info.Text, "Resource block") {
+		t.Errorf("expected group-shape labels excluded from Text, got %q", info.Text)
+	}
+	if len(info.Images) != 0 {
+		t.Errorf("expected no images, got %d", len(info.Images))
+	}
+	if len(info.SkippedDiagramLabels) != 2 {
+		t.Fatalf("SkippedDiagramLabels = %v, want 2 entries", info.SkippedDiagramLabels)
+	}
+	if info.SkippedDiagramLabels[0] != "Lower Edge" || info.SkippedDiagramLabels[1] != "Resource block" {
+		t.Errorf("SkippedDiagramLabels = %v, want [Lower Edge, Resource block]", info.SkippedDiagramLabels)
+	}
+}
+
+func TestParseParagraph_GroupShapeWithImage_KeepsImageDropsLabels(t *testing.T) {
+	// A group that mixes a raster picture with textbox callouts should keep
+	// extracting the image (existing behavior), and should not classify the
+	// group as an unrenderable diagram.
+	xml := `<w:p ` + wXMLNS + `>` +
+		`<w:r><w:pict><group>` +
+		`<shape><imagedata r:id="rId9"/></shape>` +
+		`<shape><textbox><txbxContent><w:p><w:r><w:t>Callout</w:t></w:r></w:p></txbxContent></textbox></shape>` +
+		`</group></w:pict></w:r>` +
+		`</w:p>`
+	info := parseParagraph([]byte(xml))
+	if len(info.Images) != 1 || info.Images[0].RID != "rId9" {
+		t.Fatalf("expected 1 image with RID rId9, got %+v", info.Images)
+	}
+	if info.SkippedDiagramLabels != nil {
+		t.Errorf("expected no SkippedDiagramLabels when a raster image is present, got %v", info.SkippedDiagramLabels)
+	}
+}
+
+func TestParseParagraph_AlternateContentGroupFallback(t *testing.T) {
+	// mc:AlternateContent wrapping a DrawingML wpg:wgp Choice and an
+	// equivalent VML v:group Fallback must only process the Fallback side —
+	// otherwise labels would be duplicated (once per side).
+	xml := `<w:p ` + wXMLNS + `>` +
+		`<w:r><AlternateContent>` +
+		`<Choice><wgp><shape><textbox><txbxContent><w:p><w:r><w:t>DrawingML Label</w:t></w:r></w:p></txbxContent></textbox></shape></wgp></Choice>` +
+		`<Fallback><pict><group>` +
+		`<shape><textbox><txbxContent><w:p><w:r><w:t>Lower Edge</w:t></w:r></w:p></txbxContent></textbox></shape>` +
+		`</group></pict></Fallback>` +
+		`</AlternateContent></w:r>` +
+		`</w:p>`
+	info := parseParagraph([]byte(xml))
+	if strings.Contains(info.Text, "DrawingML Label") {
+		t.Errorf("expected mc:Choice content to be skipped, got Text = %q", info.Text)
+	}
+	if len(info.SkippedDiagramLabels) != 1 || info.SkippedDiagramLabels[0] != "Lower Edge" {
+		t.Fatalf("SkippedDiagramLabels = %v, want [Lower Edge]", info.SkippedDiagramLabels)
 	}
 }
 
