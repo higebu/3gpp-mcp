@@ -543,6 +543,66 @@ func TestParseSections_CodeBlockAtEnd(t *testing.T) {
 	}
 }
 
+// TestParseSections_LetteredSectionNumbers guards against a regression where a
+// letter suffix anywhere but immediately after the first digit group (e.g.
+// "5.4A.2" or "6.1.3.4a") made sectionNumberRE fail to match, causing the
+// heading fallback to set both Number and Title to the full raw heading text
+// and duplicate it in the rendered output.
+func TestParseSections_LetteredSectionNumbers(t *testing.T) {
+	elements := []bodyElement{
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading1", Text: "4.2.1a\tSome title",
+			Runs: []runInfo{{Text: "4.2.1a\tSome title"}},
+		}},
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading1", Text: "5.4A.2 Channel raster for CA",
+			Runs: []runInfo{{Text: "5.4A.2 Channel raster for CA"}},
+		}},
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading1", Text: "6.1.3.4a\tAbsolute Timing Advance Command MAC CE",
+			Runs: []runInfo{{Text: "6.1.3.4a\tAbsolute Timing Advance Command MAC CE"}},
+		}},
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading1", Text: "Annex A: Sub clauses",
+			Runs: []runInfo{{Text: "Annex A: Sub clauses"}},
+		}},
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading2", Text: "A.1a\tAnnex sub",
+			Runs: []runInfo{{Text: "A.1a\tAnnex sub"}},
+		}},
+	}
+	styleMap := map[string]string{"Heading1": "Heading 1", "Heading2": "Heading 2"}
+	sections := parseSections(elements, styleMap, nil, nil)
+
+	want := map[string]string{
+		"4.2.1a":   "Some title",
+		"5.4A.2":   "Channel raster for CA",
+		"6.1.3.4a": "Absolute Timing Advance Command MAC CE",
+		"A.1a":     "Annex sub",
+	}
+	sectionMap := make(map[string]*Section)
+	for _, s := range sections {
+		sectionMap[s.Number] = s
+	}
+	for number, title := range want {
+		s, ok := sectionMap[number]
+		if !ok {
+			t.Errorf("missing section %q", number)
+			continue
+		}
+		if s.Title != title {
+			t.Errorf("section %q title = %q, want %q", number, s.Title, title)
+		}
+		if s.Number == s.Title {
+			t.Errorf("section %q: Number and Title are identical, heading was not split correctly", number)
+		}
+	}
+
+	if s, ok := sectionMap["A.1a"]; ok && s.Level != 2 {
+		t.Errorf("section A.1a level = %d, want 2", s.Level)
+	}
+}
+
 func TestParseParagraphDrawingMLDimensions(t *testing.T) {
 	// DrawingML image with extent dimensions
 	paraXML := `<p><r><drawing><inline><extent cx="9525000" cy="4762500"/><graphic><graphicData><pic><blipFill><blip r:embed="rId5"/></blipFill></pic></graphicData></graphic></inline></drawing></r></p>`
