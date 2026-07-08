@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	sectionNumberRE = regexp.MustCompile(`^([A-Z](?:\.\d+)+|\d+[A-Za-z]?(?:\.\d+)*)[\t ]+(.+)$`)
+	sectionNumberRE = regexp.MustCompile(`^([A-Z](?:\.\d+[A-Za-z]?)+|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)[\t ]+(.+)$`)
 	annexRE         = regexp.MustCompile(`(?is)^Annex[\s\xa0]+([A-Z])[\s\xa0]*(?:\((?:normative|informative)\))?[\s\xa0]*[:\s\xa0]*(.*)$`)
 	headingNumRE    = regexp.MustCompile(`(?i)^[Hh]eading\s+(\d+)`)
 	annexSubRE      = regexp.MustCompile(`^[A-Z]\.`)
