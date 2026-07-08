@@ -278,6 +278,32 @@ func getAttrVal(elem xml.StartElement, localName string) string {
 	return ""
 }
 
+// mergeAdjacentRuns coalesces consecutive runs that share identical
+// formatting (ignoring Text) into a single run. DOCX frequently splits one
+// visually-continuous span of text across multiple <w:r> elements for
+// reasons unrelated to formatting (bookmarks, proofing-error ranges,
+// revisions); without merging, each fragment gets wrapped in its own
+// markdown emphasis delimiters, producing stray/unbalanced asterisks
+// mid-word.
+func mergeAdjacentRuns(runs []runInfo) []runInfo {
+	var merged []runInfo
+	for _, run := range runs {
+		if run.Text == "" {
+			continue
+		}
+		if n := len(merged); n > 0 {
+			last := &merged[n-1]
+			if last.Bold == run.Bold && last.Italic == run.Italic &&
+				last.VertAlign == run.VertAlign && last.IsCode == run.IsCode {
+				last.Text += run.Text
+				continue
+			}
+		}
+		merged = append(merged, run)
+	}
+	return merged
+}
+
 // paragraphToMarkdown converts a paragraph to markdown text.
 func paragraphToMarkdown(info paragraphInfo, styleName string) string {
 	text := strings.TrimSpace(info.Text)
@@ -299,11 +325,8 @@ func paragraphToMarkdown(info paragraphInfo, styleName string) string {
 	// Handle bold/italic at run level
 	if len(info.Runs) > 0 {
 		var parts []string
-		for _, run := range info.Runs {
+		for _, run := range mergeAdjacentRuns(info.Runs) {
 			runText := run.Text
-			if runText == "" {
-				continue
-			}
 			if run.Bold && run.Italic {
 				runText = "***" + runText + "***"
 			} else if run.Bold {
