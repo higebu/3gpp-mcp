@@ -91,7 +91,7 @@ func TestConvertDir_Race(t *testing.T) {
 	}
 
 	// Verify at least one spec was inserted.
-	result, err := d.ListSpecs("", -1, 0)
+	result, err := d.ListSpecs("", "", -1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestConvertSingleFile(t *testing.T) {
 		t.Error("expected sections for TS 23.274 after ConvertSingleFile")
 	}
 
-	specs, err := d.ListSpecs("", -1, 0)
+	specs, err := d.ListSpecs("", "", -1, 0)
 	if err != nil {
 		t.Fatalf("ListSpecs: %v", err)
 	}

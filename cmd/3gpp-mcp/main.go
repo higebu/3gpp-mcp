@@ -445,7 +445,7 @@ func cmdUpdate(args []string) {
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	currentResult, err := src.ListSpecs("", -1, 0)
+	currentResult, err := src.ListSpecs("", "", -1, 0)
 	if err != nil || len(currentResult.Specs) == 0 {
 		_ = src.Close()
 		fmt.Println("No specs in database. Use 'build' command first.")

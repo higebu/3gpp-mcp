@@ -401,15 +401,27 @@ func (d *DB) InsertSpecWithSectionsAndImages(spec Spec, sections []Section, imag
 	return tx.Commit()
 }
 
-func (d *DB) ListSpecs(series string, limit, offset int) (*ListSpecsResult, error) {
+// ListSpecs lists specs, optionally filtered by series and/or an ID prefix.
+// query matches spec IDs that start with the given text, ignoring a leading
+// "TS "/"TR " document-type prefix (e.g. query "38.21" matches "TS 38.211").
+func (d *DB) ListSpecs(series, query string, limit, offset int) (*ListSpecsResult, error) {
 	if offset < 0 {
 		offset = 0
 	}
-	where := ""
+	var conditions []string
 	var filterArgs []any
 	if series != "" {
-		where = " WHERE series = ?"
+		conditions = append(conditions, "series = ?")
 		filterArgs = append(filterArgs, series)
+	}
+	if query != "" {
+		pattern := escapeLikePattern(query) + "%"
+		conditions = append(conditions, "(id LIKE ? ESCAPE '\\' OR id LIKE 'TS ' || ? ESCAPE '\\' OR id LIKE 'TR ' || ? ESCAPE '\\')")
+		filterArgs = append(filterArgs, pattern, pattern, pattern)
+	}
+	where := ""
+	if len(conditions) > 0 {
+		where = " WHERE " + strings.Join(conditions, " AND ")
 	}
 
 	// Get total count.
@@ -418,7 +430,7 @@ func (d *DB) ListSpecs(series string, limit, offset int) (*ListSpecsResult, erro
 		return nil, fmt.Errorf("count specs: %w", err)
 	}
 
-	query := "SELECT id, title, COALESCE(version, ''), COALESCE(release, ''), COALESCE(series, '') FROM specs" + where + " ORDER BY id"
+	sqlQuery := "SELECT id, title, COALESCE(version, ''), COALESCE(release, ''), COALESCE(series, '') FROM specs" + where + " ORDER BY id"
 	args := append([]any{}, filterArgs...)
 
 	// limit == 0: use default; limit < 0: no limit (return all rows, internal use only).
@@ -429,11 +441,11 @@ func (d *DB) ListSpecs(series string, limit, offset int) (*ListSpecsResult, erro
 		limit = MaxListSpecsLimit
 	}
 	if limit > 0 {
-		query += " LIMIT ? OFFSET ?"
+		sqlQuery += " LIMIT ? OFFSET ?"
 		args = append(args, limit, offset)
 	}
 
-	rows, err := d.conn.Query(query, args...)
+	rows, err := d.conn.Query(sqlQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list specs: %w", err)
 	}
