@@ -357,6 +357,74 @@ This document covers IMS-AKA and sec-agree mechanisms.');`)
 			t.Error("expected at least 1 result for IMS-AKA")
 		}
 	})
+
+	t.Run("family spec id matches split parts", func(t *testing.T) {
+		err := d.ExecScript(`INSERT INTO specs (id, title, version, release, series) VALUES
+    ('TS 38.101-1', 'User Equipment radio transmission and reception; Part 1', '18.6.0', 'Rel-18', '38');
+INSERT INTO sections (spec_id, number, title, level, parent_number, content) VALUES
+    ('TS 38.101-1', '5.3A.3', 'Guardband', 2, '5', '## 5.3A.3 Guardband
+The guardband requirements are specified here.');`)
+		if err != nil {
+			t.Fatalf("failed to insert test data: %v", err)
+		}
+
+		results, err := d.Search("guardband", []string{"TS 38.101"}, 10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(results))
+		}
+		if results[0].SpecID != "TS 38.101-1" {
+			t.Errorf("expected spec_id 'TS 38.101-1', got %q", results[0].SpecID)
+		}
+
+		// An unrelated spec sharing the family's numeric prefix must not match.
+		results, err = d.Search("guardband", []string{"TS 38.10"}, 10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 0 {
+			t.Fatalf("expected 0 results for unrelated prefix, got %d", len(results))
+		}
+	})
+}
+
+func TestFindSpecIDsByFamily(t *testing.T) {
+	d := setupTestDB(t)
+
+	if err := d.ExecScript(`INSERT INTO specs (id, title, version, release, series) VALUES
+    ('TS 38.101-1', 'Part 1', '18.6.0', 'Rel-18', '38'),
+    ('TS 38.101-2', 'Part 2', '18.6.0', 'Rel-18', '38'),
+    ('TS 38.101-5', 'Part 5', '18.6.0', 'Rel-18', '38');`); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+
+	t.Run("family with multiple parts", func(t *testing.T) {
+		ids, err := d.FindSpecIDsByFamily("TS 38.101")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := []string{"TS 38.101-1", "TS 38.101-2", "TS 38.101-5"}
+		if len(ids) != len(want) {
+			t.Fatalf("expected %v, got %v", want, ids)
+		}
+		for i, id := range ids {
+			if id != want[i] {
+				t.Errorf("ids[%d] = %q, want %q", i, id, want[i])
+			}
+		}
+	})
+
+	t.Run("family with no parts", func(t *testing.T) {
+		ids, err := d.FindSpecIDsByFamily("TS 23.501")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(ids) != 0 {
+			t.Fatalf("expected 0 ids, got %v", ids)
+		}
+	})
 }
 
 func TestListOpenAPI(t *testing.T) {
