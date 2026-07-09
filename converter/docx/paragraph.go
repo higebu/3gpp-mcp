@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // paragraphInfo holds extracted information from a w:p element.
@@ -431,6 +432,23 @@ func mergeAdjacentRuns(runs []runInfo) []runInfo {
 	return merged
 }
 
+// wrapEmphasis wraps text in the given markdown emphasis delimiter (e.g.
+// "*", "**", "***"), moving any leading/trailing whitespace outside the
+// delimiters. CommonMark requires emphasis delimiters to hug their content
+// (no whitespace immediately inside), so a run like "word " wrapped naively
+// as "*word *" fails to parse as emphasis and the asterisks show up as
+// literal text; a run that is only whitespace has no content to emphasize
+// at all and is returned unchanged (see issue #33).
+func wrapEmphasis(text, delim string) string {
+	mid := strings.TrimFunc(text, unicode.IsSpace)
+	if mid == "" {
+		return text
+	}
+	i := strings.Index(text, mid)
+	lead, trail := text[:i], text[i+len(mid):]
+	return lead + delim + mid + delim + trail
+}
+
 // paragraphToMarkdown converts a paragraph to markdown text.
 func paragraphToMarkdown(info paragraphInfo, styleName string) string {
 	text := strings.TrimSpace(info.Text)
@@ -455,11 +473,11 @@ func paragraphToMarkdown(info paragraphInfo, styleName string) string {
 		for _, run := range mergeAdjacentRuns(info.Runs) {
 			runText := run.Text
 			if run.Bold && run.Italic {
-				runText = "***" + runText + "***"
+				runText = wrapEmphasis(runText, "***")
 			} else if run.Bold {
-				runText = "**" + runText + "**"
+				runText = wrapEmphasis(runText, "**")
 			} else if run.Italic {
-				runText = "*" + runText + "*"
+				runText = wrapEmphasis(runText, "*")
 			}
 			switch run.VertAlign {
 			case "superscript":
