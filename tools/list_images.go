@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/higebu/3gpp-mcp/db"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -30,6 +31,9 @@ func HandleListImages(d *db.DB) func(ctx context.Context, req *mcp.CallToolReque
 		}
 
 		if len(images) == 0 {
+			if parts, partsErr := d.FindSpecIDsByFamily(input.SpecID); partsErr == nil && len(parts) > 0 {
+				return errorResult(fmt.Sprintf("%s has multiple parts: %s — specify one", input.SpecID, strings.Join(parts, ", "))), nil, nil
+			}
 			return textResult(fmt.Sprintf("No images found for %s", input.SpecID)), nil, nil
 		}
 

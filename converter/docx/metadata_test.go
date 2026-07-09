@@ -87,6 +87,18 @@ func TestExtractMetadata_FilenameVariants(t *testing.T) {
 			wantSpecID:  "weirdname",
 			wantVersion: "",
 		},
+		{
+			name:        "split multi-file spec body chunk",
+			filename:    "38101-1-k00_s00-05.docx",
+			wantSpecID:  "TS 38.101-1",
+			wantVersion: "k00",
+		},
+		{
+			name:        "split multi-file spec annex chunk",
+			filename:    "38101-1-k00_sAnnexes.docx",
+			wantSpecID:  "TS 38.101-1",
+			wantVersion: "k00",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

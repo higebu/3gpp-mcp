@@ -477,6 +477,42 @@ func (d *DB) GetTOC(specID string) ([]Section, error) {
 	return sections, nil
 }
 
+// escapeLikePattern escapes SQLite LIKE wildcards (% and _) in a
+// user-supplied string so it can be used as a literal prefix with an
+// ESCAPE '\' clause.
+func escapeLikePattern(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
+	return r.Replace(s)
+}
+
+// FindSpecIDsByFamily returns the split multi-file part IDs belonging to a
+// family spec ID (e.g. "TS 38.101" -> ["TS 38.101-1", "TS 38.101-2", ...]).
+// Used to give a helpful error when a lookup tool is queried with a family
+// ID instead of a specific part.
+func (d *DB) FindSpecIDsByFamily(familyID string) ([]string, error) {
+	rows, err := d.conn.Query(
+		"SELECT id FROM specs WHERE id LIKE ? || '-%' ESCAPE '\\' ORDER BY id",
+		escapeLikePattern(familyID),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("find spec ids by family: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan spec id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("find spec ids by family: iterate: %w", err)
+	}
+	return ids, nil
+}
+
 func (d *DB) GetSection(specID, number string, includeSubsections bool) ([]Section, error) {
 	var rows *sql.Rows
 	var err error
@@ -709,15 +745,16 @@ func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, 
 	sqlQuery := "SELECT spec_id, number, title, snippet(sections_fts, 3, '<mark>', '</mark>', '...', 32) FROM sections_fts WHERE sections_fts MATCH ?"
 	args := []any{query}
 
-	if len(specIDs) == 1 {
-		sqlQuery += " AND spec_id = ?"
-		args = append(args, specIDs[0])
-	} else if len(specIDs) > 1 {
-		placeholders := strings.Repeat("?,", len(specIDs))
-		sqlQuery += " AND spec_id IN (" + placeholders[:len(placeholders)-1] + ")"
-		for _, id := range specIDs {
-			args = append(args, id)
+	if len(specIDs) > 0 {
+		// Each spec ID also matches its split multi-file parts (e.g. "TS 38.101"
+		// matches "TS 38.101-1", "TS 38.101-2", ...). Spec IDs are always in the
+		// "TS dd.ddd(-d)?" form, so this can't false-positive-match unrelated specs.
+		conds := make([]string, len(specIDs))
+		for i, id := range specIDs {
+			conds[i] = "spec_id = ? OR spec_id LIKE ? ESCAPE '\\'"
+			args = append(args, id, escapeLikePattern(id)+"-%")
 		}
+		sqlQuery += " AND (" + strings.Join(conds, " OR ") + ")"
 	}
 	sqlQuery += " ORDER BY rank LIMIT ?"
 	args = append(args, limit)
