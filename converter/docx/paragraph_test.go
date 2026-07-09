@@ -388,6 +388,43 @@ func TestParagraphToMarkdown(t *testing.T) {
 			styleName: "Normal",
 			want:      "**label:** value",
 		},
+		{
+			name: "bold run with leading space keeps space outside the delimiter",
+			info: paragraphInfo{
+				Text: "pre label",
+				Runs: []runInfo{
+					{Text: "pre"},
+					{Text: " label", Bold: true},
+				},
+			},
+			styleName: "Normal",
+			want:      "pre **label**",
+		},
+		{
+			name: "bold-italic run with trailing space keeps space outside the delimiter",
+			info: paragraphInfo{
+				Text: "term [1]",
+				Runs: []runInfo{
+					{Text: "term ", Bold: true, Italic: true},
+					{Text: "[1]"},
+				},
+			},
+			styleName: "Normal",
+			want:      "***term*** [1]",
+		},
+		{
+			name: "bold-italic run with leading and trailing space keeps spaces outside the delimiter",
+			info: paragraphInfo{
+				Text: "pre term post",
+				Runs: []runInfo{
+					{Text: "pre"},
+					{Text: " term ", Bold: true, Italic: true},
+					{Text: "post"},
+				},
+			},
+			styleName: "Normal",
+			want:      "pre ***term*** post",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
