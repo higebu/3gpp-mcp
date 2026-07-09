@@ -477,14 +477,22 @@ func (d *DB) GetTOC(specID string) ([]Section, error) {
 	return sections, nil
 }
 
+// escapeLikePattern escapes SQLite LIKE wildcards (% and _) in a
+// user-supplied string so it can be used as a literal prefix with an
+// ESCAPE '\' clause.
+func escapeLikePattern(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
+	return r.Replace(s)
+}
+
 // FindSpecIDsByFamily returns the split multi-file part IDs belonging to a
 // family spec ID (e.g. "TS 38.101" -> ["TS 38.101-1", "TS 38.101-2", ...]).
 // Used to give a helpful error when a lookup tool is queried with a family
 // ID instead of a specific part.
 func (d *DB) FindSpecIDsByFamily(familyID string) ([]string, error) {
 	rows, err := d.conn.Query(
-		"SELECT id FROM specs WHERE id LIKE ? || '-%' ORDER BY id",
-		familyID,
+		"SELECT id FROM specs WHERE id LIKE ? || '-%' ESCAPE '\\' ORDER BY id",
+		escapeLikePattern(familyID),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("find spec ids by family: %w", err)
@@ -743,8 +751,8 @@ func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, 
 		// "TS dd.ddd(-d)?" form, so this can't false-positive-match unrelated specs.
 		conds := make([]string, len(specIDs))
 		for i, id := range specIDs {
-			conds[i] = "spec_id = ? OR spec_id LIKE ?"
-			args = append(args, id, id+"-%")
+			conds[i] = "spec_id = ? OR spec_id LIKE ? ESCAPE '\\'"
+			args = append(args, id, escapeLikePattern(id)+"-%")
 		}
 		sqlQuery += " AND (" + strings.Join(conds, " OR ") + ")"
 	}

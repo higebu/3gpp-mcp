@@ -387,6 +387,16 @@ The guardband requirements are specified here.');`)
 		if len(results) != 0 {
 			t.Fatalf("expected 0 results for unrelated prefix, got %d", len(results))
 		}
+
+		// "_" would otherwise act as a single-character LIKE wildcard and
+		// match "TS 38.101-1" via "TS 38_101".
+		results, err = d.Search("guardband", []string{"TS 38_101"}, 10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 0 {
+			t.Fatalf("expected 0 results for literal underscore query, got %d", len(results))
+		}
 	})
 }
 
@@ -423,6 +433,18 @@ func TestFindSpecIDsByFamily(t *testing.T) {
 		}
 		if len(ids) != 0 {
 			t.Fatalf("expected 0 ids, got %v", ids)
+		}
+	})
+
+	t.Run("underscore in query is not treated as a LIKE wildcard", func(t *testing.T) {
+		// "_" would otherwise match any single character, e.g. "TS 38.101"
+		// via "TS 38_101". Confirm literal underscores don't match real IDs.
+		ids, err := d.FindSpecIDsByFamily("TS 38_101")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(ids) != 0 {
+			t.Fatalf("expected 0 ids for literal underscore query, got %v", ids)
 		}
 	})
 }
