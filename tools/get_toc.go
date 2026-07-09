@@ -30,6 +30,9 @@ func HandleGetTOC(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, 
 		}
 
 		if len(sections) == 0 {
+			if parts, partsErr := d.FindSpecIDsByFamily(input.SpecID); partsErr == nil && len(parts) > 0 {
+				return errorResult(fmt.Sprintf("%s has multiple parts: %s — specify one", input.SpecID, strings.Join(parts, ", "))), nil, nil
+			}
 			return errorResult(fmt.Sprintf("no sections found for %s", input.SpecID)), nil, nil
 		}
 

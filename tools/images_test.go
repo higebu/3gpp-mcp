@@ -100,6 +100,23 @@ func TestHandleListImages(t *testing.T) {
 			t.Errorf("expected 'No images found' message, got: %s", text)
 		}
 	})
+
+	t.Run("family spec id with multiple parts", func(t *testing.T) {
+		if err := d.ExecScript(`INSERT INTO specs (id, title, version, release, series) VALUES
+    ('TS 38.101-1', 'Part 1', '18.6.0', 'Rel-18', '38'),
+    ('TS 38.101-2', 'Part 2', '18.6.0', 'Rel-18', '38');`); err != nil {
+			t.Fatalf("failed to insert test data: %v", err)
+		}
+
+		result, _, err := handler(context.Background(), nil, ListImagesInput{SpecID: "TS 38.101"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "TS 38.101-1") || !strings.Contains(text, "TS 38.101-2") {
+			t.Errorf("expected both parts listed, got: %s", text)
+		}
+	})
 }
 
 func TestHandleGetImage(t *testing.T) {
