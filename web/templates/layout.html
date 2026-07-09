@@ -13,7 +13,11 @@
             <a href="/" class="navbar-brand">3GPP Spec Viewer</a>
             <nav class="navbar-nav">
                 <a href="/" class="nav-link">Specs</a>
-                <a href="/search" class="nav-link">Search</a>
+                <form class="navbar-search" method="get" action="/search">
+                    <input type="text" name="q" value="{{.NavQuery}}" placeholder="Search specs..." class="navbar-search-input">
+                    <input type="text" name="spec_id" value="{{.NavSpecID}}" placeholder="Spec ID (optional)" class="navbar-search-specid">
+                    <button type="submit" class="navbar-search-btn">Search</button>
+                </form>
                 <button id="theme-toggle" class="theme-toggle" aria-label="Toggle dark mode">
                     <span class="theme-icon-light">&#9788;</span>
                     <span class="theme-icon-dark">&#9789;</span>

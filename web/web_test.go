@@ -190,6 +190,52 @@ func TestHandleIndexWithSeriesFilter(t *testing.T) {
 	}
 }
 
+func TestHandleIndexWithQueryFilter(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	t.Run("query prefix alone", func(t *testing.T) {
+		resp, err := http.Get(ts.URL + "/?q=23.5")
+		if err != nil {
+			t.Fatalf("GET /?q=23.5 error: %v", err)
+		}
+		defer resp.Body.Close()
+
+		body := readBody(t, resp)
+		if !strings.Contains(body, "TS 23.501") {
+			t.Error("should contain TS 23.501")
+		}
+		if strings.Contains(body, "TS 29.510") || strings.Contains(body, "TS 24.229") {
+			t.Error("should not contain non-matching specs")
+		}
+	})
+
+	t.Run("query prefix combined with series", func(t *testing.T) {
+		resp, err := http.Get(ts.URL + "/?series=23&q=23.5")
+		if err != nil {
+			t.Fatalf("GET /?series=23&q=23.5 error: %v", err)
+		}
+		defer resp.Body.Close()
+
+		body := readBody(t, resp)
+		if !strings.Contains(body, "TS 23.501") {
+			t.Error("should contain TS 23.501")
+		}
+	})
+
+	t.Run("index navbar search has no spec scope", func(t *testing.T) {
+		resp, err := http.Get(ts.URL + "/")
+		if err != nil {
+			t.Fatalf("GET / error: %v", err)
+		}
+		defer resp.Body.Close()
+
+		body := readBody(t, resp)
+		if !strings.Contains(body, `name="spec_id" value=""`) {
+			t.Errorf("expected empty navbar spec_id field, got:\n%s", body)
+		}
+	})
+}
+
 func TestHandleSpec(t *testing.T) {
 	ts, _ := setupTestServer(t)
 
@@ -206,6 +252,9 @@ func TestHandleSpec(t *testing.T) {
 	body := readBody(t, resp)
 	if !strings.Contains(body, "Scope") {
 		t.Error("should contain TOC entry 'Scope'")
+	}
+	if !strings.Contains(body, `name="spec_id" value="TS 23.501"`) {
+		t.Errorf("expected navbar search to be pre-filled with the current spec ID, got:\n%s", body)
 	}
 }
 
@@ -266,6 +315,21 @@ func TestHandleSearch(t *testing.T) {
 	body := readBody(t, resp2)
 	if !strings.Contains(body, "TS 23.501") {
 		t.Error("search for 'architecture' should return TS 23.501")
+	}
+	if !strings.Contains(body, `name="q" value="architecture"`) {
+		t.Errorf("expected navbar search to retain the submitted query, got:\n%s", body)
+	}
+
+	// Search scoped to a spec
+	resp3, err := http.Get(ts.URL + "/search?q=architecture&spec_id=TS+23.501")
+	if err != nil {
+		t.Fatalf("GET /search?q=architecture&spec_id=TS+23.501 error: %v", err)
+	}
+	defer resp3.Body.Close()
+
+	body3 := readBody(t, resp3)
+	if !strings.Contains(body3, `name="spec_id" value="TS 23.501"`) {
+		t.Errorf("expected navbar search to retain the submitted spec_id, got:\n%s", body3)
 	}
 }
 

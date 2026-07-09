@@ -86,7 +86,7 @@ func TestListSpecs(t *testing.T) {
 	d := setupTestDB(t)
 
 	t.Run("all", func(t *testing.T) {
-		result, err := d.ListSpecs("", 0, 0)
+		result, err := d.ListSpecs("", "", 0, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -102,7 +102,7 @@ func TestListSpecs(t *testing.T) {
 	})
 
 	t.Run("filter by series", func(t *testing.T) {
-		result, err := d.ListSpecs("29", 0, 0)
+		result, err := d.ListSpecs("29", "", 0, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -118,7 +118,7 @@ func TestListSpecs(t *testing.T) {
 	})
 
 	t.Run("no match", func(t *testing.T) {
-		result, err := d.ListSpecs("99", 0, 0)
+		result, err := d.ListSpecs("99", "", 0, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -131,7 +131,7 @@ func TestListSpecs(t *testing.T) {
 	})
 
 	t.Run("with limit", func(t *testing.T) {
-		result, err := d.ListSpecs("", 1, 0)
+		result, err := d.ListSpecs("", "", 1, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -147,7 +147,7 @@ func TestListSpecs(t *testing.T) {
 	})
 
 	t.Run("with offset", func(t *testing.T) {
-		result, err := d.ListSpecs("", 1, 1)
+		result, err := d.ListSpecs("", "", 1, 1)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -160,7 +160,7 @@ func TestListSpecs(t *testing.T) {
 	})
 
 	t.Run("offset beyond end", func(t *testing.T) {
-		result, err := d.ListSpecs("", 10, 100)
+		result, err := d.ListSpecs("", "", 10, 100)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -173,12 +173,53 @@ func TestListSpecs(t *testing.T) {
 	})
 
 	t.Run("no limit", func(t *testing.T) {
-		result, err := d.ListSpecs("", -1, 0)
+		result, err := d.ListSpecs("", "", -1, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if len(result.Specs) != 3 {
 			t.Fatalf("expected 3 specs, got %d", len(result.Specs))
+		}
+	})
+
+	t.Run("filter by query prefix ignoring TS/TR prefix", func(t *testing.T) {
+		result, err := d.ListSpecs("", "23.5", 0, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Specs) != 1 {
+			t.Fatalf("expected 1 spec, got %d", len(result.Specs))
+		}
+		if result.Specs[0].ID != "TS 23.501" {
+			t.Errorf("expected spec ID 'TS 23.501', got %q", result.Specs[0].ID)
+		}
+	})
+
+	t.Run("filter by query prefix no match", func(t *testing.T) {
+		result, err := d.ListSpecs("", "99.9", 0, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Specs) != 0 {
+			t.Fatalf("expected 0 specs, got %d", len(result.Specs))
+		}
+	})
+
+	t.Run("filter by series and query prefix combined", func(t *testing.T) {
+		result, err := d.ListSpecs("23", "23.5", 0, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Specs) != 1 || result.Specs[0].ID != "TS 23.501" {
+			t.Fatalf("expected only TS 23.501, got %+v", result.Specs)
+		}
+
+		result, err = d.ListSpecs("29", "23.5", 0, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Specs) != 0 {
+			t.Fatalf("expected 0 specs for mismatched series/query, got %d", len(result.Specs))
 		}
 	})
 }
@@ -966,7 +1007,7 @@ func TestOpen_ReadOnly(t *testing.T) {
 	}
 	defer ro.Close()
 
-	result, err := ro.ListSpecs("", 0, 0)
+	result, err := ro.ListSpecs("", "", 0, 0)
 	if err != nil {
 		t.Fatalf("ListSpecs: %v", err)
 	}
@@ -1013,7 +1054,7 @@ func TestExec_DirectSQL(t *testing.T) {
 		t.Fatalf("Exec insert: %v", err)
 	}
 
-	result, err := d.ListSpecs("99", 0, 0)
+	result, err := d.ListSpecs("99", "", 0, 0)
 	if err != nil {
 		t.Fatalf("ListSpecs: %v", err)
 	}
@@ -1039,7 +1080,7 @@ func TestUpsertSpec_Replaces(t *testing.T) {
 		t.Fatalf("UpsertSpec: %v", err)
 	}
 
-	result, err := d.ListSpecs("", 0, 0)
+	result, err := d.ListSpecs("", "", 0, 0)
 	if err != nil {
 		t.Fatalf("ListSpecs: %v", err)
 	}

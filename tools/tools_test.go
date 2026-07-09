@@ -56,6 +56,20 @@ func TestHandleListSpecs(t *testing.T) {
 			t.Errorf("expected only one spec in output, got: %s", text)
 		}
 	})
+
+	t.Run("with query prefix", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, ListSpecsInput{Query: "23.5"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "TS 23.501") {
+			t.Errorf("expected TS 23.501 in output, got: %s", text)
+		}
+		if strings.Contains(text, "TS 29.510") || strings.Contains(text, "TS 24.229") {
+			t.Errorf("expected only TS 23.501 in output, got: %s", text)
+		}
+	})
 }
 
 func TestHandleGetTOC(t *testing.T) {

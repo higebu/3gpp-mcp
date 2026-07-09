@@ -19,10 +19,20 @@ type handler struct {
 
 // Template data types
 
+// layoutData wraps the page-specific data with fields the shared layout
+// (navbar search bar) needs regardless of which page is being rendered.
+type layoutData struct {
+	Page      string
+	Data      any
+	NavQuery  string // pre-fills the navbar search query input (only set on /search)
+	NavSpecID string // pre-fills the navbar spec ID input with the current spec scope
+}
+
 type indexData struct {
 	Specs      []db.Spec
 	TotalCount int
 	Series     string
+	Query      string
 	Page       int
 	Limit      int
 	TotalPages int
@@ -114,16 +124,14 @@ func (h *handler) initTemplates() {
 func (h *handler) renderError(w http.ResponseWriter, code int, message string) {
 	w.WriteHeader(code)
 	data := errorData{Code: code, Message: message}
-	if err := h.tmpls.ExecuteTemplate(w, "layout.html", struct {
-		Page string
-		Data errorData
-	}{Page: "error", Data: data}); err != nil {
+	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "error", Data: data}); err != nil {
 		http.Error(w, message, code)
 	}
 }
 
 func (h *handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 	series := r.URL.Query().Get("series")
+	query := r.URL.Query().Get("q")
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
@@ -131,7 +139,7 @@ func (h *handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 	limit := 50
 	offset := (page - 1) * limit
 
-	result, err := h.db.ListSpecs(series, limit, offset)
+	result, err := h.db.ListSpecs(series, query, limit, offset)
 	if err != nil {
 		h.renderError(w, http.StatusInternalServerError, "Failed to load specifications")
 		log.Printf("ListSpecs error: %v", err)
@@ -147,6 +155,7 @@ func (h *handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Specs:      result.Specs,
 		TotalCount: result.TotalCount,
 		Series:     series,
+		Query:      query,
 		Page:       page,
 		Limit:      limit,
 		TotalPages: totalPages,
@@ -154,10 +163,7 @@ func (h *handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 		HasNext:    page < totalPages,
 	}
 
-	if err := h.tmpls.ExecuteTemplate(w, "layout.html", struct {
-		Page string
-		Data indexData
-	}{Page: "index", Data: data}); err != nil {
+	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "index", Data: data}); err != nil {
 		log.Printf("template error: %v", err)
 	}
 }
@@ -205,10 +211,7 @@ func (h *handler) renderSpecPage(w http.ResponseWriter, specID, number string) {
 		OpenAPIs:   openAPIs,
 	}
 
-	if err := h.tmpls.ExecuteTemplate(w, "layout.html", struct {
-		Page string
-		Data specData
-	}{Page: "spec", Data: data}); err != nil {
+	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "spec", Data: data, NavSpecID: specID}); err != nil {
 		log.Printf("template error: %v", err)
 	}
 }
@@ -250,10 +253,7 @@ func (h *handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := h.tmpls.ExecuteTemplate(w, "layout.html", struct {
-		Page string
-		Data searchData
-	}{Page: "search", Data: data}); err != nil {
+	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "search", Data: data, NavQuery: query, NavSpecID: specID}); err != nil {
 		log.Printf("template error: %v", err)
 	}
 }
@@ -272,10 +272,7 @@ func (h *handler) handleOpenAPIList(w http.ResponseWriter, r *http.Request) {
 		APIs:   apis,
 	}
 
-	if err := h.tmpls.ExecuteTemplate(w, "layout.html", struct {
-		Page string
-		Data openAPIListData
-	}{Page: "openapi_list", Data: data}); err != nil {
+	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "openapi_list", Data: data, NavSpecID: specID}); err != nil {
 		log.Printf("template error: %v", err)
 	}
 }
@@ -296,10 +293,7 @@ func (h *handler) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 		Content: template.HTML(highlightYAML(content)), //nolint:gosec
 	}
 
-	if err := h.tmpls.ExecuteTemplate(w, "layout.html", struct {
-		Page string
-		Data openAPIData
-	}{Page: "openapi", Data: data}); err != nil {
+	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "openapi", Data: data, NavSpecID: specID}); err != nil {
 		log.Printf("template error: %v", err)
 	}
 }
