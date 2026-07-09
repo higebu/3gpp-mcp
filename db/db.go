@@ -415,6 +415,9 @@ func (d *DB) ListSpecs(series, query string, limit, offset int) (*ListSpecsResul
 		filterArgs = append(filterArgs, series)
 	}
 	if query != "" {
+		// Match three ways a user might type the prefix: the bare number
+		// (e.g. "23.501"), or with an explicit "TS "/"TR " document-type
+		// prefix already included (e.g. "TS 23.501").
 		pattern := escapeLikePattern(query) + "%"
 		conditions = append(conditions, "(id LIKE ? ESCAPE '\\' OR id LIKE 'TS ' || ? ESCAPE '\\' OR id LIKE 'TR ' || ? ESCAPE '\\')")
 		filterArgs = append(filterArgs, pattern, pattern, pattern)

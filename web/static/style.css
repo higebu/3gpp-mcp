@@ -595,6 +595,12 @@ mark {
     text-align: center;
 }
 
+.search-hint {
+    color: var(--text-secondary);
+    padding: 2rem;
+    text-align: center;
+}
+
 /* === OpenAPI === */
 .openapi-page {
     max-width: 1000px;
