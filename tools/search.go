@@ -10,7 +10,7 @@ import (
 )
 
 type SearchInput struct {
-	Query string `json:"query" jsonschema:"required,FTS5 query string. Hyphenated terms like IMS-AKA are auto-quoted. Use AND/OR/NOT operators and double-quoted phrases for exact matches (e.g. '\"core network\" AND AMF')."`
+	Query string `json:"query" jsonschema:"required,FTS5 query string. Hyphenated or dotted terms like IMS-AKA and 38.101 are auto-quoted. Use AND/OR/NOT operators and double-quoted phrases for exact matches (e.g. '\"core network\" AND AMF')."`
 	// Deprecated: use SpecIDs instead. Ignored when SpecIDs is non-empty.
 	SpecID  string   `json:"spec_id,omitempty" jsonschema:"Limit search to a single specification (e.g. TS 23.501). Ignored when spec_ids is provided."`
 	SpecIDs []string `json:"spec_ids,omitempty" jsonschema:"Limit search to one or more specifications (e.g. [\"TS 23.501\", \"TS 23.502\"]). Takes precedence over spec_id."`
@@ -27,7 +27,7 @@ Query syntax:
 - Prefix:        handov*
 - Column filter: title:authentication  or  content:handover
 - Proximity:     NEAR(AMF UE, 5)
-- Hyphenated terms (e.g. IMS-AKA, sec-agree) are auto-quoted to avoid FTS5 syntax errors.
+- Hyphenated or dotted terms (e.g. IMS-AKA, sec-agree, 38.101) are auto-quoted to avoid FTS5 syntax errors.
 
 Tips:
 - Use exact 3GPP terms (AMF, SMF, gNB, UE, NRF, PCF, etc.)

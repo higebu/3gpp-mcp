@@ -323,6 +323,12 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"hyphen with operator", "sec-agree OR authentication", `"sec-agree" OR authentication`},
 		{"invalid column is hyphenated", "IMS-AKA", `"IMS-AKA"`},
 		{"empty query", "", ""},
+		{"bare spec number", "38.101", `"38.101"`},
+		{"another bare spec number", "23.501", `"23.501"`},
+		{"dotted version string", "18.6.0", `"18.6.0"`},
+		{"column filter with dotted value", "title:38.101", `title:"38.101"`},
+		{"spec number with AND operator", "38.101 AND UE", `"38.101" AND UE`},
+		{"multi-part spec number", "38.101-1", `"38.101-1"`},
 	}
 
 	for _, tt := range tests {
