@@ -36,6 +36,13 @@ type runInfo struct {
 	// VertAlign holds the vertical alignment of the run, either
 	// "superscript", "subscript", or "" (baseline).
 	VertAlign string
+	// Image marks this entry as an inline image found at this position in
+	// the paragraph's reading flow, rather than a text run. When non-nil,
+	// all other fields are zero. Recording the image's position among the
+	// runs (instead of only collecting it separately in paragraphInfo.
+	// Images) lets the markdown renderer emit the image where it actually
+	// occurs instead of after all of the paragraph's text (see issue #40).
+	Image *imageRef
 }
 
 // parseParagraph parses a w:p XML element from raw bytes into paragraphInfo.
@@ -104,6 +111,9 @@ func parseParagraphFromDecoder(d *xml.Decoder, _ xml.StartElement) paragraphInfo
 					hasGroup = true
 				}
 				info.Images = append(info.Images, imgs...)
+				for i := range imgs {
+					info.Runs = append(info.Runs, runInfo{Image: &imgs[i]})
+				}
 				if hasGroup && !hasRaster {
 					info.SkippedDiagramLabels = append(info.SkippedDiagramLabels, labels...)
 				} else {
@@ -210,6 +220,7 @@ func parseParagraphFromDecoder(d *xml.Decoder, _ xml.StartElement) paragraphInfo
 						HeightPx: pendingHeightPx,
 					}
 					info.Images = append(info.Images, ref)
+					info.Runs = append(info.Runs, runInfo{Image: &ref})
 					pendingWidthPx, pendingHeightPx = 0, 0
 				}
 			case "blip":
@@ -225,6 +236,7 @@ func parseParagraphFromDecoder(d *xml.Decoder, _ xml.StartElement) paragraphInfo
 						HeightPx: pendingHeightPx,
 					}
 					info.Images = append(info.Images, ref)
+					info.Runs = append(info.Runs, runInfo{Image: &ref})
 					pendingWidthPx, pendingHeightPx = 0, 0
 				}
 			}
@@ -416,15 +428,17 @@ func getAttrVal(elem xml.StartElement, localName string) string {
 func mergeAdjacentRuns(runs []runInfo) []runInfo {
 	var merged []runInfo
 	for _, run := range runs {
-		if run.Text == "" {
+		if run.Image == nil && run.Text == "" {
 			continue
 		}
-		if n := len(merged); n > 0 {
-			last := &merged[n-1]
-			if last.Bold == run.Bold && last.Italic == run.Italic &&
-				last.VertAlign == run.VertAlign && last.IsCode == run.IsCode {
-				last.Text += run.Text
-				continue
+		if run.Image == nil {
+			if n := len(merged); n > 0 {
+				last := &merged[n-1]
+				if last.Image == nil && last.Bold == run.Bold && last.Italic == run.Italic &&
+					last.VertAlign == run.VertAlign && last.IsCode == run.IsCode {
+					last.Text += run.Text
+					continue
+				}
 			}
 		}
 		merged = append(merged, run)
@@ -469,35 +483,105 @@ func paragraphToMarkdown(info paragraphInfo, styleName string) string {
 
 	// Handle bold/italic at run level
 	if len(info.Runs) > 0 {
-		var parts []string
-		for _, run := range mergeAdjacentRuns(info.Runs) {
-			runText := run.Text
-			if run.Bold && run.Italic {
-				runText = wrapEmphasis(runText, "***")
-			} else if run.Bold {
-				runText = wrapEmphasis(runText, "**")
-			} else if run.Italic {
-				runText = wrapEmphasis(runText, "*")
-			}
-			switch run.VertAlign {
-			case "superscript":
-				runText = "<sup>" + runText + "</sup>"
-			case "subscript":
-				runText = "<sub>" + runText + "</sub>"
-			}
-			parts = append(parts, runText)
-		}
-		if len(parts) > 0 {
-			// Trim leading/trailing whitespace (e.g. a leading <w:tab/> used
-			// to center an equation via tab stops): a line that starts with
-			// a tab or 4+ spaces is parsed as an indented code block by
-			// CommonMark, inside which HTML tags like <sub> are never
-			// interpreted and show up as literal text (see issue #25).
-			return strings.TrimSpace(strings.Join(parts, ""))
+		if md := runsToMarkdown(info.Runs); md != "" {
+			return md
 		}
 	}
 
 	return text
+}
+
+// runsToMarkdown renders a sequence of text runs (no images) to a single
+// markdown string, applying bold/italic/vertical-alignment formatting at the
+// run level. Any runInfo with a non-nil Image is skipped.
+func runsToMarkdown(runs []runInfo) string {
+	var parts []string
+	for _, run := range mergeAdjacentRuns(runs) {
+		if run.Image != nil {
+			continue
+		}
+		runText := run.Text
+		if run.Bold && run.Italic {
+			runText = wrapEmphasis(runText, "***")
+		} else if run.Bold {
+			runText = wrapEmphasis(runText, "**")
+		} else if run.Italic {
+			runText = wrapEmphasis(runText, "*")
+		}
+		switch run.VertAlign {
+		case "superscript":
+			runText = "<sup>" + runText + "</sup>"
+		case "subscript":
+			runText = "<sub>" + runText + "</sub>"
+		}
+		parts = append(parts, runText)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	// Trim leading/trailing whitespace (e.g. a leading <w:tab/> used to
+	// center an equation via tab stops): a line that starts with a tab or
+	// 4+ spaces is parsed as an indented code block by CommonMark, inside
+	// which HTML tags like <sub> are never interpreted and show up as
+	// literal text (see issue #25).
+	return strings.TrimSpace(strings.Join(parts, ""))
+}
+
+// paragraphToMarkdownBlocks converts a paragraph into one or more ordered
+// markdown blocks, splitting the paragraph's runs at each inline image so
+// that renderImage's placeholder is emitted at the image's actual position
+// in the reading flow. Previously every image in a paragraph was collected
+// and appended after all of the paragraph's text, so a paragraph with
+// interleaved text and figures rendered with every figure bunched up at the
+// end instead of next to the text describing it (see issue #40).
+//
+// List-style paragraphs keep paragraphToMarkdown's existing single-block
+// text handling (the list marker only makes sense once per paragraph, and
+// list items containing inline images are rare in 3GPP specs); any images
+// they contain are still emitted, just after the list-item text.
+func paragraphToMarkdownBlocks(info paragraphInfo, styleName string, renderImage func(imageRef) string) []string {
+	if strings.HasPrefix(styleName, "List") {
+		var blocks []string
+		if md := paragraphToMarkdown(info, styleName); md != "" {
+			blocks = append(blocks, md)
+		}
+		for _, r := range info.Runs {
+			if r.Image == nil {
+				continue
+			}
+			if ph := renderImage(*r.Image); ph != "" {
+				blocks = append(blocks, ph)
+			}
+		}
+		return blocks
+	}
+
+	var blocks []string
+	var segment []runInfo
+	flush := func() {
+		if md := runsToMarkdown(segment); md != "" {
+			blocks = append(blocks, md)
+		}
+		segment = nil
+	}
+	for _, r := range info.Runs {
+		if r.Image != nil {
+			flush()
+			if ph := renderImage(*r.Image); ph != "" {
+				blocks = append(blocks, ph)
+			}
+			continue
+		}
+		segment = append(segment, r)
+	}
+	flush()
+
+	if len(blocks) == 0 {
+		if text := strings.TrimSpace(info.Text); text != "" {
+			blocks = append(blocks, text)
+		}
+	}
+	return blocks
 }
 
 // emuToPx converts an EMU (English Metric Unit) string value to CSS pixels.

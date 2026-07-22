@@ -323,18 +323,14 @@ func parseSections(elements []bodyElement, styleMap map[string]string, relMap ma
 					codeBuffer = append(codeBuffer, "")
 				default:
 					flushCodeBlock()
-					md := paragraphToMarkdown(info, styleName)
-					if md != "" && currentSection != nil {
-						currentSection.Content = append(currentSection.Content, md)
-					}
-					// Insert image placeholders if the paragraph references images
-					if currentSection != nil && len(info.Images) > 0 && relMap != nil {
-						for _, ref := range info.Images {
-							ph := imagePlaceholder(relMap, images, ref)
-							if ph != "" {
-								currentSection.Content = append(currentSection.Content, ph)
+					if currentSection != nil {
+						blocks := paragraphToMarkdownBlocks(info, styleName, func(ref imageRef) string {
+							if relMap == nil {
+								return ""
 							}
-						}
+							return imagePlaceholder(relMap, images, ref)
+						})
+						currentSection.Content = append(currentSection.Content, blocks...)
 					}
 					// Surface any grouped vector diagram this converter
 					// couldn't render as an image (see issue #25), instead
