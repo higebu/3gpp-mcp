@@ -99,6 +99,24 @@ func TestExtractMetadata_FilenameVariants(t *testing.T) {
 			wantSpecID:  "TS 38.101-1",
 			wantVersion: "k00",
 		},
+		{
+			name:        "base-36 version token with letter in second position",
+			filename:    "23222-ja0.docx",
+			wantSpecID:  "TS 23.222",
+			wantVersion: "ja0",
+		},
+		{
+			name:        "base-36 version token, minor version b",
+			filename:    "23280-ja1.docx",
+			wantSpecID:  "TS 23.280",
+			wantVersion: "ja1",
+		},
+		{
+			name:        "base-36 version token, different minor letter",
+			filename:    "23379-jb0.docx",
+			wantSpecID:  "TS 23.379",
+			wantVersion: "jb0",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -263,5 +281,15 @@ func TestSpecMetadata_Series(t *testing.T) {
 		if got := m.Series(); got != want {
 			t.Errorf("Series for %q = %q, want %q", specID, got, want)
 		}
+	}
+}
+
+func TestExtractMetadata_SeriesFromBase36VersionFilename(t *testing.T) {
+	meta := extractMetadata("23222-ja0.docx", coreProperties{}, nil, nil)
+	if meta.SpecID != "TS 23.222" {
+		t.Fatalf("SpecID = %q, want %q", meta.SpecID, "TS 23.222")
+	}
+	if got := meta.Series(); got != "23" {
+		t.Errorf("Series() = %q, want %q", got, "23")
 	}
 }
