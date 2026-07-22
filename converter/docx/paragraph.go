@@ -463,6 +463,25 @@ func wrapEmphasis(text, delim string) string {
 	return lead + delim + mid + delim + trail
 }
 
+// listStyleLevelRE matches a list style name's trailing nesting-level digits,
+// e.g. "2" in "List Bullet 2" or "ListBullet2".
+var listStyleLevelRE = regexp.MustCompile(`\s*(\d+)$`)
+
+// listStyleLevel returns the nesting level encoded in a list style name's
+// trailing digits (e.g. "List Bullet 2" -> 2, "List Number 3" -> 3). A style
+// name with no trailing digits (e.g. "List Bullet") is level 1.
+func listStyleLevel(styleName string) int {
+	m := listStyleLevelRE.FindStringSubmatch(styleName)
+	if m == nil {
+		return 1
+	}
+	level, err := strconv.Atoi(m[1])
+	if err != nil || level < 1 {
+		return 1
+	}
+	return level
+}
+
 // paragraphToMarkdown converts a paragraph to markdown text.
 func paragraphToMarkdown(info paragraphInfo, styleName string) string {
 	text := strings.TrimSpace(info.Text)
@@ -472,13 +491,19 @@ func paragraphToMarkdown(info paragraphInfo, styleName string) string {
 
 	// Handle list items
 	if strings.HasPrefix(styleName, "List") {
+		// 3GPP DOCX templates encode list nesting depth in the style name's
+		// trailing number ("List Bullet 2", "List Number 3", ...); a bare
+		// "List Bullet"/"List Number" is depth 1. Indent by 4 spaces per
+		// level, which CommonMark/GFM recognizes as nested under both "- "
+		// and "1. " parent markers.
+		indent := strings.Repeat("    ", listStyleLevel(styleName)-1)
 		if strings.Contains(styleName, "Bullet") {
-			return "- " + text
+			return indent + "- " + text
 		}
 		if strings.Contains(styleName, "Number") {
-			return "1. " + text
+			return indent + "1. " + text
 		}
-		return "- " + text // default to bullet for unknown list styles
+		return indent + "- " + text // default to bullet for unknown list styles
 	}
 
 	// Handle bold/italic at run level

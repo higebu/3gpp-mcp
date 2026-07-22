@@ -259,6 +259,30 @@ func TestParagraphToMarkdown(t *testing.T) {
 			want:      "- x",
 		},
 		{
+			name:      "nested list bullet level 2 style is indented",
+			info:      paragraphInfo{Text: "item", Runs: []runInfo{{Text: "item"}}},
+			styleName: "List Bullet 2",
+			want:      "    - item",
+		},
+		{
+			name:      "nested list bullet level 3 style is indented",
+			info:      paragraphInfo{Text: "item", Runs: []runInfo{{Text: "item"}}},
+			styleName: "List Bullet 3",
+			want:      "        - item",
+		},
+		{
+			name:      "nested list number level 2 style is indented",
+			info:      paragraphInfo{Text: "first", Runs: []runInfo{{Text: "first"}}},
+			styleName: "List Number 2",
+			want:      "    1. first",
+		},
+		{
+			name:      "nested list style without space before level digit is indented",
+			info:      paragraphInfo{Text: "item", Runs: []runInfo{{Text: "item"}}},
+			styleName: "ListBullet2",
+			want:      "    - item",
+		},
+		{
 			name:      "empty runs falls back to plain text",
 			info:      paragraphInfo{Text: "fallback"},
 			styleName: "Normal",
@@ -451,6 +475,27 @@ func TestIsMonospaceFont(t *testing.T) {
 	for font, want := range cases {
 		if got := isMonospaceFont(font); got != want {
 			t.Errorf("isMonospaceFont(%q) = %v, want %v", font, got, want)
+		}
+	}
+}
+
+func TestListStyleLevel(t *testing.T) {
+	cases := map[string]int{
+		"List Bullet":                      1,
+		"List Bullet 2":                    2,
+		"List Bullet 3":                    3,
+		"List Number":                      1,
+		"List Number 2":                    2,
+		"ListBullet":                       1,
+		"ListBullet2":                      2,
+		"ListNumber3":                      3,
+		"List":                             1,
+		"List Bullet 0":                    1,
+		"List Bullet 99999999999999999999": 1,
+	}
+	for styleName, want := range cases {
+		if got := listStyleLevel(styleName); got != want {
+			t.Errorf("listStyleLevel(%q) = %d, want %d", styleName, got, want)
 		}
 	}
 }
