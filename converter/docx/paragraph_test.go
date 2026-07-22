@@ -481,15 +481,17 @@ func TestIsMonospaceFont(t *testing.T) {
 
 func TestListStyleLevel(t *testing.T) {
 	cases := map[string]int{
-		"List Bullet":   1,
-		"List Bullet 2": 2,
-		"List Bullet 3": 3,
-		"List Number":   1,
-		"List Number 2": 2,
-		"ListBullet":    1,
-		"ListBullet2":   2,
-		"ListNumber3":   3,
-		"List":          1,
+		"List Bullet":                      1,
+		"List Bullet 2":                    2,
+		"List Bullet 3":                    3,
+		"List Number":                      1,
+		"List Number 2":                    2,
+		"ListBullet":                       1,
+		"ListBullet2":                      2,
+		"ListNumber3":                      3,
+		"List":                             1,
+		"List Bullet 0":                    1,
+		"List Bullet 99999999999999999999": 1,
 	}
 	for styleName, want := range cases {
 		if got := listStyleLevel(styleName); got != want {
