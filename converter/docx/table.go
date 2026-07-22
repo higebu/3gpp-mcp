@@ -238,6 +238,15 @@ func writeCellContent(b *strings.Builder, c tableCell, ctx imageContext) {
 func writeParagraphInline(b *strings.Builder, p paragraphInfo, ctx imageContext) {
 	if len(p.Runs) > 0 {
 		for _, r := range mergeAdjacentRuns(p.Runs) {
+			if r.Image != nil {
+				// Render the image where it actually occurs in the run
+				// sequence rather than after all of the cell's text (see
+				// issue #40).
+				if html := imageHTML(ctx, *r.Image); html != "" {
+					b.WriteString(html)
+				}
+				continue
+			}
 			if r.Text == "" {
 				continue
 			}
@@ -260,10 +269,12 @@ func writeParagraphInline(b *strings.Builder, p paragraphInfo, ctx imageContext)
 			}
 			b.WriteString(esc)
 		}
-	} else if p.Text != "" {
-		b.WriteString(htmlpkg.EscapeString(p.Text))
+		return
 	}
 
+	if p.Text != "" {
+		b.WriteString(htmlpkg.EscapeString(p.Text))
+	}
 	for _, ref := range p.Images {
 		if html := imageHTML(ctx, ref); html != "" {
 			b.WriteString(html)
