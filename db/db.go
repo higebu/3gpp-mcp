@@ -665,9 +665,32 @@ func needsFTS5Quoting(s string) bool {
 	return strings.ContainsRune(s, '-') || strings.ContainsRune(s, '.')
 }
 
+// classifyToken quotes a bareword or "col:val" column-filter token if it
+// contains a character FTS5 cannot parse in an unquoted bareword.
+func classifyToken(token string) string {
+	if colIdx := strings.IndexByte(token, ':'); colIdx > 0 {
+		col := token[:colIdx]
+		val := token[colIdx+1:]
+		if fts5Columns[col] {
+			if needsFTS5Quoting(val) && !strings.HasPrefix(val, "\"") {
+				return col + ":\"" + val + "\""
+			}
+			return token
+		}
+	}
+	if needsFTS5Quoting(token) {
+		return "\"" + token + "\""
+	}
+	return token
+}
+
 // sanitizeFTS5Query wraps bare hyphenated or dotted tokens in double quotes
 // so FTS5 does not misinterpret the hyphen as a column-filter separator or
-// reject the period as invalid bareword syntax.
+// reject the period as invalid bareword syntax. It also rewrites a leading
+// "-term" into a real "NOT term": FTS5 has no unary "-" exclusion operator
+// (a lone "-x" is a hard syntax error, and "-col:x" parses but silently
+// means something other than exclusion), so passing the hyphen through
+// unchanged never actually excludes anything.
 func sanitizeFTS5Query(query string) string {
 	var result []string
 	i := 0
@@ -721,36 +744,25 @@ func sanitizeFTS5Query(query string) string {
 			continue
 		}
 
-		if colIdx := strings.IndexByte(token, ':'); colIdx > 0 {
-			col := token[:colIdx]
-			val := token[colIdx+1:]
-			if fts5Columns[col] {
-				if needsFTS5Quoting(val) && !strings.HasPrefix(val, "\"") {
-					result = append(result, col+":\""+val+"\"")
-				} else {
-					result = append(result, token)
-				}
-				continue
-			}
-		}
-
-		// A leading hyphen is FTS5 NOT shorthand — leave it alone unless
-		// there are additional hyphens or a period in the rest of the token.
-		if needsFTS5Quoting(token) {
-			if token[0] == '-' {
-				rest := token[1:]
-				if needsFTS5Quoting(rest) {
-					result = append(result, "\""+token+"\"")
-				} else {
-					result = append(result, token)
-				}
+		if len(token) > 1 && token[0] == '-' {
+			// A real NOT needs a preceding phrase as its left operand, and
+			// that phrase can't itself be a bare operator keyword (FTS5
+			// rejects e.g. "AND NOT" as adjacent operators). When neither
+			// holds, there is no valid way to express the exclusion, so
+			// fall back to quoting the token literally: it matches
+			// nothing, but at least stays valid, non-erroring FTS5 syntax
+			// (an unquoted leading hyphen is invalid FTS5 syntax on its own,
+			// even without any other special character in the token).
+			canNegate := len(result) > 0 && !fts5Operators[result[len(result)-1]]
+			if canNegate {
+				result = append(result, "NOT", classifyToken(token[1:]))
 			} else {
 				result = append(result, "\""+token+"\"")
 			}
 			continue
 		}
 
-		result = append(result, token)
+		result = append(result, classifyToken(token))
 	}
 
 	return strings.Join(result, " ")
