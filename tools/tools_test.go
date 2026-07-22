@@ -116,6 +116,25 @@ func TestHandleGetTOC(t *testing.T) {
 			t.Errorf("expected both parts listed, got: %s", text)
 		}
 	})
+
+	t.Run("section with no real number is not duplicated", func(t *testing.T) {
+		if err := d.ExecScript(`INSERT INTO sections (spec_id, number, title, level, parent_number, content) VALUES
+    ('TS 23.501', 'MRB-Identity', 'MRB-Identity', 2, '5', 'IE body.');`); err != nil {
+			t.Fatalf("failed to insert test data: %v", err)
+		}
+
+		result, _, err := handler(context.Background(), nil, GetTOCInput{SpecID: "TS 23.501"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "MRB-Identity") {
+			t.Errorf("expected MRB-Identity in output, got: %s", text)
+		}
+		if strings.Contains(text, "MRB-Identity MRB-Identity") {
+			t.Errorf("title should not be duplicated, got: %s", text)
+		}
+	})
 }
 
 func TestHandleGetSection(t *testing.T) {

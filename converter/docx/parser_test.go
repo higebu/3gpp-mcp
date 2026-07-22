@@ -375,6 +375,27 @@ func TestSectionToMarkdown(t *testing.T) {
 	}
 }
 
+// TestSectionToMarkdown_NoRealNumber covers GitHub issue #42: when a section
+// has no real clause number (Number == Title, e.g. a TS 38.331 IE heading
+// marked with a bare dash), the rendered heading must show the title once,
+// not "Title Title".
+func TestSectionToMarkdown_NoRealNumber(t *testing.T) {
+	section := &Section{
+		Number:  "MRB-Identity",
+		Title:   "MRB-Identity",
+		Level:   3,
+		Content: []string{"IE definition body."},
+	}
+
+	md := SectionToMarkdown(section)
+	if !strings.HasPrefix(md, "### MRB-Identity\n") {
+		t.Errorf("expected heading to show the title once, got %q", md[:min(len(md), 40)])
+	}
+	if strings.Count(md, "MRB-Identity") != 1 {
+		t.Errorf("expected title to appear exactly once, got:\n%s", md)
+	}
+}
+
 func TestSectionToMarkdown_ConsecutiveTables(t *testing.T) {
 	section := &Section{
 		Number: "7.2.1",
@@ -600,6 +621,56 @@ func TestParseSections_LetteredSectionNumbers(t *testing.T) {
 
 	if s, ok := sectionMap["A.1a"]; ok && s.Level != 2 {
 		t.Errorf("section A.1a level = %d, want 2", s.Level)
+	}
+}
+
+// TestParseSections_UnnumberedDashHeadings guards against a regression
+// (GitHub issue #42) where specs like TS 38.331 mark IE/message definitions
+// with a bare dash instead of a decimal clause number (e.g. "-\tMRB-Identity").
+// Neither sectionNumberRE nor annexRE matches a heading starting with a dash,
+// so it used to fall into the final fallback that sets both Number and Title
+// to the full raw heading text (including the dash and tab), duplicating the
+// title in every rendered output. Number == Title is the intentional result
+// here (there's no real section number); renderers must special-case that
+// rather than show the same text twice.
+func TestParseSections_UnnumberedDashHeadings(t *testing.T) {
+	elements := []bodyElement{
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading1", Text: "6.3\tMessage and information element definitions",
+			Runs: []runInfo{{Text: "6.3\tMessage and information element definitions"}},
+		}},
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading2", Text: "-\tMRB-Identity",
+			Runs: []runInfo{{Text: "-\tMRB-Identity"}},
+		}},
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading2", Text: "–\tMeasSequence",
+			Runs: []runInfo{{Text: "–\tMeasSequence"}},
+		}},
+	}
+	styleMap := map[string]string{"Heading1": "Heading 1", "Heading2": "Heading 2"}
+	sections := parseSections(elements, styleMap, nil, nil)
+
+	want := []string{"MRB-Identity", "MeasSequence"}
+	sectionMap := make(map[string]*Section)
+	for _, s := range sections {
+		sectionMap[s.Title] = s
+	}
+	for _, title := range want {
+		s, ok := sectionMap[title]
+		if !ok {
+			t.Errorf("missing section %q", title)
+			continue
+		}
+		if s.Title != title {
+			t.Errorf("section title = %q, want %q", s.Title, title)
+		}
+		if s.Number != s.Title {
+			t.Errorf("section %q: Number = %q, want equal to Title (no real section number)", title, s.Number)
+		}
+		if strings.HasPrefix(s.Title, "-") || strings.HasPrefix(s.Title, "–") || strings.Contains(s.Title, "\t") {
+			t.Errorf("section %q: title still contains the leading dash/tab marker", s.Title)
+		}
 	}
 }
 
