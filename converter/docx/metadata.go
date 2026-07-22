@@ -19,7 +19,7 @@ const (
 )
 
 var (
-	filenameRE    = regexp.MustCompile(`^(\d{2})(\d{3})(?:-(\d{1,2}))?-?([a-z])(\d+)`)
+	filenameRE    = regexp.MustCompile(`^(\d{2})(\d{3})(?:-(\d{1,2}))?-?([a-z][0-9a-z]+)`)
 	specPatternRE = regexp.MustCompile(`(?i)(?:TS|TR)\s*(\d+)\.(\d+)`)
 	versionRE     = regexp.MustCompile(`V(\d+\.\d+\.\d+)`)
 	releaseRE     = regexp.MustCompile(`Release\s+(\d+)`)
@@ -93,12 +93,12 @@ func extractMetadata(filename string, props coreProperties, bodyElements []bodyE
 
 	// Parse from filename
 	if match := filenameRE.FindStringSubmatch(stem); match != nil {
-		series, num, part, verLetter, verNum := match[1], match[2], match[3], match[4], match[5]
+		series, num, part, ver := match[1], match[2], match[3], match[4]
 		specID = "TS " + series + "." + num
 		if part != "" {
 			specID += "-" + part
 		}
-		version = verLetter + verNum
+		version = ver
 	} else if match := specPatternRE.FindStringSubmatch(stem); match != nil {
 		specID = "TS " + match[1] + "." + match[2]
 	} else {
