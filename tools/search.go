@@ -28,6 +28,7 @@ Query syntax:
 - Column filter: title:authentication  or  content:handover
 - Proximity:     NEAR(AMF UE, 5)
 - Hyphenated or dotted terms (e.g. IMS-AKA, sec-agree, 38.101) are auto-quoted to avoid FTS5 syntax errors.
+- A leading "-" excludes a term (e.g. AMF -SMF), same as NOT.
 
 Tips:
 - Use exact 3GPP terms (AMF, SMF, gNB, UE, NRF, PCF, etc.)

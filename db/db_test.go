@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -317,7 +318,7 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"valid column filter title", "title:authentication", "title:authentication"},
 		{"column filter with hyphen value", "title:IMS-AKA", `title:"IMS-AKA"`},
 		{"NEAR preserved", "NEAR(AMF UE, 5)", "NEAR(AMF UE, 5)"},
-		{"leading hyphen NOT shorthand", "-excluded", "-excluded"},
+		{"leading hyphen NOT shorthand", "-excluded", `"-excluded"`},
 		{"leading hyphen with more hyphens", "-one-two", `"-one-two"`},
 		{"mixed query", `IMS-AKA AND "core network"`, `"IMS-AKA" AND "core network"`},
 		{"hyphen with operator", "sec-agree OR authentication", `"sec-agree" OR authentication`},
@@ -329,6 +330,13 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"column filter with dotted value", "title:38.101", `title:"38.101"`},
 		{"spec number with AND operator", "38.101 AND UE", `"38.101" AND UE`},
 		{"multi-part spec number", "38.101-1", `"38.101-1"`},
+		{"leading hyphen with preceding term becomes NOT", "AMF -excluded", "AMF NOT excluded"},
+		{"leading hyphen with dotted rest becomes NOT", "AMF -38.101", `AMF NOT "38.101"`},
+		{"leading hyphen with hyphenated rest becomes NOT", "AMF -IMS-AKA", `AMF NOT "IMS-AKA"`},
+		{"leading hyphen column filter becomes NOT", "AMF -title:band", "AMF NOT title:band"},
+		{"leading hyphen column filter with dotted value becomes NOT", "AMF -title:38.101", `AMF NOT title:"38.101"`},
+		{"leading hyphen after AND operator falls back", "AMF AND -excluded", `AMF AND "-excluded"`},
+		{"leading hyphen after OR operator falls back", "AMF OR -excluded", `AMF OR "-excluded"`},
 	}
 
 	for _, tt := range tests {
@@ -338,6 +346,51 @@ func TestSanitizeFTS5Query(t *testing.T) {
 				t.Errorf("sanitizeFTS5Query(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestSanitizeFTS5Query_ExecutesWithoutError runs sanitizeFTS5Query's output
+// through a real FTS5 MATCH to catch the class of bug where the sanitizer
+// produces a string that is well-formed by inspection but invalid (or
+// silently wrong) FTS5 syntax — see issue #47, where a lone leading hyphen
+// was assumed to be FTS5's NOT shorthand but FTS5 has no such operator.
+func TestSanitizeFTS5Query_ExecutesWithoutError(t *testing.T) {
+	dbConn, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbConn.Close()
+	// An in-memory SQLite database is per-connection; without this, the
+	// connection pool could hand out a second, empty in-memory database for
+	// a later query and "no such table" would mask the real assertion.
+	dbConn.SetMaxOpenConns(1)
+
+	if _, err := dbConn.Exec(`CREATE VIRTUAL TABLE t USING fts5(spec_id, number, title, content)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dbConn.Exec(
+		`INSERT INTO t(spec_id, number, title, content) VALUES (?, ?, ?, ?)`,
+		"TS 38.101-1", "5.1", "Band requirements", "radio transmission band requirements AMF",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	queries := []string{
+		"38.101", "23.501", "18.6.0", "title:38.101",
+		"38.101 AND UE", "IMS-AKA", "title:IMS-AKA",
+		"AMF -excluded", "AMF -38.101", "AMF -IMS-AKA",
+		"AMF -title:band", "AMF -title:38.101",
+		"AMF AND -excluded", "AMF OR -excluded",
+		"-excluded", "-one-two",
+	}
+	for _, q := range queries {
+		sanitized := sanitizeFTS5Query(q)
+		rows, err := dbConn.Query(`SELECT spec_id FROM t WHERE t MATCH ?`, sanitized)
+		if err != nil {
+			t.Errorf("query %q sanitized to %q, which FTS5 rejected: %v", q, sanitized, err)
+			continue
+		}
+		rows.Close()
 	}
 }
 
