@@ -657,8 +657,17 @@ var fts5Operators = map[string]bool{
 	"AND": true, "OR": true, "NOT": true,
 }
 
-// sanitizeFTS5Query wraps bare hyphenated tokens in double quotes so FTS5
-// does not misinterpret the hyphen as a column-filter separator.
+// needsFTS5Quoting reports whether a bare token contains a character FTS5
+// cannot parse as part of an unquoted bareword: a hyphen (misread as the
+// column-filter/NOT operator) or a period (e.g. spec numbers like "38.101",
+// which FTS5 otherwise rejects with "syntax error near \".\"").
+func needsFTS5Quoting(s string) bool {
+	return strings.ContainsRune(s, '-') || strings.ContainsRune(s, '.')
+}
+
+// sanitizeFTS5Query wraps bare hyphenated or dotted tokens in double quotes
+// so FTS5 does not misinterpret the hyphen as a column-filter separator or
+// reject the period as invalid bareword syntax.
 func sanitizeFTS5Query(query string) string {
 	var result []string
 	i := 0
@@ -716,7 +725,7 @@ func sanitizeFTS5Query(query string) string {
 			col := token[:colIdx]
 			val := token[colIdx+1:]
 			if fts5Columns[col] {
-				if strings.ContainsRune(val, '-') && !strings.HasPrefix(val, "\"") {
+				if needsFTS5Quoting(val) && !strings.HasPrefix(val, "\"") {
 					result = append(result, col+":\""+val+"\"")
 				} else {
 					result = append(result, token)
@@ -726,11 +735,11 @@ func sanitizeFTS5Query(query string) string {
 		}
 
 		// A leading hyphen is FTS5 NOT shorthand — leave it alone unless
-		// there are additional hyphens in the rest of the token.
-		if strings.ContainsRune(token, '-') {
+		// there are additional hyphens or a period in the rest of the token.
+		if needsFTS5Quoting(token) {
 			if token[0] == '-' {
 				rest := token[1:]
-				if strings.ContainsRune(rest, '-') {
+				if needsFTS5Quoting(rest) {
 					result = append(result, "\""+token+"\"")
 				} else {
 					result = append(result, token)
