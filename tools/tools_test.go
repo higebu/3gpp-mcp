@@ -218,6 +218,31 @@ func TestHandleGetSection(t *testing.T) {
 			t.Errorf("expected both parts listed, got: %s", text)
 		}
 	})
+
+	t.Run("unnumbered heading looked up by title as section_number", func(t *testing.T) {
+		if err := d.ExecScript(`INSERT INTO sections (spec_id, number, title, level, parent_number, content) VALUES
+    ('TS 23.501', 'MRB-Identity', 'MRB-Identity', 2, '5', '### MRB-Identity` + "\n\n" + `IE body.');`); err != nil {
+			t.Fatalf("failed to insert test data: %v", err)
+		}
+
+		result, _, err := handler(context.Background(), nil, GetSectionInput{
+			SpecID:        "TS 23.501",
+			SectionNumber: "MRB-Identity",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("unexpected error result: %s", getTextContent(result))
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "IE body.") {
+			t.Errorf("expected section content, got: %s", text)
+		}
+		if strings.Count(text, "MRB-Identity") != 1 {
+			t.Errorf("expected title to appear exactly once, got: %s", text)
+		}
+	})
 }
 
 func TestHandleSearch(t *testing.T) {

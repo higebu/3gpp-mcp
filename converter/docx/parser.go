@@ -290,6 +290,12 @@ func parseSections(elements []bodyElement, styleMap map[string]string, relMap ma
 					// clauses with a bare dash instead of a decimal number.
 					// There's no real section number here, so reuse the
 					// title as the storage key (see Section.Number docs).
+					// Known limitation: two such headings in the same spec
+					// with an identical title collide on this key, and the
+					// second one silently overwrites the first in the DB
+					// (pre-existing risk, shared with the raw-text fallback
+					// below; not expected in practice since these headings
+					// name distinct IEs/messages).
 					title = strings.TrimSpace(match[1])
 					number = title
 				} else {
