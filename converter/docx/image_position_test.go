@@ -115,7 +115,7 @@ func TestParseDocx_InlineImagesInterleavedWithText(t *testing.T) {
 	if imgAIdx == -1 || imgBIdx == -1 || subBIdx == -1 {
 		t.Fatalf("expected to find both image placeholders and the sub-figure (b) text block: %#v", content)
 	}
-	if !(imgAIdx < subBIdx && subBIdx < imgBIdx) {
+	if imgAIdx >= subBIdx || subBIdx >= imgBIdx {
 		t.Errorf("images stacked instead of interleaved: image1 at %d, sub-figure (b) text at %d, image2 at %d; want image1 < text < image2", imgAIdx, subBIdx, imgBIdx)
 	}
 }
