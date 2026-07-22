@@ -13,10 +13,11 @@ import (
 )
 
 var (
-	sectionNumberRE = regexp.MustCompile(`^([A-Z](?:\.\d+[A-Za-z]?)+|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)[\t ]+(.+)$`)
-	annexRE         = regexp.MustCompile(`(?is)^Annex[\s\xa0]+([A-Z])[\s\xa0]*(?:\((?:normative|informative)\))?[\s\xa0]*[:\s\xa0]*(.*)$`)
-	headingNumRE    = regexp.MustCompile(`(?i)^[Hh]eading\s+(\d+)`)
-	annexSubRE      = regexp.MustCompile(`^[A-Z]\.`)
+	sectionNumberRE     = regexp.MustCompile(`^([A-Z](?:\.\d+[A-Za-z]?)+|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)[\t ]+(.+)$`)
+	annexRE             = regexp.MustCompile(`(?is)^Annex[\s\xa0]+([A-Z])[\s\xa0]*(?:\((?:normative|informative)\))?[\s\xa0]*[:\s\xa0]*(.*)$`)
+	headingNumRE        = regexp.MustCompile(`(?i)^[Hh]eading\s+(\d+)`)
+	annexSubRE          = regexp.MustCompile(`^[A-Z]\.`)
+	unnumberedHeadingRE = regexp.MustCompile(`^\p{Pd}[\t ]+(.+)$`)
 )
 
 // bodyElement represents a top-level element in the document body.
@@ -284,6 +285,19 @@ func parseSections(elements []bodyElement, styleMap map[string]string, relMap ma
 					if inAnnex && annexSubRE.MatchString(number) {
 						headingLevel = strings.Count(number, ".") + 1
 					}
+				} else if match := unnumberedHeadingRE.FindStringSubmatch(text); match != nil {
+					// Some specs (e.g. TS 38.331's IE/message annex) mark
+					// clauses with a bare dash instead of a decimal number.
+					// There's no real section number here, so reuse the
+					// title as the storage key (see Section.Number docs).
+					// Known limitation: two such headings in the same spec
+					// with an identical title collide on this key, and the
+					// second one silently overwrites the first in the DB
+					// (pre-existing risk, shared with the raw-text fallback
+					// below; not expected in practice since these headings
+					// name distinct IEs/messages).
+					title = strings.TrimSpace(match[1])
+					number = title
 				} else {
 					number = text
 					title = text

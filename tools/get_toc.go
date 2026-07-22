@@ -40,7 +40,11 @@ func HandleGetTOC(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, 
 		fmt.Fprintf(&sb, "# %s - Table of Contents\n\n", input.SpecID)
 		for _, s := range sections {
 			indent := strings.Repeat("  ", s.Level-1)
-			fmt.Fprintf(&sb, "%s- %s %s\n", indent, s.Number, s.Title)
+			if s.Number != "" && s.Number != s.Title {
+				fmt.Fprintf(&sb, "%s- %s %s\n", indent, s.Number, s.Title)
+			} else {
+				fmt.Fprintf(&sb, "%s- %s\n", indent, s.Title)
+			}
 		}
 
 		return textResult(sb.String()), nil, nil

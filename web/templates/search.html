@@ -9,7 +9,7 @@
         {{range .Results}}
         <div class="search-result">
             <h3>
-                <a href="{{sectionURL .SpecID .Number}}">{{.SpecID}} &sect;{{.Number}}</a>
+                <a href="{{sectionURL .SpecID .Number}}">{{.SpecID}}{{if ne .Number .Title}} &sect;{{.Number}}{{end}}</a>
                 <span class="result-title">{{.Title}}</span>
             </h3>
             <p class="result-snippet">{{safeHTML .Snippet}}</p>

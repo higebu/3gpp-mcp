@@ -10,8 +10,8 @@
             <ul class="toc-list">
                 {{range .TOC}}
                 <li class="toc-item {{if isActive $.Current .Number}}active{{end}}" style="padding-left: {{indent .Level}}px">
-                    <a href="{{sectionURL $.Spec.ID .Number}}" title="{{.Number}} {{.Title}}">
-                        <span class="toc-number">{{.Number}}</span>
+                    <a href="{{sectionURL $.Spec.ID .Number}}" title="{{if ne .Number .Title}}{{.Number}} {{end}}{{.Title}}">
+                        {{if ne .Number .Title}}<span class="toc-number">{{.Number}}</span>{{end}}
                         <span class="toc-title">{{.Title}}</span>
                     </a>
                 </li>
@@ -34,7 +34,7 @@
         {{range .Sections}}
         <article class="section">
             <h{{add .Level 1}} id="section-{{.Number}}">
-                <span class="section-number">{{.Number}}</span> {{.Title}}
+                {{if ne .Number .Title}}<span class="section-number">{{.Number}}</span> {{end}}{{.Title}}
             </h{{add .Level 1}}>
             <div class="section-body">
                 {{.Content}}

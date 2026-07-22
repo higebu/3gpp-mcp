@@ -116,6 +116,25 @@ func TestHandleGetTOC(t *testing.T) {
 			t.Errorf("expected both parts listed, got: %s", text)
 		}
 	})
+
+	t.Run("section with no real number is not duplicated", func(t *testing.T) {
+		if err := d.ExecScript(`INSERT INTO sections (spec_id, number, title, level, parent_number, content) VALUES
+    ('TS 23.501', 'MRB-Identity', 'MRB-Identity', 2, '5', 'IE body.');`); err != nil {
+			t.Fatalf("failed to insert test data: %v", err)
+		}
+
+		result, _, err := handler(context.Background(), nil, GetTOCInput{SpecID: "TS 23.501"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "MRB-Identity") {
+			t.Errorf("expected MRB-Identity in output, got: %s", text)
+		}
+		if strings.Contains(text, "MRB-Identity MRB-Identity") {
+			t.Errorf("title should not be duplicated, got: %s", text)
+		}
+	})
 }
 
 func TestHandleGetSection(t *testing.T) {
@@ -197,6 +216,31 @@ func TestHandleGetSection(t *testing.T) {
 		text := getTextContent(result)
 		if !strings.Contains(text, "TS 38.101-1") || !strings.Contains(text, "TS 38.101-2") {
 			t.Errorf("expected both parts listed, got: %s", text)
+		}
+	})
+
+	t.Run("unnumbered heading looked up by title as section_number", func(t *testing.T) {
+		if err := d.ExecScript(`INSERT INTO sections (spec_id, number, title, level, parent_number, content) VALUES
+    ('TS 23.501', 'MRB-Identity', 'MRB-Identity', 2, '5', '### MRB-Identity` + "\n\n" + `IE body.');`); err != nil {
+			t.Fatalf("failed to insert test data: %v", err)
+		}
+
+		result, _, err := handler(context.Background(), nil, GetSectionInput{
+			SpecID:        "TS 23.501",
+			SectionNumber: "MRB-Identity",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("unexpected error result: %s", getTextContent(result))
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "IE body.") {
+			t.Errorf("expected section content, got: %s", text)
+		}
+		if strings.Count(text, "MRB-Identity") != 1 {
+			t.Errorf("expected title to appear exactly once, got: %s", text)
 		}
 	})
 }

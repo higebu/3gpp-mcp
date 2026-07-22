@@ -23,6 +23,10 @@ var seriesRE = regexp.MustCompile(`(\d+)\.\d+`)
 
 // Section represents a parsed section from the specification document.
 type Section struct {
+	// Number is the clause number (e.g. "5.1.2"). For headings with no real
+	// section number — such as the bare-dash IE/message entries in some
+	// specs' annexes — it equals Title; renderers should treat that as "no
+	// number" and print Title only, rather than showing it twice.
 	Number       string
 	Title        string
 	Level        int
