@@ -550,6 +550,76 @@ mark {
     margin-left: 0.5rem;
 }
 
+/* === Chapter navigation (prev/next) === */
+.section-nav {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 1rem 0;
+    padding: 0.75rem 0;
+}
+
+.section-nav:first-child {
+    border-bottom: 1px solid var(--border);
+}
+
+.section-nav:last-child {
+    border-top: 1px solid var(--border);
+    margin-top: 2rem;
+}
+
+.section-nav-spacer {
+    flex: 1;
+}
+
+.section-nav-link {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 1;
+    min-width: 0;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    text-decoration: none;
+    transition: background-color var(--transition), border-color var(--transition);
+}
+
+.section-nav-link:hover {
+    background: var(--bg-secondary);
+    border-color: var(--link);
+    text-decoration: none;
+}
+
+.section-nav-next {
+    justify-content: flex-end;
+    text-align: right;
+}
+
+.section-nav-arrow {
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.section-nav-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.section-nav-hint {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.section-nav-label {
+    font-size: 0.9rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* === Search === */
 .search-page {
     max-width: 800px;
@@ -692,11 +762,19 @@ mark {
     .navbar-search-specid {
         width: 100%;
     }
+
+    .section-nav {
+        flex-direction: column;
+    }
+
+    .section-nav-next {
+        text-align: left;
+    }
 }
 
 /* === Print === */
 @media print {
-    .navbar, .toc-sidebar, .toc-toggle, .theme-toggle, .pagination, .filter-form {
+    .navbar, .toc-sidebar, .toc-toggle, .theme-toggle, .pagination, .filter-form, .section-nav {
         display: none;
     }
 

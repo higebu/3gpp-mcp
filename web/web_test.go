@@ -277,6 +277,99 @@ func TestHandleSection(t *testing.T) {
 	}
 }
 
+func TestHandleSection_PrevNext(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	// TS 23.501 seed TOC in document order: 1 (Scope), 5 (Architecture),
+	// 5.1 (General), 5.1.1 (Overview).
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/sections/5.1")
+	if err != nil {
+		t.Fatalf("GET section error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if !strings.Contains(body, `href="/specs/TS%2023.501/sections/5"`) {
+		t.Errorf("expected prev link to section 5, got:\n%s", body)
+	}
+	if !strings.Contains(body, `href="/specs/TS%2023.501/sections/5.1.1"`) {
+		t.Errorf("expected next link to section 5.1.1, got:\n%s", body)
+	}
+	if !strings.Contains(body, "section-nav-prev") || !strings.Contains(body, "section-nav-next") {
+		t.Errorf("expected both prev and next nav links, got:\n%s", body)
+	}
+}
+
+func TestHandleSection_PrevNextAtBoundaries(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	// First section: no previous link.
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/sections/1")
+	if err != nil {
+		t.Fatalf("GET section error: %v", err)
+	}
+	defer resp.Body.Close()
+	body := readBody(t, resp)
+	if strings.Contains(body, "section-nav-prev") {
+		t.Errorf("first section should have no prev link, got:\n%s", body)
+	}
+	if !strings.Contains(body, "section-nav-next") {
+		t.Errorf("first section should have a next link, got:\n%s", body)
+	}
+
+	// Last section: no next link.
+	resp2, err := http.Get(ts.URL + "/specs/TS 23.501/sections/5.1.1")
+	if err != nil {
+		t.Fatalf("GET section error: %v", err)
+	}
+	defer resp2.Body.Close()
+	body2 := readBody(t, resp2)
+	if strings.Contains(body2, "section-nav-next") {
+		t.Errorf("last section should have no next link, got:\n%s", body2)
+	}
+	if !strings.Contains(body2, "section-nav-prev") {
+		t.Errorf("last section should have a prev link, got:\n%s", body2)
+	}
+}
+
+func TestAdjacentSections(t *testing.T) {
+	toc := []db.Section{
+		{Number: "1", Title: "Scope"},
+		{Number: "5", Title: "Architecture"},
+		{Number: "5.1", Title: "General"},
+		{Number: "5.1.1", Title: "Overview"},
+	}
+
+	prev, next := adjacentSections(toc, "5.1")
+	if prev == nil || prev.Number != "5" {
+		t.Errorf("prev = %v, want section 5", prev)
+	}
+	if next == nil || next.Number != "5.1.1" {
+		t.Errorf("next = %v, want section 5.1.1", next)
+	}
+
+	prev, next = adjacentSections(toc, "1")
+	if prev != nil {
+		t.Errorf("prev = %v, want nil at first section", prev)
+	}
+	if next == nil || next.Number != "5" {
+		t.Errorf("next = %v, want section 5", next)
+	}
+
+	prev, next = adjacentSections(toc, "5.1.1")
+	if next != nil {
+		t.Errorf("next = %v, want nil at last section", next)
+	}
+	if prev == nil || prev.Number != "5.1" {
+		t.Errorf("prev = %v, want section 5.1", prev)
+	}
+
+	prev, next = adjacentSections(toc, "nonexistent")
+	if prev != nil || next != nil {
+		t.Errorf("prev, next = %v, %v, want nil, nil for unknown number", prev, next)
+	}
+}
+
 func TestHandleSpecNotFound(t *testing.T) {
 	ts, _ := setupTestServer(t)
 
