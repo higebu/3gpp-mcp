@@ -47,6 +47,8 @@ type specData struct {
 	Current    string
 	References []db.Reference
 	OpenAPIs   []db.OpenAPISpec
+	Prev       *db.Section
+	Next       *db.Section
 }
 
 type sectionRendered struct {
@@ -201,6 +203,7 @@ func (h *handler) renderSpecPage(w http.ResponseWriter, specID, number string) {
 	rendered := renderSections(sections, specID, bracketMap)
 	openAPIs, _ := h.db.ListOpenAPI(specID)
 	refs, _ := h.db.GetReferences(specID, number, db.DirectionOutgoing, false)
+	prev, next := adjacentSections(toc, number)
 
 	data := specData{
 		Spec:       &db.Spec{ID: specID},
@@ -209,11 +212,33 @@ func (h *handler) renderSpecPage(w http.ResponseWriter, specID, number string) {
 		Current:    number,
 		References: refs,
 		OpenAPIs:   openAPIs,
+		Prev:       prev,
+		Next:       next,
 	}
 
 	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "spec", Data: data, NavSpecID: specID}); err != nil {
 		log.Printf("template error: %v", err)
 	}
+}
+
+// adjacentSections returns the sections immediately before and after number
+// in toc's document order (see db.GetTOC), for "previous/next chapter"
+// navigation. Either return value is nil when number is the first/last
+// section in the TOC.
+func adjacentSections(toc []db.Section, number string) (prev, next *db.Section) {
+	for i := range toc {
+		if toc[i].Number != number {
+			continue
+		}
+		if i > 0 {
+			prev = &toc[i-1]
+		}
+		if i < len(toc)-1 {
+			next = &toc[i+1]
+		}
+		return prev, next
+	}
+	return nil, nil
 }
 
 func (h *handler) handleImage(w http.ResponseWriter, r *http.Request) {

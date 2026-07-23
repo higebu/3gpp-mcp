@@ -47,6 +47,28 @@
         }
     }
 
+    // Prev/Next chapter keyboard navigation (Left/Right arrow keys). Ignored
+    // while the user is typing (inputs, textareas, contenteditable) or
+    // holding a modifier key, so it doesn't clash with text editing or
+    // browser/OS shortcuts.
+    document.addEventListener('keydown', function (e) {
+        if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) {
+            return;
+        }
+        var active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) {
+            return;
+        }
+        var selector = e.key === 'ArrowLeft' ? '.section-nav-prev' : e.key === 'ArrowRight' ? '.section-nav-next' : null;
+        if (!selector) {
+            return;
+        }
+        var link = document.querySelector(selector);
+        if (link) {
+            window.location.href = link.getAttribute('href');
+        }
+    });
+
     // Render LaTeX math emitted by the DOCX converter. The server wraps each
     // equation in a <span class="math-inline|math-display"> whose text content
     // is the raw LaTeX; KaTeX renders it in place.

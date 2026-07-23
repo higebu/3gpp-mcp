@@ -31,6 +31,8 @@
     </aside>
 
     <div class="section-content">
+        {{template "section-nav" .}}
+
         {{range .Sections}}
         <article class="section">
             <h{{add .Level 1}} id="section-{{.Number}}">
@@ -57,6 +59,33 @@
             </ul>
         </div>
         {{end}}
+
+        {{template "section-nav" .}}
     </div>
 </div>
+{{end}}
+
+{{define "section-nav"}}
+{{if or .Prev .Next}}
+<nav class="section-nav" aria-label="Chapter navigation">
+    {{if .Prev}}
+    <a class="section-nav-link section-nav-prev" href="{{sectionURL .Spec.ID .Prev.Number}}">
+        <span class="section-nav-arrow">&larr;</span>
+        <span class="section-nav-text">
+            <span class="section-nav-hint">Previous</span>
+            <span class="section-nav-label">{{if ne .Prev.Number .Prev.Title}}{{.Prev.Number}} {{end}}{{.Prev.Title}}</span>
+        </span>
+    </a>
+    {{else}}<span class="section-nav-spacer"></span>{{end}}
+    {{if .Next}}
+    <a class="section-nav-link section-nav-next" href="{{sectionURL .Spec.ID .Next.Number}}">
+        <span class="section-nav-text">
+            <span class="section-nav-hint">Next</span>
+            <span class="section-nav-label">{{if ne .Next.Number .Next.Title}}{{.Next.Number}} {{end}}{{.Next.Title}}</span>
+        </span>
+        <span class="section-nav-arrow">&rarr;</span>
+    </a>
+    {{end}}
+</nav>
+{{end}}
 {{end}}
