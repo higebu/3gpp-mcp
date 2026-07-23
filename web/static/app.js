@@ -48,15 +48,16 @@
     }
 
     // Prev/Next chapter keyboard navigation (Left/Right arrow keys). Ignored
-    // while the user is typing (inputs, textareas, contenteditable) or
-    // holding a modifier key, so it doesn't clash with text editing or
-    // browser/OS shortcuts.
+    // while the user is operating a focused interactive control (text
+    // inputs, the series <select>, buttons, ARIA widgets) or holding a
+    // modifier key, so it doesn't clash with that control's own Left/Right
+    // behavior or browser/OS shortcuts.
     document.addEventListener('keydown', function (e) {
         if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) {
             return;
         }
         var active = document.activeElement;
-        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) {
+        if (active && (active.isContentEditable || active.matches('input, textarea, select, button, [contenteditable], [role="button"], [role="textbox"], [role="combobox"], [role="listbox"]'))) {
             return;
         }
         var selector = e.key === 'ArrowLeft' ? '.section-nav-prev' : e.key === 'ArrowRight' ? '.section-nav-next' : null;
