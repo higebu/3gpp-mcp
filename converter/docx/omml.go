@@ -168,9 +168,9 @@ func renderOMML(n *ommlNode) string {
 	case "acc":
 		return renderAccent(n)
 	default:
-		// Transparent containers (oMath, oMathPara, e, num, den, deg, sub, sup,
-		// r, ...) and unrecognized elements: recurse into children so their
-		// text still surfaces.
+		// Transparent containers (oMath, e, num, den, deg, sub, sup, r, ...)
+		// and unrecognized elements: recurse into children so their text
+		// still surfaces.
 		return renderChildren(n)
 	}
 }
