@@ -37,7 +37,7 @@ func HandleGetTOC(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, 
 		}
 
 		var sb strings.Builder
-		fmt.Fprintf(&sb, "# %s - Table of Contents\n\n", input.SpecID)
+		fmt.Fprintf(&sb, "# %s - Table of Contents\n\n", specLabel(sections[0]))
 		for _, s := range sections {
 			indent := strings.Repeat("  ", s.Level-1)
 			if s.Number != "" && s.Number != s.Title {

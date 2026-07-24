@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/higebu/3gpp-mcp/db"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -20,6 +21,32 @@ func errorResult(text string) *mcp.CallToolResult {
 		Content: []mcp.Content{&mcp.TextContent{Text: text}},
 		IsError: true,
 	}
+}
+
+// prependLine prefixes the text content of a single-TextContent result with a
+// header line, outside of pagination: line offsets and the [Lines a-b of N]
+// markers are unaffected, so the header survives on every page.
+func prependLine(header string, res *mcp.CallToolResult) *mcp.CallToolResult {
+	if header == "" || len(res.Content) == 0 {
+		return res
+	}
+	if tc, ok := res.Content[0].(*mcp.TextContent); ok {
+		tc.Text = header + "\n" + tc.Text
+	}
+	return res
+}
+
+// specLabel formats a section's spec ID with its version/release,
+// e.g. "TS 23.501 v18.6.0 (Rel-18)". Empty fields are omitted.
+func specLabel(s db.Section) string {
+	label := s.SpecID
+	if s.Version != "" {
+		label += " v" + s.Version
+	}
+	if s.Release != "" {
+		label += " (" + s.Release + ")"
+	}
+	return label
 }
 
 func paginateText(content string, offset, maxLines, maxChars int) *mcp.CallToolResult {
