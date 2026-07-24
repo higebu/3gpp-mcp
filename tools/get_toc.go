@@ -36,16 +36,8 @@ func HandleGetTOC(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, 
 			return errorResult(fmt.Sprintf("no sections found for %s", input.SpecID)), nil, nil
 		}
 
-		header := sections[0].SpecID
-		if sections[0].Version != "" {
-			header += " v" + sections[0].Version
-		}
-		if sections[0].Release != "" {
-			header += " (" + sections[0].Release + ")"
-		}
-
 		var sb strings.Builder
-		fmt.Fprintf(&sb, "# %s - Table of Contents\n\n", header)
+		fmt.Fprintf(&sb, "# %s - Table of Contents\n\n", specLabel(sections[0]))
 		for _, s := range sections {
 			indent := strings.Repeat("  ", s.Level-1)
 			if s.Number != "" && s.Number != s.Title {
