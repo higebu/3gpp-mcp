@@ -411,6 +411,29 @@ func TestHandleGetOpenAPI(t *testing.T) {
 	})
 }
 
+func TestPrependLine(t *testing.T) {
+	t.Run("prepends header", func(t *testing.T) {
+		res := prependLine("[Source: TS 23.501]", textResult("body"))
+		if text := getTextContent(res); text != "[Source: TS 23.501]\nbody" {
+			t.Errorf("unexpected text: %q", text)
+		}
+	})
+
+	t.Run("empty header leaves result unchanged", func(t *testing.T) {
+		res := prependLine("", textResult("body"))
+		if text := getTextContent(res); text != "body" {
+			t.Errorf("unexpected text: %q", text)
+		}
+	})
+
+	t.Run("empty content does not panic", func(t *testing.T) {
+		res := prependLine("[Source]", &mcp.CallToolResult{})
+		if len(res.Content) != 0 {
+			t.Errorf("expected content to stay empty, got %v", res.Content)
+		}
+	})
+}
+
 func TestPaginateText(t *testing.T) {
 	content := "line1\nline2\nline3\nline4\nline5"
 
