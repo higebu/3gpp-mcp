@@ -142,6 +142,8 @@ func renderOMML(n *ommlNode) string {
 	switch n.Local {
 	case "t":
 		return escapeMathText(n.Text)
+	case "oMathPara":
+		return renderMathPara(n)
 	case "f":
 		return renderFraction(n)
 	case "d":
@@ -262,6 +264,24 @@ func renderNary(n *ommlNode) string {
 	}
 	b.WriteString(renderOMML(child(n, "e")))
 	return b.String()
+}
+
+// renderMathPara renders an m:oMathPara, which groups one or more m:oMath
+// siblings that each represent a separate equation stacked in the same math
+// paragraph (e.g. a set of related formulas listed together). A single child
+// renders as-is; multiple children are wrapped in a "gathered" environment so
+// each equation lands on its own line instead of concatenating into one run
+// of LaTeX (see issue #53).
+func renderMathPara(n *ommlNode) string {
+	lines := children(n, "oMath")
+	if len(lines) <= 1 {
+		return renderChildren(n)
+	}
+	parts := make([]string, len(lines))
+	for i, c := range lines {
+		parts[i] = renderOMML(c)
+	}
+	return "\\begin{gathered} " + strings.Join(parts, " \\\\ ") + " \\end{gathered}"
 }
 
 func renderMatrix(n *ommlNode) string {
