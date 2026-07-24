@@ -20,6 +20,8 @@ type Spec struct {
 
 type Section struct {
 	SpecID       string `json:"spec_id"`
+	Version      string `json:"version,omitempty"`
+	Release      string `json:"release,omitempty"`
 	Number       string `json:"number"`
 	Title        string `json:"title"`
 	Level        int    `json:"level"`
@@ -29,6 +31,8 @@ type Section struct {
 
 type SearchResult struct {
 	SpecID  string `json:"spec_id"`
+	Version string `json:"version,omitempty"`
+	Release string `json:"release,omitempty"`
 	Number  string `json:"number"`
 	Title   string `json:"title"`
 	Snippet string `json:"snippet"`
@@ -470,7 +474,7 @@ func (d *DB) ListSpecs(series, query string, limit, offset int) (*ListSpecsResul
 
 func (d *DB) GetTOC(specID string) ([]Section, error) {
 	rows, err := d.conn.Query(
-		"SELECT spec_id, number, title, level, COALESCE(parent_number, '') FROM sections WHERE spec_id = ? ORDER BY id",
+		"SELECT s.spec_id, s.number, s.title, s.level, COALESCE(s.parent_number, ''), COALESCE(p.version, ''), COALESCE(p.release, '') FROM sections s LEFT JOIN specs p ON p.id = s.spec_id WHERE s.spec_id = ? ORDER BY s.id",
 		specID,
 	)
 	if err != nil {
@@ -481,7 +485,7 @@ func (d *DB) GetTOC(specID string) ([]Section, error) {
 	var sections []Section
 	for rows.Next() {
 		var s Section
-		if err := rows.Scan(&s.SpecID, &s.Number, &s.Title, &s.Level, &s.ParentNumber); err != nil {
+		if err := rows.Scan(&s.SpecID, &s.Number, &s.Title, &s.Level, &s.ParentNumber, &s.Version, &s.Release); err != nil {
 			return nil, fmt.Errorf("scan section: %w", err)
 		}
 		sections = append(sections, s)
@@ -534,12 +538,12 @@ func (d *DB) GetSection(specID, number string, includeSubsections bool) ([]Secti
 
 	if includeSubsections {
 		rows, err = d.conn.Query(
-			"SELECT spec_id, number, title, level, COALESCE(parent_number, ''), content FROM sections WHERE spec_id = ? AND (number = ? OR number LIKE ? || '.%') ORDER BY id",
+			"SELECT s.spec_id, s.number, s.title, s.level, COALESCE(s.parent_number, ''), s.content, COALESCE(p.version, ''), COALESCE(p.release, '') FROM sections s LEFT JOIN specs p ON p.id = s.spec_id WHERE s.spec_id = ? AND (s.number = ? OR s.number LIKE ? || '.%') ORDER BY s.id",
 			specID, number, number,
 		)
 	} else {
 		rows, err = d.conn.Query(
-			"SELECT spec_id, number, title, level, COALESCE(parent_number, ''), content FROM sections WHERE spec_id = ? AND number = ?",
+			"SELECT s.spec_id, s.number, s.title, s.level, COALESCE(s.parent_number, ''), s.content, COALESCE(p.version, ''), COALESCE(p.release, '') FROM sections s LEFT JOIN specs p ON p.id = s.spec_id WHERE s.spec_id = ? AND s.number = ?",
 			specID, number,
 		)
 	}
@@ -551,7 +555,7 @@ func (d *DB) GetSection(specID, number string, includeSubsections bool) ([]Secti
 	var sections []Section
 	for rows.Next() {
 		var s Section
-		if err := rows.Scan(&s.SpecID, &s.Number, &s.Title, &s.Level, &s.ParentNumber, &s.Content); err != nil {
+		if err := rows.Scan(&s.SpecID, &s.Number, &s.Title, &s.Level, &s.ParentNumber, &s.Content, &s.Version, &s.Release); err != nil {
 			return nil, fmt.Errorf("scan section: %w", err)
 		}
 		sections = append(sections, s)
@@ -778,7 +782,7 @@ func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, 
 
 	query = sanitizeFTS5Query(query)
 
-	sqlQuery := "SELECT spec_id, number, title, snippet(sections_fts, 3, '<mark>', '</mark>', '...', 32) FROM sections_fts WHERE sections_fts MATCH ?"
+	sqlQuery := "SELECT sections_fts.spec_id, sections_fts.number, sections_fts.title, snippet(sections_fts, 3, '<mark>', '</mark>', '...', 32), COALESCE(specs.version, ''), COALESCE(specs.release, '') FROM sections_fts LEFT JOIN specs ON specs.id = sections_fts.spec_id WHERE sections_fts MATCH ?"
 	args := []any{query}
 
 	if len(specIDs) > 0 {
@@ -787,12 +791,12 @@ func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, 
 		// "TS dd.ddd(-d)?" form, so this can't false-positive-match unrelated specs.
 		conds := make([]string, len(specIDs))
 		for i, id := range specIDs {
-			conds[i] = "spec_id = ? OR spec_id LIKE ? ESCAPE '\\'"
+			conds[i] = "sections_fts.spec_id = ? OR sections_fts.spec_id LIKE ? ESCAPE '\\'"
 			args = append(args, id, escapeLikePattern(id)+"-%")
 		}
 		sqlQuery += " AND (" + strings.Join(conds, " OR ") + ")"
 	}
-	sqlQuery += " ORDER BY rank LIMIT ?"
+	sqlQuery += " ORDER BY sections_fts.rank LIMIT ?"
 	args = append(args, limit)
 
 	rows, err := d.conn.Query(sqlQuery, args...)
@@ -804,7 +808,7 @@ func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, 
 	var results []SearchResult
 	for rows.Next() {
 		var r SearchResult
-		if err := rows.Scan(&r.SpecID, &r.Number, &r.Title, &r.Snippet); err != nil {
+		if err := rows.Scan(&r.SpecID, &r.Number, &r.Title, &r.Snippet, &r.Version, &r.Release); err != nil {
 			return nil, fmt.Errorf("scan search result: %w", err)
 		}
 		results = append(results, r)

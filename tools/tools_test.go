@@ -85,6 +85,9 @@ func TestHandleGetTOC(t *testing.T) {
 		if !strings.Contains(text, "Table of Contents") {
 			t.Errorf("expected TOC header, got: %s", text)
 		}
+		if !strings.Contains(text, "# TS 23.501 v18.6.0 (Rel-18) - Table of Contents") {
+			t.Errorf("expected version/release in TOC header, got: %s", text)
+		}
 		if !strings.Contains(text, "5.1 General") {
 			t.Errorf("expected section 5.1, got: %s", text)
 		}
@@ -156,6 +159,9 @@ func TestHandleGetSection(t *testing.T) {
 		if !strings.Contains(text, "system architecture") {
 			t.Errorf("expected section content, got: %s", text)
 		}
+		if !strings.HasPrefix(text, "[Source: TS 23.501 v18.6.0 (Rel-18) — Section 1]") {
+			t.Errorf("expected source header on first line, got: %s", text)
+		}
 	})
 
 	t.Run("pagination", func(t *testing.T) {
@@ -170,6 +176,58 @@ func TestHandleGetSection(t *testing.T) {
 		text := getTextContent(result)
 		if !strings.Contains(text, "Truncated") {
 			t.Errorf("expected truncation notice, got: %s", text)
+		}
+	})
+
+	t.Run("source header survives on later pages", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetSectionInput{
+			SpecID:        "TS 23.501",
+			SectionNumber: "5",
+			Offset:        1,
+			MaxLines:      1,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.HasPrefix(text, "[Source: TS 23.501 v18.6.0 (Rel-18) — Section 5]") {
+			t.Errorf("expected source header on page 2, got: %s", text)
+		}
+		if !strings.Contains(text, "[Lines 2-") {
+			t.Errorf("expected pagination to start at line 2, got: %s", text)
+		}
+	})
+
+	t.Run("source header survives past end of content", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetSectionInput{
+			SpecID:        "TS 23.501",
+			SectionNumber: "5",
+			Offset:        10000,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.HasPrefix(text, "[Source: TS 23.501 v18.6.0 (Rel-18) — Section 5]") {
+			t.Errorf("expected source header before no-content notice, got: %s", text)
+		}
+		if !strings.Contains(text, "No content at offset") {
+			t.Errorf("expected no-content notice, got: %s", text)
+		}
+	})
+
+	t.Run("subsections are flagged in source header", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetSectionInput{
+			SpecID:             "TS 23.501",
+			SectionNumber:      "5",
+			IncludeSubsections: true,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.HasPrefix(text, "[Source: TS 23.501 v18.6.0 (Rel-18) — Section 5 (+subsections)]") {
+			t.Errorf("expected subsections marker in source header, got: %s", text)
 		}
 	})
 
@@ -239,8 +297,9 @@ func TestHandleGetSection(t *testing.T) {
 		if !strings.Contains(text, "IE body.") {
 			t.Errorf("expected section content, got: %s", text)
 		}
-		if strings.Count(text, "MRB-Identity") != 1 {
-			t.Errorf("expected title to appear exactly once, got: %s", text)
+		// Once in the source header, once in the content heading.
+		if strings.Count(text, "MRB-Identity") != 2 {
+			t.Errorf("expected title in source header and content only, got: %s", text)
 		}
 	})
 }
@@ -270,6 +329,9 @@ func TestHandleSearch(t *testing.T) {
 		text := getTextContent(result)
 		if !strings.Contains(text, "TS 23.501") {
 			t.Errorf("expected search result for TS 23.501, got: %s", text)
+		}
+		if !strings.Contains(text, `"version": "18.6.0"`) || !strings.Contains(text, `"release": "Rel-18"`) {
+			t.Errorf("expected version/release in search results, got: %s", text)
 		}
 	})
 }

@@ -22,6 +22,16 @@ func errorResult(text string) *mcp.CallToolResult {
 	}
 }
 
+// prependLine prefixes the text content of a single-TextContent result with a
+// header line, outside of pagination: line offsets and the [Lines a-b of N]
+// markers are unaffected, so the header survives on every page.
+func prependLine(header string, res *mcp.CallToolResult) *mcp.CallToolResult {
+	if tc, ok := res.Content[0].(*mcp.TextContent); ok && header != "" {
+		tc.Text = header + "\n" + tc.Text
+	}
+	return res
+}
+
 func paginateText(content string, offset, maxLines, maxChars int) *mcp.CallToolResult {
 	lines := strings.Split(content, "\n")
 	totalLines := len(lines)

@@ -239,6 +239,9 @@ func TestGetTOC(t *testing.T) {
 		if sections[0].Number != "1" || sections[0].Title != "Scope" {
 			t.Errorf("unexpected first section: %+v", sections[0])
 		}
+		if sections[0].Version != "18.6.0" || sections[0].Release != "Rel-18" {
+			t.Errorf("expected version 18.6.0 / release Rel-18, got %+v", sections[0])
+		}
 	})
 
 	t.Run("nonexistent spec", func(t *testing.T) {
@@ -265,6 +268,9 @@ func TestGetSection(t *testing.T) {
 		}
 		if sections[0].Content == "" {
 			t.Error("expected non-empty content")
+		}
+		if sections[0].Version != "18.6.0" || sections[0].Release != "Rel-18" {
+			t.Errorf("expected version 18.6.0 / release Rel-18, got %+v", sections[0])
 		}
 	})
 
@@ -418,6 +424,9 @@ func TestSearch(t *testing.T) {
 		if results[0].SpecID != "TS 29.510" {
 			t.Errorf("expected spec_id 'TS 29.510', got %q", results[0].SpecID)
 		}
+		if results[0].Version != "18.5.0" || results[0].Release != "Rel-18" {
+			t.Errorf("expected version 18.5.0 / release Rel-18, got %+v", results[0])
+		}
 	})
 
 	t.Run("search with multiple spec filter", func(t *testing.T) {
@@ -455,6 +464,10 @@ This document covers IMS-AKA and sec-agree mechanisms.');`)
 		}
 		if len(results) == 0 {
 			t.Error("expected at least 1 result for IMS-AKA")
+		}
+		// TS 33.203 was inserted without version/release: NULL must scan as "".
+		if results[0].Version != "" || results[0].Release != "" {
+			t.Errorf("expected empty version/release for spec without them, got %+v", results[0])
 		}
 	})
 

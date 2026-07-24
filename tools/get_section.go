@@ -51,6 +51,24 @@ func HandleGetSection(d *db.DB) func(ctx context.Context, req *mcp.CallToolReque
 			full.WriteString("\n\n")
 		}
 
-		return paginateText(full.String(), input.Offset, input.MaxLines, input.MaxChars), nil, nil
+		res := paginateText(full.String(), input.Offset, input.MaxLines, input.MaxChars)
+		return prependLine(sourceHeader(sections[0], input.IncludeSubsections && len(sections) > 1), res), nil, nil
 	}
+}
+
+// sourceHeader builds the provenance line prepended to every get_section page,
+// e.g. "[Source: TS 23.501 v18.6.0 (Rel-18) — Section 5.1]".
+func sourceHeader(s db.Section, withSubsections bool) string {
+	src := s.SpecID
+	if s.Version != "" {
+		src += " v" + s.Version
+	}
+	if s.Release != "" {
+		src += " (" + s.Release + ")"
+	}
+	h := fmt.Sprintf("[Source: %s — Section %s", src, s.Number)
+	if withSubsections {
+		h += " (+subsections)"
+	}
+	return h + "]"
 }
