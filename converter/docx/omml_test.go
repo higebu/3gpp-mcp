@@ -189,6 +189,21 @@ func TestOMMLToLaTeX(t *testing.T) {
 			want: "",
 		},
 		{
+			name: "oMathPara with single equation renders unwrapped",
+			xml: `<m:oMathPara ` + mXMLNS + `><m:oMath>` + mrun("x=1") +
+				`</m:oMath></m:oMathPara>`,
+			want: "x=1",
+		},
+		{
+			name: "oMathPara with multiple equations separates each line",
+			xml: `<m:oMathPara ` + mXMLNS + `>` +
+				`<m:oMath>` + mrun("a=1") + `</m:oMath>` +
+				`<m:oMath>` + mrun("b=2") + `</m:oMath>` +
+				`<m:oMath>` + mrun("c=3") + `</m:oMath>` +
+				`</m:oMathPara>`,
+			want: "\\begin{gathered} a=1 \\\\ b=2 \\\\ c=3 \\end{gathered}",
+		},
+		{
 			name: "greek and relation symbols",
 			xml:  `<m:oMath ` + mXMLNS + `>` + mrun("α≤β") + `</m:oMath>`,
 			want: "\\alpha \\leq \\beta",
