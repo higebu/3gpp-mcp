@@ -310,6 +310,44 @@ func TestCmdConvertDir_HappyPath(t *testing.T) {
 	}
 }
 
+// TestCmdConvert_OptionsAfterPath exercises the os.Exit(1) path taken when a
+// flag is placed after <docx-file>. Go's flag package stops parsing at the
+// first non-flag argument, so a trailing flag like --convert-image would
+// otherwise be silently ignored instead of applied (#57).
+func TestCmdConvert_OptionsAfterPath(t *testing.T) {
+	if os.Getenv("CMD_CONVERT_OPTIONS_AFTER_PATH_HELPER") == "1" {
+		cmdConvert([]string{"some.docx", "-convert-image"})
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestCmdConvert_OptionsAfterPath")
+	cmd.Env = append(os.Environ(), "CMD_CONVERT_OPTIONS_AFTER_PATH_HELPER=1")
+	stderr, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("expected non-zero exit when an option follows <docx-file>")
+	}
+	if !strings.Contains(string(stderr), "Options must come before <docx-file>") {
+		t.Errorf("expected stderr to explain option order, got: %s", stderr)
+	}
+}
+
+// TestCmdConvertDir_OptionsAfterPath is the import-dir counterpart of
+// TestCmdConvert_OptionsAfterPath (#57).
+func TestCmdConvertDir_OptionsAfterPath(t *testing.T) {
+	if os.Getenv("CMD_CONVERT_DIR_OPTIONS_AFTER_PATH_HELPER") == "1" {
+		cmdConvertDir([]string{"./specs", "-convert-image"})
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestCmdConvertDir_OptionsAfterPath")
+	cmd.Env = append(os.Environ(), "CMD_CONVERT_DIR_OPTIONS_AFTER_PATH_HELPER=1")
+	stderr, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("expected non-zero exit when an option follows <directory>")
+	}
+	if !strings.Contains(string(stderr), "Options must come before <directory>") {
+		t.Errorf("expected stderr to explain option order, got: %s", stderr)
+	}
+}
+
 // TestCmdDownload_NoMatch verifies cmdDownload cleanly returns when the spec
 // list yields zero specs after filtering (exercises flag parsing, resolveSpecs
 // file-load branch, and the early return path).

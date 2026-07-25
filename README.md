@@ -397,6 +397,8 @@ Import a single `.docx` file into the database. Alias: `convert`.
 
 Usage: `3gpp-mcp import --db data/3gpp.db path/to/spec.docx`
 
+Flags must come before the file path; anything after it is treated as a positional argument, not an option.
+
 ### `import-dir`
 
 Import all `.docx` files in a directory into the database. Alias: `convert-dir`.
@@ -408,6 +410,8 @@ Import all `.docx` files in a directory into the database. Alias: `convert-dir`.
 | `--convert-image` | Convert EMF/WMF images to PNG using LibreOffice | `false` |
 
 Usage: `3gpp-mcp import-dir --db data/3gpp.db ./specs`
+
+Flags must come before the directory path; anything after it is treated as a positional argument, not an option.
 
 ### `update`
 
