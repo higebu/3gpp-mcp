@@ -5,6 +5,9 @@
     <aside class="toc-sidebar" id="toc-sidebar">
         <div class="toc-header">
             <h3>{{.Spec.ID}}</h3>
+            {{if .Spec.Version}}
+            <p class="toc-version">v{{.Spec.Version}}{{with releaseLabel .Spec.Release}} ({{.}}){{end}}</p>
+            {{end}}
         </div>
         <nav class="toc-nav">
             <ul class="toc-list">
@@ -32,6 +35,10 @@
 
     <div class="section-content">
         {{template "section-nav" .}}
+
+        {{if .Spec.Version}}
+        <p class="section-source">Source: {{.Spec.ID}} v{{.Spec.Version}}{{with releaseLabel .Spec.Release}} ({{.}}){{end}}</p>
+        {{end}}
 
         {{range .Sections}}
         <article class="section">

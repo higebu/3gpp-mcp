@@ -256,6 +256,9 @@ func TestHandleSpec(t *testing.T) {
 	if !strings.Contains(body, `name="spec_id" value="TS 23.501"`) {
 		t.Errorf("expected navbar search to be pre-filled with the current spec ID, got:\n%s", body)
 	}
+	if !strings.Contains(body, `<p class="toc-version">v18.6.0 (Rel-18)</p>`) {
+		t.Errorf("expected the TOC header to name the spec version, got:\n%s", body)
+	}
 }
 
 func TestHandleSection(t *testing.T) {
@@ -274,6 +277,11 @@ func TestHandleSection(t *testing.T) {
 	body := readBody(t, resp)
 	if !strings.Contains(body, "General") {
 		t.Error("should contain section title 'General'")
+	}
+	// The reader must be able to tell which version the text came from,
+	// matching the "[Source: ...]" line the get_section MCP tool prepends.
+	if !strings.Contains(body, "Source: TS 23.501 v18.6.0 (Rel-18)") {
+		t.Errorf("expected the section to name its spec version, got:\n%s", body)
 	}
 }
 

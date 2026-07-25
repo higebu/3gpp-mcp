@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/specver"
 )
 
 type handler struct {
@@ -92,6 +93,9 @@ func (h *handler) initTemplates() {
 			return "/specs/" + url.PathEscape(specID) + "/sections/" + number
 		},
 		"refURL": refURL,
+		// releaseLabel renders a bare release number as "Rel-18"; anything else
+		// is shown unchanged.
+		"releaseLabel": specver.ReleaseLabel,
 		"add": func(a, b int) int {
 			return a + b
 		},
@@ -206,7 +210,9 @@ func (h *handler) renderSpecPage(w http.ResponseWriter, specID, number string) {
 	prev, next := adjacentSections(toc, number)
 
 	data := specData{
-		Spec:       &db.Spec{ID: specID},
+		// GetTOC already joined the version and release of the spec being
+		// viewed, so the header can name them without a second query.
+		Spec:       &db.Spec{ID: specID, Version: toc[0].Version, Release: toc[0].Release},
 		TOC:        toc,
 		Sections:   rendered,
 		Current:    number,

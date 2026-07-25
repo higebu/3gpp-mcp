@@ -359,6 +359,20 @@ mark {
     font-weight: 600;
 }
 
+.toc-version {
+    margin-top: 2px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+/* Names the exact version the text below came from, matching the
+   "[Source: ...]" line the MCP get_section tool prepends. */
+.section-source {
+    margin-bottom: 12px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
 .toc-nav {
     padding: 8px 0;
 }
