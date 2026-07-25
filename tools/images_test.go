@@ -14,6 +14,7 @@ func seedImages(t *testing.T, d *db.DB) {
 	images := []db.Image{
 		{
 			SpecID:      "TS 23.501",
+			Version:     "18.6.0",
 			Name:        "image1.png",
 			MIMEType:    "image/png",
 			Data:        []byte("\x89PNG\r\n\x1a\nfake-png-data"),
@@ -21,6 +22,7 @@ func seedImages(t *testing.T, d *db.DB) {
 		},
 		{
 			SpecID:      "TS 23.501",
+			Version:     "18.6.0",
 			Name:        "image2.emf",
 			MIMEType:    "image/x-emf",
 			Data:        []byte("fake-emf-data"),
@@ -28,6 +30,7 @@ func seedImages(t *testing.T, d *db.DB) {
 		},
 		{
 			SpecID:      "TS 29.510",
+			Version:     "18.5.0",
 			Name:        "diagram.png",
 			MIMEType:    "image/png",
 			Data:        []byte("\x89PNG\r\n\x1a\nother-spec-data"),
@@ -102,9 +105,9 @@ func TestHandleListImages(t *testing.T) {
 	})
 
 	t.Run("family spec id with multiple parts", func(t *testing.T) {
-		if err := d.ExecScript(`INSERT INTO specs (id, title, version, release, series) VALUES
-    ('TS 38.101-1', 'Part 1', '18.6.0', 'Rel-18', '38'),
-    ('TS 38.101-2', 'Part 2', '18.6.0', 'Rel-18', '38');`); err != nil {
+		if err := d.ExecScript(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+    ('TS 38.101-1', '18.6.0', 'i60', 'Part 1', '18', '38'),
+    ('TS 38.101-2', '18.6.0', 'i60', 'Part 2', '18', '38');`); err != nil {
 			t.Fatalf("failed to insert test data: %v", err)
 		}
 
