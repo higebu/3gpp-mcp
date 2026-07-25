@@ -220,8 +220,11 @@ func cmdConvert(args []string) {
 	convertImage := fs.Bool("convert-image", false, "Convert EMF/WMF images to PNG using LibreOffice (requires soffice)")
 	_ = fs.Parse(args)
 
-	if fs.NArg() < 1 {
+	// flag stops parsing at the first non-flag argument, so any option placed
+	// after <docx-file> is silently left in fs.Args() instead of being applied.
+	if fs.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "Usage: 3gpp-mcp import [options] <docx-file>")
+		fmt.Fprintln(os.Stderr, "Options must come before <docx-file>.")
 		os.Exit(1)
 	}
 	docxPath := fs.Arg(0)
@@ -253,8 +256,11 @@ func cmdConvertDir(args []string) {
 	convertImage := fs.Bool("convert-image", false, "Convert EMF/WMF images to PNG using LibreOffice (requires soffice)")
 	_ = fs.Parse(args)
 
-	if fs.NArg() < 1 {
+	// flag stops parsing at the first non-flag argument, so any option placed
+	// after <directory> is silently left in fs.Args() instead of being applied.
+	if fs.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "Usage: 3gpp-mcp import-dir [options] <directory>")
+		fmt.Fprintln(os.Stderr, "Options must come before <directory>.")
 		os.Exit(1)
 	}
 	dirPath := fs.Arg(0)
