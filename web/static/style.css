@@ -270,7 +270,10 @@ mark {
     background: var(--bg-secondary);
     font-weight: 600;
     position: sticky;
-    top: 48px;
+    /* Sticks to .table-responsive, not the viewport: an overflow container is
+       the sticky containing block. Offsetting by the navbar height pushed the
+       header down over the first row, hiding it. */
+    top: 0;
 }
 
 .specs-table tbody tr:hover {
