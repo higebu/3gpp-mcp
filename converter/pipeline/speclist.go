@@ -164,8 +164,15 @@ func FetchSpecZips(ctx context.Context, client *http.Client, specID string, useC
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
 
-	// Normalize: "23.501" -> series "23", spec dir "23.501"
-	normalized := specID
+	// Normalize: "TS 23.501" or "23501" -> series "23", spec dir "23.501".
+	// Callers hand over IDs in either the archive form or the database form.
+	normalized := strings.TrimSpace(specID)
+	for _, prefix := range []string{"TS ", "TR ", "ts ", "tr "} {
+		if rest, ok := strings.CutPrefix(normalized, prefix); ok {
+			normalized = strings.TrimSpace(rest)
+			break
+		}
+	}
 	if !strings.Contains(normalized, ".") && len(normalized) >= 4 {
 		// "23501" -> "23.501"
 		normalized = normalized[:2] + "." + normalized[2:]
