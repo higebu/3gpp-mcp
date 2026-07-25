@@ -11,12 +11,15 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/higebu/3gpp-mcp/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/specver"
 	"github.com/higebu/3gpp-mcp/tools"
+	"github.com/higebu/3gpp-mcp/versionstore"
 	"github.com/higebu/3gpp-mcp/web"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -74,6 +77,29 @@ func main() {
 	}
 }
 
+// defaultVersionCacheMB reads the version cache limit from the environment,
+// falling back to the versionstore default.
+func defaultVersionCacheMB() int64 {
+	if v := os.Getenv("THREEGPP_VERSION_CACHE_MB"); v != "" {
+		if mb, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return mb
+		}
+		log.Printf("WARNING: ignoring invalid THREEGPP_VERSION_CACHE_MB=%q", v)
+	}
+	return versionstore.DefaultLimitBytes >> 20
+}
+
+// defaultFetchBudget reads the on-demand fetch budget from the environment.
+func defaultFetchBudget() time.Duration {
+	if v := os.Getenv("THREEGPP_FETCH_BUDGET"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+		log.Printf("WARNING: ignoring invalid THREEGPP_FETCH_BUDGET=%q", v)
+	}
+	return versionstore.DefaultBudget
+}
+
 func cmdServe(args []string) {
 	defaultTransport := "stdio"
 	if v := os.Getenv("THREEGPP_MCP_TRANSPORT"); v != "" {
@@ -96,6 +122,10 @@ func cmdServe(args []string) {
 	addr := fs.String("addr", defaultAddr, "HTTP listen address (env: THREEGPP_MCP_ADDR, or PORT)")
 	bearerToken := fs.String("bearer-token", "", "Bearer token for HTTP auth (env: THREEGPP_MCP_BEARER_TOKEN)")
 	enableWeb := fs.Bool("web", false, "Enable web viewer alongside MCP server (HTTP transport only)")
+	noFetch := fs.Bool("no-fetch", false, "Disable on-demand fetching of spec versions that are not in the database")
+	versionCache := fs.String("version-cache", "", "Path to the on-demand version cache (default: $XDG_CACHE_HOME/3gpp-mcp/versions.db)")
+	versionCacheMB := fs.Int64("version-cache-mb", defaultVersionCacheMB(), "Size limit of the version cache in MB, or -1 for unlimited (env: THREEGPP_VERSION_CACHE_MB)")
+	fetchBudget := fs.Duration("fetch-budget", defaultFetchBudget(), "How long a tool call waits for an on-demand fetch before asking the caller to retry (env: THREEGPP_FETCH_BUDGET)")
 	_ = fs.Parse(args)
 
 	// Environment variable takes precedence if flag is not set
@@ -109,16 +139,36 @@ func cmdServe(args []string) {
 	}
 	defer d.Close()
 
+	src := tools.NewSource(d)
+	src.Budget = *fetchBudget
+	if !*noFetch {
+		// A read-only or ephemeral filesystem — a scratch container image, for
+		// instance — cannot hold the cache. That disables past-version reads but
+		// leaves everything else working, so it is a warning, not a failure.
+		store, err := versionstore.Open(versionstore.Options{
+			Path:       *versionCache,
+			LimitBytes: *versionCacheMB << 20,
+		})
+		if err != nil {
+			log.Printf("WARNING: on-demand version fetching disabled: %v", err)
+		} else {
+			defer store.Close()
+			src.Store = store
+		}
+	}
+
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    "3gpp-mcp",
 		Version: version,
 	}, &mcp.ServerOptions{
-		Instructions: "3GPP specification server. Use list_specs to find specifications, get_toc to browse structure, get_section to read specification document text (architecture, procedures, requirements), and search to find relevant sections. Use get_references to explore cross-references between specifications (outgoing: what a section references; incoming: what references a spec). For 5G API details (HTTP methods, request/response bodies, paths, schemas, data models) from TS 29.xxx series, use list_openapi to discover APIs and get_openapi to read their OpenAPI definitions. Always prefer get_openapi over get_section when looking up API request/response formats or data type definitions.",
+		Instructions: "3GPP specification server. Use list_specs to find specifications, get_toc to browse structure, get_section to read specification document text (architecture, procedures, requirements), and search to find relevant sections. Use get_references to explore cross-references between specifications (outgoing: what a section references; incoming: what references a spec). For 5G API details (HTTP methods, request/response bodies, paths, schemas, data models) from TS 29.xxx series, use list_openapi to discover APIs and get_openapi to read their OpenAPI definitions. Always prefer get_openapi over get_section when looking up API request/response formats or data type definitions.\n\n" +
+			"Versions: the database holds one version per specification, and every get_section, get_toc and search result names the specification and version it came from. To compare a procedure across releases, call list_versions to see which versions exist, then pass version to get_section or get_toc. A version that is not in the database is downloaded and converted on first use, which takes up to a few minutes for a large specification; when that happens the tool says so and you should call it again with the same arguments. Section numbers move between releases, so check get_toc for the older version before reading a section of it. search only covers the version in the database, and get_image and get_references only have data for that version, so an archived version returns text alone.",
 	})
 
 	mcp.AddTool(s, tools.ListSpecsTool, tools.HandleListSpecs(d))
-	mcp.AddTool(s, tools.GetTOCTool, tools.HandleGetTOC(d))
-	mcp.AddTool(s, tools.GetSectionTool, tools.HandleGetSection(d))
+	mcp.AddTool(s, tools.ListVersionsTool, tools.HandleListVersions(src))
+	mcp.AddTool(s, tools.GetTOCTool, tools.HandleGetTOC(src))
+	mcp.AddTool(s, tools.GetSectionTool, tools.HandleGetSection(src))
 	mcp.AddTool(s, tools.SearchTool, tools.HandleSearch(d))
 	mcp.AddTool(s, tools.ListOpenAPITool, tools.HandleListOpenAPI(d))
 	mcp.AddTool(s, tools.GetOpenAPITool, tools.HandleGetOpenAPI(d))
@@ -503,8 +553,13 @@ func cmdUpdate(args []string) {
 		if !ok {
 			continue
 		}
-		newVer := pipeline.SpecVersionString(sv)
-		if pipeline.IsNewerVersion(newVer, oldVer) {
+		// Stored versions are the dotted form, so compare in that form rather
+		// than on the archive token.
+		newVer, ok := specver.TokenToDotted(pipeline.SpecVersionString(sv))
+		if !ok {
+			continue
+		}
+		if specver.Compare(newVer, oldVer) > 0 {
 			fmt.Printf("  %s: %s -> %s\n", sv.SpecID, oldVer, newVer)
 			updates = append(updates, sv)
 		}
@@ -522,6 +577,13 @@ func cmdUpdate(args []string) {
 	if err != nil {
 		_ = os.Remove(newPath)
 		log.Fatalf("Failed to open working copy: %v", err)
+	}
+	// VACUUM INTO copies whatever schema the live database has, which may
+	// predate the current binary.
+	if err := d.InitSchema(); err != nil {
+		_ = d.Close()
+		_ = os.Remove(newPath)
+		log.Fatalf("Failed to initialize working copy schema: %v", err)
 	}
 
 	p := &pipeline.Pipeline{

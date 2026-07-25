@@ -4,10 +4,14 @@ import "regexp"
 
 // SpecMetadata holds metadata extracted from a 3GPP specification document.
 type SpecMetadata struct {
-	SpecID  string // e.g., "TS 23.501"
-	Title   string
-	Version string // e.g., "k10" or "18.6.0"
-	Release string // e.g., "19"
+	SpecID string // e.g., "TS 23.501"
+	Title  string
+	// Version is the canonical dotted form, e.g. "18.6.0".
+	Version string
+	// VersionToken is the base-36 archive form, e.g. "i60". It is empty when
+	// the dotted version has a component that no single base-36 digit holds.
+	VersionToken string
+	Release      string // e.g., "19"
 }
 
 // Series extracts the series number from the spec ID (e.g., "23" from "TS 23.501").

@@ -128,8 +128,8 @@ func TestParseDocx(t *testing.T) {
 		t.Errorf("Series = %q, want %q", metadata.Series(), "23")
 	}
 	// Version comes from filename (i20), matching Python behavior
-	if metadata.Version != "i20" {
-		t.Errorf("Version = %q, want %q", metadata.Version, "i20")
+	if metadata.Version != "18.2.0" {
+		t.Errorf("Version = %q, want %q", metadata.Version, "18.2.0")
 	}
 	if metadata.Release != "18" {
 		t.Errorf("Release = %q, want %q", metadata.Release, "18")
@@ -273,8 +273,8 @@ func TestParseDocx_26274(t *testing.T) {
 	if metadata.Series() != "26" {
 		t.Errorf("Series = %q, want %q", metadata.Series(), "26")
 	}
-	if metadata.Version != "j00" {
-		t.Errorf("Version = %q, want %q", metadata.Version, "j00")
+	if metadata.Version != "19.0.0" {
+		t.Errorf("Version = %q, want %q", metadata.Version, "19.0.0")
 	}
 	if metadata.Release != "19" {
 		t.Errorf("Release = %q, want %q", metadata.Release, "19")
@@ -346,8 +346,8 @@ func TestParseDocx_22839(t *testing.T) {
 	if metadata.SpecID != "TS 22.839" {
 		t.Errorf("SpecID = %q, want %q", metadata.SpecID, "TS 22.839")
 	}
-	if metadata.Version != "i10" {
-		t.Errorf("Version = %q, want %q", metadata.Version, "i10")
+	if metadata.Version != "18.1.0" {
+		t.Errorf("Version = %q, want %q", metadata.Version, "18.1.0")
 	}
 	if metadata.Release != "18" {
 		t.Errorf("Release = %q, want %q", metadata.Release, "18")

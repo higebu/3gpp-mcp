@@ -74,7 +74,7 @@ func TestHandleListSpecs(t *testing.T) {
 
 func TestHandleGetTOC(t *testing.T) {
 	d := setupTestDB(t)
-	handler := HandleGetTOC(d)
+	handler := HandleGetTOC(NewSource(d))
 
 	t.Run("valid spec", func(t *testing.T) {
 		result, _, err := handler(context.Background(), nil, GetTOCInput{SpecID: "TS 23.501"})
@@ -104,9 +104,9 @@ func TestHandleGetTOC(t *testing.T) {
 	})
 
 	t.Run("family spec id with multiple parts", func(t *testing.T) {
-		if err := d.ExecScript(`INSERT INTO specs (id, title, version, release, series) VALUES
-    ('TS 38.101-1', 'Part 1', '18.6.0', 'Rel-18', '38'),
-    ('TS 38.101-2', 'Part 2', '18.6.0', 'Rel-18', '38');`); err != nil {
+		if err := d.ExecScript(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+    ('TS 38.101-1', '18.6.0', 'i60', 'Part 1', '18', '38'),
+    ('TS 38.101-2', '18.6.0', 'i60', 'Part 2', '18', '38');`); err != nil {
 			t.Fatalf("failed to insert test data: %v", err)
 		}
 
@@ -121,8 +121,8 @@ func TestHandleGetTOC(t *testing.T) {
 	})
 
 	t.Run("section with no real number is not duplicated", func(t *testing.T) {
-		if err := d.ExecScript(`INSERT INTO sections (spec_id, number, title, level, parent_number, content) VALUES
-    ('TS 23.501', 'MRB-Identity', 'MRB-Identity', 2, '5', 'IE body.');`); err != nil {
+		if err := d.ExecScript(`INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES
+    ('TS 23.501', '18.6.0', 'MRB-Identity', 'MRB-Identity', 2, '5', 'IE body.');`); err != nil {
 			t.Fatalf("failed to insert test data: %v", err)
 		}
 
@@ -142,7 +142,7 @@ func TestHandleGetTOC(t *testing.T) {
 
 func TestHandleGetSection(t *testing.T) {
 	d := setupTestDB(t)
-	handler := HandleGetSection(d)
+	handler := HandleGetSection(NewSource(d))
 
 	t.Run("valid section", func(t *testing.T) {
 		result, _, err := handler(context.Background(), nil, GetSectionInput{
@@ -258,9 +258,9 @@ func TestHandleGetSection(t *testing.T) {
 	})
 
 	t.Run("family spec id with multiple parts", func(t *testing.T) {
-		if err := d.ExecScript(`INSERT INTO specs (id, title, version, release, series) VALUES
-    ('TS 38.101-1', 'Part 1', '18.6.0', 'Rel-18', '38'),
-    ('TS 38.101-2', 'Part 2', '18.6.0', 'Rel-18', '38');`); err != nil {
+		if err := d.ExecScript(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+    ('TS 38.101-1', '18.6.0', 'i60', 'Part 1', '18', '38'),
+    ('TS 38.101-2', '18.6.0', 'i60', 'Part 2', '18', '38');`); err != nil {
 			t.Fatalf("failed to insert test data: %v", err)
 		}
 
@@ -278,8 +278,8 @@ func TestHandleGetSection(t *testing.T) {
 	})
 
 	t.Run("unnumbered heading looked up by title as section_number", func(t *testing.T) {
-		if err := d.ExecScript(`INSERT INTO sections (spec_id, number, title, level, parent_number, content) VALUES
-    ('TS 23.501', 'MRB-Identity', 'MRB-Identity', 2, '5', '### MRB-Identity` + "\n\n" + `IE body.');`); err != nil {
+		if err := d.ExecScript(`INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES
+    ('TS 23.501', '18.6.0', 'MRB-Identity', 'MRB-Identity', 2, '5', '### MRB-Identity` + "\n\n" + `IE body.');`); err != nil {
 			t.Fatalf("failed to insert test data: %v", err)
 		}
 
@@ -330,7 +330,7 @@ func TestHandleSearch(t *testing.T) {
 		if !strings.Contains(text, "TS 23.501") {
 			t.Errorf("expected search result for TS 23.501, got: %s", text)
 		}
-		if !strings.Contains(text, `"version": "18.6.0"`) || !strings.Contains(text, `"release": "Rel-18"`) {
+		if !strings.Contains(text, `"version": "18.6.0"`) || !strings.Contains(text, `"release": "18"`) {
 			t.Errorf("expected version/release in search results, got: %s", text)
 		}
 	})
@@ -735,7 +735,7 @@ func TestHandleSearch_EdgeCases(t *testing.T) {
 // that was previously exercised only for happy paths.
 func TestHandleGetSection_PaginationEdges(t *testing.T) {
 	d := setupTestDB(t)
-	handler := HandleGetSection(d)
+	handler := HandleGetSection(NewSource(d))
 
 	t.Run("offset beyond content", func(t *testing.T) {
 		result, _, err := handler(context.Background(), nil, GetSectionInput{

@@ -270,7 +270,10 @@ mark {
     background: var(--bg-secondary);
     font-weight: 600;
     position: sticky;
-    top: 48px;
+    /* Sticks to .table-responsive, not the viewport: an overflow container is
+       the sticky containing block. Offsetting by the navbar height pushed the
+       header down over the first row, hiding it. */
+    top: 0;
 }
 
 .specs-table tbody tr:hover {
@@ -357,6 +360,20 @@ mark {
 .toc-header h3 {
     font-size: 1rem;
     font-weight: 600;
+}
+
+.toc-version {
+    margin-top: 2px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+/* Names the exact version the text below came from, matching the
+   "[Source: ...]" line the MCP get_section tool prepends. */
+.section-source {
+    margin-bottom: 12px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
 }
 
 .toc-nav {

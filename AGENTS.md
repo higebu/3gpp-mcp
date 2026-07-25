@@ -21,8 +21,10 @@ converter/
   docx/              # DOCX → Markdown parser (zip/XML processing, EMF/WMF image support)
   pipeline/          # Streaming download + conversion pipeline with worker pool
 db/                  # SQLite schema, queries, FTS5 full-text search
-tools/               # MCP tool handlers (list_specs, get_toc, get_section, search, openapi, references, images)
+versionstore/        # On-demand cache of spec versions not in the prebuilt database
+tools/               # MCP tool handlers (list_specs, list_versions, get_toc, get_section, search, openapi, references, images)
 web/                 # Web viewer UI (HTTP handlers, HTML templates, static assets)
+internal/specver/    # Version notation conversion (base-36 archive token <-> dotted)
 internal/testutil/   # Shared test helpers (SetupTestDB, DownloadTestZip)
 data/                # Database files (gitignored except .gitkeep)
 examples/systemd/    # Deployment examples (service + timer)
@@ -80,15 +82,40 @@ Uses a worker pool (`runtime.NumCPU()` workers by default) for parallel processi
 
 The pipeline caches the spec list to avoid repeated scraping. Cache TTL and location are controlled via environment variables.
 
+### Versions
+
+Specification versions are first-class in the schema: `specs` is keyed by
+`(id, version)` and `sections` by `(spec_id, version, number)`. The canonical
+version is the dotted form (`20.2.0`); the base-36 archive token (`k20`) is
+kept alongside it in `specs.version_token` so archive files stay resolvable.
+`internal/specver` converts between the two — each token digit is one base-36
+digit of release, technical and editorial number.
+
+A build imports **one version per spec**, and `InsertSpecWithSectionsAndImages`
+drops any other version of the same spec to keep that invariant. Search depends
+on it: the FTS index has no version column, so a second version of the same
+spec would double every hit.
+
+Reading a version the build did not import goes through `versionstore`, which
+downloads and converts it via `pipeline.FetchVersion` and stores it in a
+separate SQLite file (`$XDG_CACHE_HOME/3gpp-mcp/versions.db`). That file has no
+FTS tables, so cached versions never reach search. Fetches are deduplicated per
+`(spec, version)`, run on a context detached from the caller so a client timeout
+does not discard minutes of work, and are evicted least-recently-used once the
+size limit is exceeded. The on-demand path deliberately skips images, OpenAPI
+YAML and cross-reference extraction — those are served from the prebuilt
+database for its version only.
+
 ### MCP Tools
 
-Nine tools are exposed via MCP:
+Ten tools are exposed via MCP:
 
 | Tool | Description |
 |------|-------------|
 | `list_specs` | List available specifications |
-| `get_toc` | Get table of contents for a spec |
-| `get_section` | Get section content (paginated) |
+| `list_versions` | List a spec's versions and where each can be read from |
+| `get_toc` | Get table of contents for a spec (optionally a past version) |
+| `get_section` | Get section content (paginated, optionally a past version) |
 | `search` | Full-text search across all specs |
 | `list_openapi` | List OpenAPI definitions |
 | `get_openapi` | Get OpenAPI definition (paginated) |
@@ -142,4 +169,6 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to `main`:
 | `PORT` | PaaS convention (Cloud Run / Heroku). When set, `serve` defaults to HTTP transport and binds to `:$PORT`. `THREEGPP_MCP_*` and CLI flags take precedence |
 | `THREEGPP_MAX_ZIP_SIZE_MB` | Max ZIP download size (default: 512 MB) |
 | `THREEGPP_CACHE_TTL_HOURS` | Spec list cache TTL in hours |
+| `THREEGPP_VERSION_CACHE_MB` | Size limit of the on-demand version cache in MB (default: 1024; `0` keeps only the newest fetch, `-1` is unlimited) |
+| `THREEGPP_FETCH_BUDGET` | How long a tool call waits for an on-demand fetch before asking the caller to retry (default: `60s`) |
 | `XDG_CACHE_HOME` | Override cache directory (follows XDG Base Directory spec) |

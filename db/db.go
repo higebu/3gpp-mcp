@@ -2,20 +2,33 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strings"
 
+	"github.com/higebu/3gpp-mcp/internal/specver"
 	_ "modernc.org/sqlite"
 )
 
+// ErrNoVersion reports that a spec, or a specific version of it, is not in
+// this database. Read methods that return a list translate it into an empty
+// result so callers can fall back to another source.
+var ErrNoVersion = errors.New("spec version not found")
+
 type Spec struct {
-	ID      string `json:"id"`
-	Title   string `json:"title"`
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	// Version is the canonical dotted form, e.g. "20.2.0".
 	Version string `json:"version,omitempty"`
-	Release string `json:"release,omitempty"`
-	Series  string `json:"series,omitempty"`
+	// VersionToken is the base-36 form used in archive filenames, e.g. "k20".
+	// It is kept alongside Version so an archive file stays resolvable even
+	// though the dotted form is what users and documents refer to.
+	VersionToken string `json:"version_token,omitempty"`
+	Release      string `json:"release,omitempty"`
+	Series       string `json:"series,omitempty"`
 }
 
 type Section struct {
@@ -41,6 +54,7 @@ type SearchResult struct {
 // Image holds an embedded image from a specification.
 type Image struct {
 	SpecID      string `json:"spec_id"`
+	Version     string `json:"version,omitempty"`
 	Name        string `json:"name"`
 	MIMEType    string `json:"mime_type"`
 	Data        []byte `json:"-"`
@@ -50,14 +64,18 @@ type Image struct {
 // ImageInfo holds image metadata without the binary data.
 type ImageInfo struct {
 	SpecID      string `json:"spec_id"`
+	Version     string `json:"version,omitempty"`
 	Name        string `json:"name"`
 	MIMEType    string `json:"mime_type"`
 	LLMReadable bool   `json:"llm_readable"`
 }
 
 // Reference represents a cross-reference from one spec section to another spec.
+// Only the source side carries a version: a reference names a target spec, not
+// a particular version of it.
 type Reference struct {
 	SourceSpecID  string `json:"source_spec_id"`
+	SourceVersion string `json:"source_version,omitempty"`
 	SourceSection string `json:"source_section"`
 	TargetSpec    string `json:"target_spec"`
 	TargetSection string `json:"target_section,omitempty"`
@@ -146,29 +164,44 @@ type ListSpecsResult struct {
 	Offset     int    `json:"offset"`
 }
 
-// Schema is the SQL schema for the 3GPP database.
-const Schema = `
+// SpecTablesSchema defines the tables that hold a specification's text, keyed
+// by (spec_id, version). The version cache reuses it verbatim; the main
+// database adds full-text search and the remaining tables on top.
+const SpecTablesSchema = `
 CREATE TABLE IF NOT EXISTS specs (
-    id TEXT PRIMARY KEY,
+    id TEXT NOT NULL,
+    version TEXT NOT NULL,
+    version_token TEXT NOT NULL DEFAULT '',
     title TEXT NOT NULL,
-    version TEXT,
     release TEXT,
-    series TEXT
+    series TEXT,
+    PRIMARY KEY (id, version)
 );
+
+CREATE INDEX IF NOT EXISTS idx_specs_id ON specs(id);
 
 CREATE TABLE IF NOT EXISTS sections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    spec_id TEXT NOT NULL REFERENCES specs(id),
+    spec_id TEXT NOT NULL,
+    version TEXT NOT NULL,
     number TEXT NOT NULL,
     title TEXT NOT NULL,
     level INTEGER NOT NULL,
     parent_number TEXT,
     content TEXT NOT NULL,
-    UNIQUE(spec_id, number)
+    UNIQUE(spec_id, version, number)
 );
 
-CREATE INDEX IF NOT EXISTS idx_sections_spec ON sections(spec_id);
-CREATE INDEX IF NOT EXISTS idx_sections_number ON sections(spec_id, number);
+CREATE INDEX IF NOT EXISTS idx_sections_spec ON sections(spec_id, version);
+CREATE INDEX IF NOT EXISTS idx_sections_number ON sections(spec_id, version, number);
+`
+
+// Schema is the SQL schema for the 3GPP database.
+//
+// A build imports one version per spec, so the FTS index covers exactly that
+// version. Versions fetched on demand are stored in a separate cache database
+// that has no FTS tables, keeping cross-release rows out of search results.
+const Schema = SpecTablesSchema + `
 
 CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
     spec_id, number, title, content,
@@ -195,16 +228,21 @@ END;
 
 CREATE TABLE IF NOT EXISTS images (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    spec_id TEXT NOT NULL REFERENCES specs(id),
+    spec_id TEXT NOT NULL,
+    version TEXT NOT NULL,
     name TEXT NOT NULL,
     mime_type TEXT NOT NULL,
     data BLOB NOT NULL,
     llm_readable BOOLEAN NOT NULL DEFAULT 0,
-    UNIQUE(spec_id, name)
+    UNIQUE(spec_id, version, name)
 );
 
-CREATE INDEX IF NOT EXISTS idx_images_spec ON images(spec_id);
+CREATE INDEX IF NOT EXISTS idx_images_spec ON images(spec_id, version);
 
+-- OpenAPI definitions are not keyed by spec version. They ship as standalone
+-- YAML files carrying their own api version, and the pipeline imports them
+-- under a spec ID that may have no specs row at all, so a spec version column
+-- here could not be filled reliably.
 CREATE TABLE IF NOT EXISTS openapi_specs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     spec_id TEXT NOT NULL,
@@ -218,14 +256,15 @@ CREATE TABLE IF NOT EXISTS openapi_specs (
 CREATE TABLE IF NOT EXISTS spec_references (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_spec_id TEXT NOT NULL,
+    source_version TEXT NOT NULL DEFAULT '',
     source_section TEXT NOT NULL,
     target_spec TEXT NOT NULL,
     target_section TEXT NOT NULL DEFAULT '',
     context TEXT NOT NULL,
-    UNIQUE(source_spec_id, source_section, target_spec, target_section)
+    UNIQUE(source_spec_id, source_version, source_section, target_spec, target_section)
 );
 
-CREATE INDEX IF NOT EXISTS idx_ref_source ON spec_references(source_spec_id, source_section);
+CREATE INDEX IF NOT EXISTS idx_ref_source ON spec_references(source_spec_id, source_version, source_section);
 CREATE INDEX IF NOT EXISTS idx_ref_target ON spec_references(target_spec);
 `
 
@@ -235,11 +274,86 @@ func (d *DB) InitSchema() error {
 	return err
 }
 
+// ResolveVersion returns the version of a spec to read. An empty version means
+// "whatever this database holds": a build imports one version per spec, so the
+// newest row is the only row. It returns ErrNoVersion when the spec is absent
+// or when an explicitly requested version is not stored.
+func (d *DB) ResolveVersion(specID, version string) (string, error) {
+	if version != "" {
+		var found string
+		err := d.conn.QueryRow("SELECT version FROM specs WHERE id = ? AND version = ?", specID, version).Scan(&found)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNoVersion
+		}
+		if err != nil {
+			return "", fmt.Errorf("resolve version: %w", err)
+		}
+		return found, nil
+	}
+
+	rows, err := d.conn.Query("SELECT version FROM specs WHERE id = ?", specID)
+	if err != nil {
+		return "", fmt.Errorf("resolve version: %w", err)
+	}
+	defer rows.Close()
+
+	// An empty version is a legitimate stored value for a document whose
+	// version could not be determined, so "found nothing" is tracked separately
+	// from "found an empty string".
+	best := ""
+	found := false
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return "", fmt.Errorf("scan version: %w", err)
+		}
+		if !found || specver.Compare(v, best) > 0 {
+			best, found = v, true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("resolve version: iterate: %w", err)
+	}
+	if !found {
+		return "", ErrNoVersion
+	}
+	return best, nil
+}
+
+// ListSpecVersions returns every version of a spec held in this database,
+// newest first.
+func (d *DB) ListSpecVersions(specID string) ([]Spec, error) {
+	rows, err := d.conn.Query(
+		"SELECT id, version, COALESCE(version_token, ''), title, COALESCE(release, ''), COALESCE(series, '') FROM specs WHERE id = ?",
+		specID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list spec versions: %w", err)
+	}
+	defer rows.Close()
+
+	var specs []Spec
+	for rows.Next() {
+		var s Spec
+		if err := rows.Scan(&s.ID, &s.Version, &s.VersionToken, &s.Title, &s.Release, &s.Series); err != nil {
+			return nil, fmt.Errorf("scan spec version: %w", err)
+		}
+		specs = append(specs, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list spec versions: iterate: %w", err)
+	}
+	sort.Slice(specs, func(i, j int) bool {
+		return specver.Compare(specs[i].Version, specs[j].Version) > 0
+	})
+	return specs, nil
+}
+
 // UpsertSpec inserts or replaces a spec record.
 func (d *DB) UpsertSpec(spec Spec) error {
 	_, err := d.conn.Exec(
-		"INSERT OR REPLACE INTO specs (id, title, version, release, series) VALUES (?, ?, ?, ?, ?)",
-		spec.ID, spec.Title, spec.Version, spec.Release, spec.Series,
+		"INSERT OR REPLACE INTO specs (id, version, version_token, title, release, series) VALUES (?, ?, ?, ?, ?, ?)",
+		spec.ID, spec.Version, spec.VersionToken, spec.Title, spec.Release, spec.Series,
 	)
 	return err
 }
@@ -247,15 +361,15 @@ func (d *DB) UpsertSpec(spec Spec) error {
 // UpsertSection deletes then re-inserts a section to trigger FTS update.
 func (d *DB) UpsertSection(section Section) error {
 	_, err := d.conn.Exec(
-		"DELETE FROM sections WHERE spec_id = ? AND number = ?",
-		section.SpecID, section.Number,
+		"DELETE FROM sections WHERE spec_id = ? AND version = ? AND number = ?",
+		section.SpecID, section.Version, section.Number,
 	)
 	if err != nil {
 		return err
 	}
 	_, err = d.conn.Exec(
-		"INSERT INTO sections (spec_id, number, title, level, parent_number, content) VALUES (?, ?, ?, ?, ?, ?)",
-		section.SpecID, section.Number, section.Title, section.Level, section.ParentNumber, section.Content,
+		"INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		section.SpecID, section.Version, section.Number, section.Title, section.Level, section.ParentNumber, section.Content,
 	)
 	return err
 }
@@ -263,19 +377,24 @@ func (d *DB) UpsertSection(section Section) error {
 // UpsertImage inserts or replaces an image record.
 func (d *DB) UpsertImage(img Image) error {
 	_, err := d.conn.Exec(
-		"INSERT OR REPLACE INTO images (spec_id, name, mime_type, data, llm_readable) VALUES (?, ?, ?, ?, ?)",
-		img.SpecID, img.Name, img.MIMEType, img.Data, img.LLMReadable,
+		"INSERT OR REPLACE INTO images (spec_id, version, name, mime_type, data, llm_readable) VALUES (?, ?, ?, ?, ?, ?)",
+		img.SpecID, img.Version, img.Name, img.MIMEType, img.Data, img.LLMReadable,
 	)
 	return err
 }
 
-// GetImage retrieves a single image by spec ID and name.
-func (d *DB) GetImage(specID, name string) (*Image, error) {
+// GetImage retrieves a single image by spec ID, version and name.
+// An empty version resolves to the version this database holds.
+func (d *DB) GetImage(specID, version, name string) (*Image, error) {
+	version, err := d.ResolveVersion(specID, version)
+	if err != nil {
+		return nil, fmt.Errorf("get image: %w", err)
+	}
 	var img Image
-	err := d.conn.QueryRow(
-		"SELECT spec_id, name, mime_type, data, llm_readable FROM images WHERE spec_id = ? AND name = ?",
-		specID, name,
-	).Scan(&img.SpecID, &img.Name, &img.MIMEType, &img.Data, &img.LLMReadable)
+	err = d.conn.QueryRow(
+		"SELECT spec_id, version, name, mime_type, data, llm_readable FROM images WHERE spec_id = ? AND version = ? AND name = ?",
+		specID, version, name,
+	).Scan(&img.SpecID, &img.Version, &img.Name, &img.MIMEType, &img.Data, &img.LLMReadable)
 	if err != nil {
 		return nil, fmt.Errorf("get image: %w", err)
 	}
@@ -283,10 +402,18 @@ func (d *DB) GetImage(specID, name string) (*Image, error) {
 }
 
 // ListImages returns metadata for all images of a spec (without binary data).
-func (d *DB) ListImages(specID string) ([]ImageInfo, error) {
+// An empty version resolves to the version this database holds.
+func (d *DB) ListImages(specID, version string) ([]ImageInfo, error) {
+	version, err := d.ResolveVersion(specID, version)
+	if errors.Is(err, ErrNoVersion) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list images: %w", err)
+	}
 	rows, err := d.conn.Query(
-		"SELECT spec_id, name, mime_type, llm_readable FROM images WHERE spec_id = ? ORDER BY name",
-		specID,
+		"SELECT spec_id, version, name, mime_type, llm_readable FROM images WHERE spec_id = ? AND version = ? ORDER BY name",
+		specID, version,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list images: %w", err)
@@ -296,7 +423,7 @@ func (d *DB) ListImages(specID string) ([]ImageInfo, error) {
 	var infos []ImageInfo
 	for rows.Next() {
 		var info ImageInfo
-		if err := rows.Scan(&info.SpecID, &info.Name, &info.MIMEType, &info.LLMReadable); err != nil {
+		if err := rows.Scan(&info.SpecID, &info.Version, &info.Name, &info.MIMEType, &info.LLMReadable); err != nil {
 			return nil, fmt.Errorf("scan image info: %w", err)
 		}
 		infos = append(infos, info)
@@ -318,8 +445,8 @@ func (d *DB) InsertSpecWithSectionsAndImages(spec Spec, sections []Section, imag
 	defer tx.Rollback() // no-op after Commit per database/sql docs
 
 	_, err = tx.Exec(
-		"INSERT OR REPLACE INTO specs (id, title, version, release, series) VALUES (?, ?, ?, ?, ?)",
-		spec.ID, spec.Title, spec.Version, spec.Release, spec.Series,
+		"INSERT OR REPLACE INTO specs (id, version, version_token, title, release, series) VALUES (?, ?, ?, ?, ?, ?)",
+		spec.ID, spec.Version, spec.VersionToken, spec.Title, spec.Release, spec.Series,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert spec: %w", err)
@@ -332,7 +459,7 @@ func (d *DB) InsertSpecWithSectionsAndImages(spec Spec, sections []Section, imag
 	// for the spec, because multi-file specs (e.g. TS 36.133) call this function
 	// once per DOCX file and a bulk DELETE would erase previously processed sections.
 	delStmt, err := tx.Prepare(
-		"DELETE FROM sections WHERE spec_id = ? AND number = ?",
+		"DELETE FROM sections WHERE spec_id = ? AND version = ? AND number = ?",
 	)
 	if err != nil {
 		return fmt.Errorf("prepare delete: %w", err)
@@ -340,7 +467,7 @@ func (d *DB) InsertSpecWithSectionsAndImages(spec Spec, sections []Section, imag
 	defer delStmt.Close()
 
 	insStmt, err := tx.Prepare(
-		"INSERT INTO sections (spec_id, number, title, level, parent_number, content) VALUES (?, ?, ?, ?, ?, ?)",
+		"INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES (?, ?, ?, ?, ?, ?, ?)",
 	)
 	if err != nil {
 		return fmt.Errorf("prepare insert: %w", err)
@@ -348,7 +475,7 @@ func (d *DB) InsertSpecWithSectionsAndImages(spec Spec, sections []Section, imag
 	defer insStmt.Close()
 
 	refStmt, err := tx.Prepare(
-		"INSERT OR REPLACE INTO spec_references (source_spec_id, source_section, target_spec, target_section, context) VALUES (?, ?, ?, ?, ?)",
+		"INSERT OR REPLACE INTO spec_references (source_spec_id, source_version, source_section, target_spec, target_section, context) VALUES (?, ?, ?, ?, ?, ?)",
 	)
 	if err != nil {
 		return fmt.Errorf("prepare ref insert: %w", err)
@@ -366,18 +493,39 @@ func (d *DB) InsertSpecWithSectionsAndImages(spec Spec, sections []Section, imag
 		}
 	}
 
+	// A build imports one version per spec, and search depends on that: the FTS
+	// index has no version column, so a second version of the same spec would
+	// double every hit. Superseding a version therefore drops the old one.
+	// Multi-file specs call this once per DOCX with the same version, so this
+	// only fires on the first call.
+	for _, table := range []string{"sections", "images", "spec_references"} {
+		column, versionColumn := "spec_id", "version"
+		if table == "spec_references" {
+			column, versionColumn = "source_spec_id", "source_version"
+		}
+		q := fmt.Sprintf("DELETE FROM %s WHERE %s = ? AND %s <> ?", table, column, versionColumn)
+		if _, err = tx.Exec(q, spec.ID, spec.Version); err != nil {
+			return fmt.Errorf("drop superseded %s: %w", table, err)
+		}
+	}
+	if _, err = tx.Exec("DELETE FROM specs WHERE id = ? AND version <> ?", spec.ID, spec.Version); err != nil {
+		return fmt.Errorf("drop superseded spec versions: %w", err)
+	}
+
+	// The spec row is the authority on the version, so child rows take it from
+	// there rather than from their own field.
 	for _, s := range sections {
-		if _, err = delStmt.Exec(s.SpecID, s.Number); err != nil {
+		if _, err = delStmt.Exec(s.SpecID, spec.Version, s.Number); err != nil {
 			return fmt.Errorf("delete section: %w", err)
 		}
-		_, err = insStmt.Exec(s.SpecID, s.Number, s.Title, s.Level, s.ParentNumber, s.Content)
+		_, err = insStmt.Exec(s.SpecID, spec.Version, s.Number, s.Title, s.Level, s.ParentNumber, s.Content)
 		if err != nil {
 			return fmt.Errorf("insert section: %w", err)
 		}
 
 		refs := ExtractReferences(s.SpecID, s.Number, s.Content, bracketMap)
 		for _, r := range refs {
-			_, err = refStmt.Exec(r.SourceSpecID, r.SourceSection, r.TargetSpec, r.TargetSection, r.Context)
+			_, err = refStmt.Exec(r.SourceSpecID, spec.Version, r.SourceSection, r.TargetSpec, r.TargetSection, r.Context)
 			if err != nil {
 				return fmt.Errorf("insert reference: %w", err)
 			}
@@ -387,7 +535,7 @@ func (d *DB) InsertSpecWithSectionsAndImages(spec Spec, sections []Section, imag
 	// Insert images if provided.
 	if len(images) > 0 {
 		imgStmt, err := tx.Prepare(
-			"INSERT OR REPLACE INTO images (spec_id, name, mime_type, data, llm_readable) VALUES (?, ?, ?, ?, ?)",
+			"INSERT OR REPLACE INTO images (spec_id, version, name, mime_type, data, llm_readable) VALUES (?, ?, ?, ?, ?, ?)",
 		)
 		if err != nil {
 			return fmt.Errorf("prepare image insert: %w", err)
@@ -395,7 +543,7 @@ func (d *DB) InsertSpecWithSectionsAndImages(spec Spec, sections []Section, imag
 		defer imgStmt.Close()
 
 		for _, img := range images {
-			_, err = imgStmt.Exec(img.SpecID, img.Name, img.MIMEType, img.Data, img.LLMReadable)
+			_, err = imgStmt.Exec(img.SpecID, spec.Version, img.Name, img.MIMEType, img.Data, img.LLMReadable)
 			if err != nil {
 				return fmt.Errorf("insert image: %w", err)
 			}
@@ -437,7 +585,7 @@ func (d *DB) ListSpecs(series, query string, limit, offset int) (*ListSpecsResul
 		return nil, fmt.Errorf("count specs: %w", err)
 	}
 
-	sqlQuery := "SELECT id, title, COALESCE(version, ''), COALESCE(release, ''), COALESCE(series, '') FROM specs" + where + " ORDER BY id"
+	sqlQuery := "SELECT id, version, COALESCE(version_token, ''), title, COALESCE(release, ''), COALESCE(series, '') FROM specs" + where + " ORDER BY id, version"
 	args := append([]any{}, filterArgs...)
 
 	// limit == 0: use default; limit < 0: no limit (return all rows, internal use only).
@@ -461,7 +609,7 @@ func (d *DB) ListSpecs(series, query string, limit, offset int) (*ListSpecsResul
 	var specs []Spec
 	for rows.Next() {
 		var s Spec
-		if err := rows.Scan(&s.ID, &s.Title, &s.Version, &s.Release, &s.Series); err != nil {
+		if err := rows.Scan(&s.ID, &s.Version, &s.VersionToken, &s.Title, &s.Release, &s.Series); err != nil {
 			return nil, fmt.Errorf("scan spec: %w", err)
 		}
 		specs = append(specs, s)
@@ -472,10 +620,19 @@ func (d *DB) ListSpecs(series, query string, limit, offset int) (*ListSpecsResul
 	return &ListSpecsResult{Specs: specs, TotalCount: totalCount, Limit: limit, Offset: offset}, nil
 }
 
-func (d *DB) GetTOC(specID string) ([]Section, error) {
+// GetTOC returns the section structure of a spec. An empty version resolves to
+// the version this database holds; a version it does not hold yields no rows.
+func (d *DB) GetTOC(specID, version string) ([]Section, error) {
+	version, err := d.ResolveVersion(specID, version)
+	if errors.Is(err, ErrNoVersion) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get toc: %w", err)
+	}
 	rows, err := d.conn.Query(
-		"SELECT s.spec_id, s.number, s.title, s.level, COALESCE(s.parent_number, ''), COALESCE(p.version, ''), COALESCE(p.release, '') FROM sections s LEFT JOIN specs p ON p.id = s.spec_id WHERE s.spec_id = ? ORDER BY s.id",
-		specID,
+		"SELECT s.spec_id, s.version, s.number, s.title, s.level, COALESCE(s.parent_number, ''), COALESCE(p.release, '') FROM sections s LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version WHERE s.spec_id = ? AND s.version = ? ORDER BY s.id",
+		specID, version,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get toc: %w", err)
@@ -485,7 +642,7 @@ func (d *DB) GetTOC(specID string) ([]Section, error) {
 	var sections []Section
 	for rows.Next() {
 		var s Section
-		if err := rows.Scan(&s.SpecID, &s.Number, &s.Title, &s.Level, &s.ParentNumber, &s.Version, &s.Release); err != nil {
+		if err := rows.Scan(&s.SpecID, &s.Version, &s.Number, &s.Title, &s.Level, &s.ParentNumber, &s.Release); err != nil {
 			return nil, fmt.Errorf("scan section: %w", err)
 		}
 		sections = append(sections, s)
@@ -510,7 +667,7 @@ func escapeLikePattern(s string) string {
 // ID instead of a specific part.
 func (d *DB) FindSpecIDsByFamily(familyID string) ([]string, error) {
 	rows, err := d.conn.Query(
-		"SELECT id FROM specs WHERE id LIKE ? || '-%' ESCAPE '\\' ORDER BY id",
+		"SELECT DISTINCT id FROM specs WHERE id LIKE ? || '-%' ESCAPE '\\' ORDER BY id",
 		escapeLikePattern(familyID),
 	)
 	if err != nil {
@@ -532,19 +689,31 @@ func (d *DB) FindSpecIDsByFamily(familyID string) ([]string, error) {
 	return ids, nil
 }
 
-func (d *DB) GetSection(specID, number string, includeSubsections bool) ([]Section, error) {
-	var rows *sql.Rows
-	var err error
+// GetSection returns a section, optionally with its subsections. An empty
+// version resolves to the version this database holds; a version it does not
+// hold yields no rows.
+func (d *DB) GetSection(specID, version, number string, includeSubsections bool) ([]Section, error) {
+	version, err := d.ResolveVersion(specID, version)
+	if errors.Is(err, ErrNoVersion) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get section: %w", err)
+	}
 
+	const projection = "SELECT s.spec_id, s.version, s.number, s.title, s.level, COALESCE(s.parent_number, ''), s.content, COALESCE(p.release, '') " +
+		"FROM sections s LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version WHERE s.spec_id = ? AND s.version = ?"
+
+	var rows *sql.Rows
 	if includeSubsections {
 		rows, err = d.conn.Query(
-			"SELECT s.spec_id, s.number, s.title, s.level, COALESCE(s.parent_number, ''), s.content, COALESCE(p.version, ''), COALESCE(p.release, '') FROM sections s LEFT JOIN specs p ON p.id = s.spec_id WHERE s.spec_id = ? AND (s.number = ? OR s.number LIKE ? || '.%') ORDER BY s.id",
-			specID, number, number,
+			projection+" AND (s.number = ? OR s.number LIKE ? || '.%') ORDER BY s.id",
+			specID, version, number, number,
 		)
 	} else {
 		rows, err = d.conn.Query(
-			"SELECT s.spec_id, s.number, s.title, s.level, COALESCE(s.parent_number, ''), s.content, COALESCE(p.version, ''), COALESCE(p.release, '') FROM sections s LEFT JOIN specs p ON p.id = s.spec_id WHERE s.spec_id = ? AND s.number = ?",
-			specID, number,
+			projection+" AND s.number = ?",
+			specID, version, number,
 		)
 	}
 	if err != nil {
@@ -555,7 +724,7 @@ func (d *DB) GetSection(specID, number string, includeSubsections bool) ([]Secti
 	var sections []Section
 	for rows.Next() {
 		var s Section
-		if err := rows.Scan(&s.SpecID, &s.Number, &s.Title, &s.Level, &s.ParentNumber, &s.Content, &s.Version, &s.Release); err != nil {
+		if err := rows.Scan(&s.SpecID, &s.Version, &s.Number, &s.Title, &s.Level, &s.ParentNumber, &s.Content, &s.Release); err != nil {
 			return nil, fmt.Errorf("scan section: %w", err)
 		}
 		sections = append(sections, s)
@@ -569,16 +738,23 @@ func (d *DB) GetSection(specID, number string, includeSubsections bool) ([]Secti
 // GetBracketMap returns the bracket reference map for a spec by fetching the
 // References section (number "2" or matching title) and parsing it.
 // Returns nil, nil when no References section is found.
-func (d *DB) GetBracketMap(specID string) (map[string]string, error) {
+func (d *DB) GetBracketMap(specID, version string) (map[string]string, error) {
+	version, err := d.ResolveVersion(specID, version)
+	if errors.Is(err, ErrNoVersion) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get bracket map: %w", err)
+	}
 	rows, err := d.conn.Query(
 		`SELECT content FROM sections
-		 WHERE spec_id = ? AND (
+		 WHERE spec_id = ? AND version = ? AND (
 		   number = '2' OR
 		   LOWER(title) = 'references' OR
 		   LOWER(title) = 'normative references' OR
 		   LOWER(title) = 'informative references'
 		 ) ORDER BY id LIMIT 1`,
-		specID,
+		specID, version,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get bracket map: %w", err)
@@ -782,7 +958,11 @@ func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, 
 
 	query = sanitizeFTS5Query(query)
 
-	sqlQuery := "SELECT sections_fts.spec_id, sections_fts.number, sections_fts.title, snippet(sections_fts, 3, '<mark>', '</mark>', '...', 32), COALESCE(specs.version, ''), COALESCE(specs.release, '') FROM sections_fts LEFT JOIN specs ON specs.id = sections_fts.spec_id WHERE sections_fts MATCH ?"
+	// sections_fts has no version column, so the version comes from the backing
+	// sections row (sections_fts.rowid is sections.id). Joining specs on the
+	// pair keeps one row per hit even when a database holds several versions.
+	sqlQuery := "SELECT sections_fts.spec_id, sections_fts.number, sections_fts.title, snippet(sections_fts, 3, '<mark>', '</mark>', '...', 32), s.version, COALESCE(p.release, '') " +
+		"FROM sections_fts JOIN sections s ON s.id = sections_fts.rowid LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version WHERE sections_fts MATCH ?"
 	args := []any{query}
 
 	if len(specIDs) > 0 {
@@ -1120,13 +1300,20 @@ func extractContext(content string, start, end int) string {
 	return b.String()
 }
 
-const refBaseQuery = `SELECT r.source_spec_id, r.source_section, r.target_spec, r.target_section, r.context,
-	COALESCE(s.title, '')
-	FROM spec_references r
-	LEFT JOIN sections s ON r.target_spec = s.spec_id AND r.target_section = s.number`
+// refBaseQuery takes the target title from whichever version of the target
+// spec this database holds; a reference names a spec, not a version of it. The
+// title is a scalar subquery rather than a join so a database holding several
+// versions of the target cannot duplicate the reference row.
+const refBaseQuery = `SELECT r.source_spec_id, r.source_version, r.source_section, r.target_spec, r.target_section, r.context,
+	COALESCE((SELECT s.title FROM sections s
+	          WHERE s.spec_id = r.target_spec AND s.number = r.target_section
+	          ORDER BY s.id LIMIT 1), '')
+	FROM spec_references r`
 
-// GetReferences retrieves cross-references in the given direction.
-func (d *DB) GetReferences(specID, sectionNumber, direction string, includeSubsections bool) ([]Reference, error) {
+// GetReferences retrieves cross-references in the given direction. For the
+// outgoing direction an empty version resolves to the version this database
+// holds; incoming references are not version-scoped on the target side.
+func (d *DB) GetReferences(specID, version, sectionNumber, direction string, includeSubsections bool) ([]Reference, error) {
 	if direction == "" {
 		direction = DirectionOutgoing
 	}
@@ -1135,14 +1322,21 @@ func (d *DB) GetReferences(specID, sectionNumber, direction string, includeSubse
 	var args []any
 	switch direction {
 	case DirectionOutgoing:
+		resolved, err := d.ResolveVersion(specID, version)
+		if errors.Is(err, ErrNoVersion) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get references: %w", err)
+		}
 		if includeSubsections {
-			where = ` WHERE r.source_spec_id = ? AND (r.source_section = ? OR r.source_section LIKE ? || '.%')
+			where = ` WHERE r.source_spec_id = ? AND r.source_version = ? AND (r.source_section = ? OR r.source_section LIKE ? || '.%')
 				ORDER BY r.source_section, r.target_spec, r.target_section`
-			args = []any{specID, sectionNumber, sectionNumber}
+			args = []any{specID, resolved, sectionNumber, sectionNumber}
 		} else {
-			where = ` WHERE r.source_spec_id = ? AND r.source_section = ?
+			where = ` WHERE r.source_spec_id = ? AND r.source_version = ? AND r.source_section = ?
 				ORDER BY r.target_spec, r.target_section`
-			args = []any{specID, sectionNumber}
+			args = []any{specID, resolved, sectionNumber}
 		}
 	case DirectionIncoming:
 		if sectionNumber != "" {
@@ -1171,7 +1365,7 @@ func (d *DB) queryReferences(query string, args []any) ([]Reference, error) {
 	var refs []Reference
 	for rows.Next() {
 		var r Reference
-		if err := rows.Scan(&r.SourceSpecID, &r.SourceSection, &r.TargetSpec, &r.TargetSection, &r.Context, &r.TargetTitle); err != nil {
+		if err := rows.Scan(&r.SourceSpecID, &r.SourceVersion, &r.SourceSection, &r.TargetSpec, &r.TargetSection, &r.Context, &r.TargetTitle); err != nil {
 			return nil, fmt.Errorf("scan reference: %w", err)
 		}
 		refs = append(refs, r)

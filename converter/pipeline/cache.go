@@ -37,6 +37,13 @@ func cacheDir() (string, error) {
 	return filepath.Join(base, "3gpp-mcp"), nil
 }
 
+// CacheDir returns the directory holding this tool's caches, following the XDG
+// Base Directory spec. Callers that keep their own cache files, such as the
+// on-demand version store, put them here too.
+func CacheDir() (string, error) {
+	return cacheDir()
+}
+
 // CacheKey generates a cache file name from a prefix and parameters.
 // e.g., CacheKey("speclist", "23", "29") -> "speclist_23_29.txt"
 func CacheKey(prefix string, params ...string) string {

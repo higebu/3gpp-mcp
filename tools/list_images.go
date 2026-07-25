@@ -25,7 +25,7 @@ func HandleListImages(d *db.DB) func(ctx context.Context, req *mcp.CallToolReque
 			return errorResult("spec_id is required"), nil, nil
 		}
 
-		images, err := d.ListImages(input.SpecID)
+		images, err := d.ListImages(input.SpecID, "")
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to list images: %v", err)), nil, nil
 		}

@@ -201,8 +201,41 @@ Features: spec list with filtering, section viewer with TOC sidebar, full-text s
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `list_specs` | List available specifications | `series` (optional): filter by series number, e.g. `"23"` |
-| `get_toc` | Get table of contents of a spec | `spec_id` (required): e.g. `"TS 23.501"` |
-| `get_section` | Get section content (paginated) | `spec_id`, `section_number` (required), `include_subsections`, `offset`, `max_lines`, `max_chars` |
+| `list_versions` | List the versions of a spec and where each can be read from | `spec_id` (required): e.g. `"TS 23.501"` |
+| `get_toc` | Get table of contents of a spec | `spec_id` (required), `version` |
+| `get_section` | Get section content (paginated) | `spec_id`, `section_number` (required), `version`, `include_subsections`, `offset`, `max_lines`, `max_chars` |
+
+Every `get_toc`, `get_section` and `search` result names the specification and
+version it came from, on every page of a paginated response.
+
+### Past versions
+
+The database holds one version per specification. To read another version, pass
+`version` to `get_section` or `get_toc`:
+
+```
+list_versions  spec_id="TS 24.301"
+get_section    spec_id="TS 24.301" section_number="5.5.1" version="15.8.0"
+```
+
+`version` accepts the dotted form (`15.8.0`), the archive token (`f80`), a
+release selector (`Rel-15` or `15`, picking the newest version in that release),
+or `latest`.
+
+A version that is not in the database is downloaded from the 3GPP archive and
+converted on first use. This takes up to a few minutes for a large
+specification; if it is still running when the call's budget expires, the tool
+says so and the same call repeated later returns the content. Results are kept
+in a size-bounded cache (see [`serve`](#serve)) that is separate from the main
+database, so:
+
+- `search` covers only the version in the database — cross-release full-text
+  search is not supported
+- `get_image` and `get_references` only have data for the version in the
+  database, so a section read from an archived version returns text alone and
+  says so in its header
+- section numbers move between releases; check `get_toc` for the older version
+  before reading a section of it
 
 ### Searching
 
@@ -302,6 +335,17 @@ Start the MCP server.
 | `--addr` | HTTP listen address (env: `THREEGPP_MCP_ADDR`, or `PORT` interpreted as `:$PORT`) | `:8080` |
 | `--bearer-token` | Bearer token for HTTP auth (env: `THREEGPP_MCP_BEARER_TOKEN`) | |
 | `--web` | Enable web viewer alongside MCP server (HTTP transport only) | `false` |
+| `--no-fetch` | Disable on-demand fetching of spec versions that are not in the database | `false` |
+| `--version-cache` | Path to the on-demand version cache | `$XDG_CACHE_HOME/3gpp-mcp/versions.db` |
+| `--version-cache-mb` | Size limit of the version cache in MB. `0` keeps only the most recently fetched version, `-1` is unlimited (env: `THREEGPP_VERSION_CACHE_MB`) | `1024` |
+| `--fetch-budget` | How long a tool call waits for an on-demand fetch before asking the caller to retry (env: `THREEGPP_FETCH_BUDGET`) | `60s` |
+
+The version cache is a separate SQLite file, so the main database stays
+read-only and is never polluted with extra versions. When the cache cannot be
+created — a read-only or ephemeral filesystem, such as the `scratch`-based
+container image — the server logs a warning and runs with on-demand fetching
+disabled; everything else keeps working. Cached versions are evicted
+least-recently-used once the size limit is exceeded.
 
 When `--web` is enabled with HTTP transport, the MCP endpoint is served at `/mcp/` and the web viewer at `/`.
 

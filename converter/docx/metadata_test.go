@@ -56,66 +56,77 @@ func TestExtractMetadata_FilenameVariants(t *testing.T) {
 		filename    string
 		wantSpecID  string
 		wantVersion string
+		wantToken   string
 	}{
 		{
 			name:        "TS series with hyphen and letter version",
 			filename:    "23501-i30.docx",
 			wantSpecID:  "TS 23.501",
-			wantVersion: "i30",
+			wantVersion: "18.3.0",
+			wantToken:   "i30",
 		},
 		{
 			name:        "TR series with hyphen and letter version",
 			filename:    "24229-h50.doc",
 			wantSpecID:  "TS 24.229",
-			wantVersion: "h50",
+			wantVersion: "17.5.0",
+			wantToken:   "h50",
 		},
 		{
 			name:        "high series",
 			filename:    "29510-f60.zip",
 			wantSpecID:  "TS 29.510",
-			wantVersion: "f60",
+			wantVersion: "15.6.0",
+			wantToken:   "f60",
 		},
 		{
 			name:        "no extension",
 			filename:    "33401-i00",
 			wantSpecID:  "TS 33.401",
-			wantVersion: "i00",
+			wantVersion: "18.0.0",
+			wantToken:   "i00",
 		},
 		{
 			name:        "non-standard falls back to stem",
 			filename:    "weirdname.docx",
 			wantSpecID:  "weirdname",
 			wantVersion: "",
+			wantToken:   "",
 		},
 		{
 			name:        "split multi-file spec body chunk",
 			filename:    "38101-1-k00_s00-05.docx",
 			wantSpecID:  "TS 38.101-1",
-			wantVersion: "k00",
+			wantVersion: "20.0.0",
+			wantToken:   "k00",
 		},
 		{
 			name:        "split multi-file spec annex chunk",
 			filename:    "38101-1-k00_sAnnexes.docx",
 			wantSpecID:  "TS 38.101-1",
-			wantVersion: "k00",
+			wantVersion: "20.0.0",
+			wantToken:   "k00",
 		},
 		{
 			name:        "base-36 version token with letter in second position",
 			filename:    "23222-ja0.docx",
 			wantSpecID:  "TS 23.222",
-			wantVersion: "ja0",
+			wantVersion: "19.10.0",
+			wantToken:   "ja0",
 		},
 		{
 			name:        "base-36 version token, minor version b",
 			filename:    "23280-ja1.docx",
 			wantSpecID:  "TS 23.280",
-			wantVersion: "ja1",
+			wantVersion: "19.10.1",
+			wantToken:   "ja1",
 		},
 		{
 			name:        "base-36 version token, different minor letter",
 			filename:    "23379-jb0.docx",
 			wantSpecID:  "TS 23.379",
-			wantVersion: "jb0",
+			wantVersion: "19.11.0",
+			wantToken:   "jb0",
 		},
 	}
 	for _, tt := range tests {
@@ -126,6 +137,9 @@ func TestExtractMetadata_FilenameVariants(t *testing.T) {
 			}
 			if meta.Version != tt.wantVersion {
 				t.Errorf("Version = %q, want %q", meta.Version, tt.wantVersion)
+			}
+			if meta.VersionToken != tt.wantToken {
+				t.Errorf("VersionToken = %q, want %q", meta.VersionToken, tt.wantToken)
 			}
 		})
 	}

@@ -503,19 +503,20 @@ func TestCmdUpdate_AllUpToDate(t *testing.T) {
 		t.Fatalf("init schema: %v", err)
 	}
 	if err := d.UpsertSpec(db.Spec{
-		ID:      "TS 23.501",
-		Title:   "System architecture",
-		Version: "k10",
-		Release: "Rel-20",
-		Series:  "23",
+		ID:           "TS 23.501",
+		Title:        "System architecture",
+		Version:      "20.1.0",
+		VersionToken: "k10",
+		Release:      "20",
+		Series:       "23",
 	}); err != nil {
 		t.Fatalf("upsert spec: %v", err)
 	}
 	d.Close()
 
 	// Provide a spec-list with an OLDER version of the same spec. FilterSpecs
-	// with latestOnly=true picks j60; cmdUpdate then sees j60 < k10 and prints
-	// "All specs are up to date.".
+	// with latestOnly=true picks j60 (v19.6.0); cmdUpdate then sees it is older
+	// than the stored v20.1.0 and prints "All specs are up to date.".
 	listPath := filepath.Join(t.TempDir(), "list.txt")
 	if err := os.WriteFile(listPath, []byte("23_series/23.501/23501-j60.zip\n"), 0o644); err != nil {
 		t.Fatalf("write list: %v", err)

@@ -44,7 +44,9 @@ func HandleGetReferences(d *db.DB) func(ctx context.Context, req *mcp.CallToolRe
 			return errorResult("section_number is required for outgoing direction"), nil, nil
 		}
 
-		refs, err := d.GetReferences(input.SpecID, input.SectionNumber, direction, input.IncludeSubsections)
+		// Cross-references are only extracted for the version the database was
+		// built with, so this always answers about that version.
+		refs, err := d.GetReferences(input.SpecID, "", input.SectionNumber, direction, input.IncludeSubsections)
 		if err != nil {
 			return errorResult(fmt.Sprintf("get references failed: %v", err)), nil, nil
 		}
