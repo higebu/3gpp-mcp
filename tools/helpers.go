@@ -1,10 +1,12 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/specver"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -21,6 +23,21 @@ func errorResult(text string) *mcp.CallToolResult {
 		Content: []mcp.Content{&mcp.TextContent{Text: text}},
 		IsError: true,
 	}
+}
+
+// versionErrorResult renders an error from version resolution. A fetch that is
+// still running is not a failure — the caller just has to come back — so it is
+// reported as ordinary text rather than as a tool error.
+func versionErrorResult(err error, prefix string) *mcp.CallToolResult {
+	var inProgress *errFetchInProgress
+	if errors.As(err, &inProgress) {
+		return textResult(inProgress.Error())
+	}
+	var unavailable *errVersionUnavailable
+	if errors.As(err, &unavailable) {
+		return errorResult(unavailable.Error())
+	}
+	return errorResult(fmt.Sprintf("%s: %v", prefix, err))
 }
 
 // prependLine prefixes the text content of a single-TextContent result with a
@@ -43,8 +60,8 @@ func specLabel(s db.Section) string {
 	if s.Version != "" {
 		label += " v" + s.Version
 	}
-	if s.Release != "" {
-		label += " (" + s.Release + ")"
+	if rel := specver.ReleaseLabel(s.Release); rel != "" {
+		label += " (" + rel + ")"
 	}
 	return label
 }

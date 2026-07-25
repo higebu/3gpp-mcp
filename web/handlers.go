@@ -182,7 +182,7 @@ func (h *handler) handleSection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) renderSpecPage(w http.ResponseWriter, specID, number string) {
-	toc, err := h.db.GetTOC(specID)
+	toc, err := h.db.GetTOC(specID, "")
 	if err != nil || len(toc) == 0 {
 		h.renderError(w, http.StatusNotFound, fmt.Sprintf("Specification %q not found", specID))
 		return
@@ -193,16 +193,16 @@ func (h *handler) renderSpecPage(w http.ResponseWriter, specID, number string) {
 		number = toc[0].Number
 	}
 
-	sections, err := h.db.GetSection(specID, number, false)
+	sections, err := h.db.GetSection(specID, "", number, false)
 	if err != nil || len(sections) == 0 {
 		h.renderError(w, http.StatusNotFound, fmt.Sprintf("Section %q not found in %s", number, specID))
 		return
 	}
 
-	bracketMap, _ := h.db.GetBracketMap(specID)
+	bracketMap, _ := h.db.GetBracketMap(specID, "")
 	rendered := renderSections(sections, specID, bracketMap)
 	openAPIs, _ := h.db.ListOpenAPI(specID)
-	refs, _ := h.db.GetReferences(specID, number, db.DirectionOutgoing, false)
+	refs, _ := h.db.GetReferences(specID, "", number, db.DirectionOutgoing, false)
 	prev, next := adjacentSections(toc, number)
 
 	data := specData{
@@ -245,7 +245,7 @@ func (h *handler) handleImage(w http.ResponseWriter, r *http.Request) {
 	specID := r.PathValue("specID")
 	name := r.PathValue("name")
 
-	img, err := h.db.GetImage(specID, name)
+	img, err := h.db.GetImage(specID, "", name)
 	if err != nil {
 		http.NotFound(w, r)
 		return

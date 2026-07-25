@@ -8,42 +8,42 @@ import (
 )
 
 const seedData = `
-INSERT INTO specs (id, title, version, release, series) VALUES
-    ('TS 23.501', 'System architecture for the 5G System (5GS)', '18.6.0', 'Rel-18', '23'),
-    ('TS 29.510', 'Network Function Repository Services', '18.5.0', 'Rel-18', '29');
+INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+    ('TS 23.501', '18.6.0', 'i60', 'System architecture for the 5G System (5GS)', '18', '23'),
+    ('TS 29.510', '18.5.0', 'i50', 'Network Function Repository Services', '18', '29');
 
-INSERT INTO sections (spec_id, number, title, level, parent_number, content) VALUES
-    ('TS 23.501', '1', 'Scope', 1, NULL, '# 1 Scope
+INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES
+    ('TS 23.501', '18.6.0', '1', 'Scope', 1, NULL, '# 1 Scope
 This document defines the system architecture.'),
-    ('TS 23.501', '5', 'Architecture', 1, NULL, '# 5 Architecture
+    ('TS 23.501', '18.6.0', '5', 'Architecture', 1, NULL, '# 5 Architecture
 The 5G system architecture is defined here.'),
-    ('TS 23.501', '5.1', 'General', 2, '5', '## 5.1 General
+    ('TS 23.501', '18.6.0', '5.1', 'General', 2, '5', '## 5.1 General
 General architecture description for 5G.'),
-    ('TS 23.501', '5.1.1', 'Overview', 3, '5.1', '### 5.1.1 Overview
+    ('TS 23.501', '18.6.0', '5.1.1', 'Overview', 3, '5.1', '### 5.1.1 Overview
 Overview of the architecture components.'),
-    ('TS 29.510', '1', 'Scope', 1, NULL, '# 1 Scope
+    ('TS 29.510', '18.5.0', '1', 'Scope', 1, NULL, '# 1 Scope
 This document defines the NRF services.'),
-    ('TS 29.510', '6', 'API Definitions', 1, NULL, '# 6 API Definitions
+    ('TS 29.510', '18.5.0', '6', 'API Definitions', 1, NULL, '# 6 API Definitions
 API definitions for NRF.');
 
-INSERT INTO specs (id, title, version, release, series) VALUES
-    ('TS 24.229', 'IP multimedia call control protocol', '18.4.0', 'Rel-18', '24');
+INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+    ('TS 24.229', '18.4.0', 'i40', 'IP multimedia call control protocol', '18', '24');
 
-INSERT INTO sections (spec_id, number, title, level, parent_number, content) VALUES
-    ('TS 24.229', '5', 'Procedures', 1, NULL, '# 5 Procedures
+INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES
+    ('TS 24.229', '18.4.0', '5', 'Procedures', 1, NULL, '# 5 Procedures
 The IMS registration procedures.'),
-    ('TS 24.229', '5.1', 'Registration', 2, '5', '## 5.1 Registration
+    ('TS 24.229', '18.4.0', '5.1', 'Registration', 2, '5', '## 5.1 Registration
 The IMS registration procedures are specified in 3GPP TS 23.228 clause 5.2.1.
 The security mechanisms are defined in TS 33.203. See also RFC 3261 section 10.2
 for SIP registration details and IETF RFC 3327 for the Path header.
 The authentication uses IMS-AKA as described in TS 33.203 subclause 6.1.');
 
-INSERT INTO spec_references (source_spec_id, source_section, target_spec, target_section, context) VALUES
-    ('TS 24.229', '5.1', 'TS 23.228', '5.2.1', '...specified in 3GPP TS 23.228 clause 5.2.1...'),
-    ('TS 24.229', '5.1', 'TS 33.203', '', '...security mechanisms are defined in TS 33.203...'),
-    ('TS 24.229', '5.1', 'RFC 3261', '10.2', '...RFC 3261 section 10.2 for SIP registration...'),
-    ('TS 24.229', '5.1', 'RFC 3327', '', '...IETF RFC 3327 for the Path header...'),
-    ('TS 24.229', '5.1', 'TS 33.203', '6.1', '...IMS-AKA as described in TS 33.203 subclause 6.1...');
+INSERT INTO spec_references (source_spec_id, source_version, source_section, target_spec, target_section, context) VALUES
+    ('TS 24.229', '18.4.0', '5.1', 'TS 23.228', '5.2.1', '...specified in 3GPP TS 23.228 clause 5.2.1...'),
+    ('TS 24.229', '18.4.0', '5.1', 'TS 33.203', '', '...security mechanisms are defined in TS 33.203...'),
+    ('TS 24.229', '18.4.0', '5.1', 'RFC 3261', '10.2', '...RFC 3261 section 10.2 for SIP registration...'),
+    ('TS 24.229', '18.4.0', '5.1', 'RFC 3327', '', '...IETF RFC 3327 for the Path header...'),
+    ('TS 24.229', '18.4.0', '5.1', 'TS 33.203', '6.1', '...IMS-AKA as described in TS 33.203 subclause 6.1...');
 
 INSERT INTO openapi_specs (spec_id, api_name, version, filename, content) VALUES
     ('TS 29.510', 'Nnrf_NFManagement', 'v1.3.0', 'TS29510_Nnrf_NFManagement.yaml', 'openapi: 3.0.0
@@ -229,7 +229,7 @@ func TestGetTOC(t *testing.T) {
 	d := setupTestDB(t)
 
 	t.Run("existing spec", func(t *testing.T) {
-		sections, err := d.GetTOC("TS 23.501")
+		sections, err := d.GetTOC("TS 23.501", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -239,13 +239,13 @@ func TestGetTOC(t *testing.T) {
 		if sections[0].Number != "1" || sections[0].Title != "Scope" {
 			t.Errorf("unexpected first section: %+v", sections[0])
 		}
-		if sections[0].Version != "18.6.0" || sections[0].Release != "Rel-18" {
-			t.Errorf("expected version 18.6.0 / release Rel-18, got %+v", sections[0])
+		if sections[0].Version != "18.6.0" || sections[0].Release != "18" {
+			t.Errorf("expected version 18.6.0 / release 18, got %+v", sections[0])
 		}
 	})
 
 	t.Run("nonexistent spec", func(t *testing.T) {
-		sections, err := d.GetTOC("TS 99.999")
+		sections, err := d.GetTOC("TS 99.999", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -259,7 +259,7 @@ func TestGetSection(t *testing.T) {
 	d := setupTestDB(t)
 
 	t.Run("single section", func(t *testing.T) {
-		sections, err := d.GetSection("TS 23.501", "1", false)
+		sections, err := d.GetSection("TS 23.501", "", "1", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -269,13 +269,13 @@ func TestGetSection(t *testing.T) {
 		if sections[0].Content == "" {
 			t.Error("expected non-empty content")
 		}
-		if sections[0].Version != "18.6.0" || sections[0].Release != "Rel-18" {
-			t.Errorf("expected version 18.6.0 / release Rel-18, got %+v", sections[0])
+		if sections[0].Version != "18.6.0" || sections[0].Release != "18" {
+			t.Errorf("expected version 18.6.0 / release 18, got %+v", sections[0])
 		}
 	})
 
 	t.Run("with subsections", func(t *testing.T) {
-		sections, err := d.GetSection("TS 23.501", "5", true)
+		sections, err := d.GetSection("TS 23.501", "", "5", true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -285,7 +285,7 @@ func TestGetSection(t *testing.T) {
 	})
 
 	t.Run("without subsections", func(t *testing.T) {
-		sections, err := d.GetSection("TS 23.501", "5", false)
+		sections, err := d.GetSection("TS 23.501", "", "5", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -295,7 +295,7 @@ func TestGetSection(t *testing.T) {
 	})
 
 	t.Run("nonexistent section", func(t *testing.T) {
-		sections, err := d.GetSection("TS 23.501", "99", false)
+		sections, err := d.GetSection("TS 23.501", "", "99", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -424,8 +424,8 @@ func TestSearch(t *testing.T) {
 		if results[0].SpecID != "TS 29.510" {
 			t.Errorf("expected spec_id 'TS 29.510', got %q", results[0].SpecID)
 		}
-		if results[0].Version != "18.5.0" || results[0].Release != "Rel-18" {
-			t.Errorf("expected version 18.5.0 / release Rel-18, got %+v", results[0])
+		if results[0].Version != "18.5.0" || results[0].Release != "18" {
+			t.Errorf("expected version 18.5.0 / release 18, got %+v", results[0])
 		}
 	})
 
@@ -451,9 +451,9 @@ func TestSearch(t *testing.T) {
 
 	t.Run("hyphenated term does not error", func(t *testing.T) {
 		// Insert a section with a hyphenated term.
-		err := d.ExecScript(`INSERT INTO specs (id, title) VALUES ('TS 33.203', 'IMS Security') ON CONFLICT DO NOTHING;
-INSERT OR REPLACE INTO sections (spec_id, number, title, level, parent_number, content) VALUES
-    ('TS 33.203', '1', 'Scope', 1, NULL, '# 1 Scope
+		err := d.ExecScript(`INSERT INTO specs (id, version, title) VALUES ('TS 33.203', '', 'IMS Security') ON CONFLICT DO NOTHING;
+INSERT OR REPLACE INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES
+    ('TS 33.203', '', '1', 'Scope', 1, NULL, '# 1 Scope
 This document covers IMS-AKA and sec-agree mechanisms.');`)
 		if err != nil {
 			t.Fatalf("failed to insert test data: %v", err)
@@ -472,10 +472,10 @@ This document covers IMS-AKA and sec-agree mechanisms.');`)
 	})
 
 	t.Run("family spec id matches split parts", func(t *testing.T) {
-		err := d.ExecScript(`INSERT INTO specs (id, title, version, release, series) VALUES
-    ('TS 38.101-1', 'User Equipment radio transmission and reception; Part 1', '18.6.0', 'Rel-18', '38');
-INSERT INTO sections (spec_id, number, title, level, parent_number, content) VALUES
-    ('TS 38.101-1', '5.3A.3', 'Guardband', 2, '5', '## 5.3A.3 Guardband
+		err := d.ExecScript(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+    ('TS 38.101-1', '18.6.0', 'i60', 'User Equipment radio transmission and reception; Part 1', '18', '38');
+INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES
+    ('TS 38.101-1', '18.6.0', '5.3A.3', 'Guardband', 2, '5', '## 5.3A.3 Guardband
 The guardband requirements are specified here.');`)
 		if err != nil {
 			t.Fatalf("failed to insert test data: %v", err)
@@ -780,7 +780,7 @@ func TestGetReferences(t *testing.T) {
 	d := setupTestDB(t)
 
 	t.Run("outgoing", func(t *testing.T) {
-		refs, err := d.GetReferences("TS 24.229", "5.1", "outgoing", false)
+		refs, err := d.GetReferences("TS 24.229", "", "5.1", "outgoing", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -790,7 +790,7 @@ func TestGetReferences(t *testing.T) {
 	})
 
 	t.Run("outgoing with subsections", func(t *testing.T) {
-		refs, err := d.GetReferences("TS 24.229", "5", "outgoing", true)
+		refs, err := d.GetReferences("TS 24.229", "", "5", "outgoing", true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -801,7 +801,7 @@ func TestGetReferences(t *testing.T) {
 	})
 
 	t.Run("incoming", func(t *testing.T) {
-		refs, err := d.GetReferences("TS 33.203", "", "incoming", false)
+		refs, err := d.GetReferences("TS 33.203", "", "", "incoming", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -812,7 +812,7 @@ func TestGetReferences(t *testing.T) {
 	})
 
 	t.Run("incoming with section", func(t *testing.T) {
-		refs, err := d.GetReferences("TS 33.203", "6.1", "incoming", false)
+		refs, err := d.GetReferences("TS 33.203", "", "6.1", "incoming", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -828,7 +828,7 @@ func TestGetReferences(t *testing.T) {
 	})
 
 	t.Run("no results", func(t *testing.T) {
-		refs, err := d.GetReferences("TS 99.999", "", "incoming", false)
+		refs, err := d.GetReferences("TS 99.999", "", "", "incoming", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -838,7 +838,7 @@ func TestGetReferences(t *testing.T) {
 	})
 
 	t.Run("invalid direction", func(t *testing.T) {
-		_, err := d.GetReferences("TS 24.229", "5.1", "sideways", false)
+		_, err := d.GetReferences("TS 24.229", "", "5.1", "sideways", false)
 		if err == nil {
 			t.Fatal("expected error for invalid direction")
 		}
@@ -865,7 +865,7 @@ func TestInsertSpecWithSections_References(t *testing.T) {
 	}
 
 	// Verify references were auto-extracted
-	refs, err := d.GetReferences("TS 99.001", "1", "outgoing", false)
+	refs, err := d.GetReferences("TS 99.001", "", "1", "outgoing", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1035,7 +1035,7 @@ func TestInsertSpecWithSections_BracketedRefs(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	refs, err := d.GetReferences("TS 99.002", "5", "outgoing", false)
+	refs, err := d.GetReferences("TS 99.002", "", "5", "outgoing", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1120,8 +1120,8 @@ func TestExec_DirectSQL(t *testing.T) {
 
 	// Insert a new spec via Exec directly.
 	if err := d.Exec(
-		"INSERT INTO specs (id, title, series) VALUES (?, ?, ?)",
-		"TS 99.123", "Exec-inserted", "99",
+		"INSERT INTO specs (id, version, title, series) VALUES (?, ?, ?, ?)",
+		"TS 99.123", "1.0.0", "Exec-inserted", "99",
 	); err != nil {
 		t.Fatalf("Exec insert: %v", err)
 	}
@@ -1147,7 +1147,7 @@ func TestUpsertSpec_Replaces(t *testing.T) {
 
 	// Existing spec from seed data: TS 23.501 version 18.6.0
 	if err := d.UpsertSpec(Spec{
-		ID: "TS 23.501", Title: "Updated", Version: "k10", Release: "Rel-20", Series: "23",
+		ID: "TS 23.501", Title: "Updated", Version: "18.6.0", VersionToken: "i60", Release: "20", Series: "23",
 	}); err != nil {
 		t.Fatalf("UpsertSpec: %v", err)
 	}
@@ -1166,7 +1166,7 @@ func TestUpsertSpec_Replaces(t *testing.T) {
 	if found == nil {
 		t.Fatal("TS 23.501 missing after upsert")
 	}
-	if found.Title != "Updated" || found.Version != "k10" || found.Release != "Rel-20" {
+	if found.Title != "Updated" || found.Version != "18.6.0" || found.Release != "20" {
 		t.Errorf("upsert did not overwrite fields: %+v", found)
 	}
 }
@@ -1181,6 +1181,7 @@ func TestUpsertSection_ReplacesContent(t *testing.T) {
 	// follows suit.
 	if err := d.UpsertSection(Section{
 		SpecID:  "TS 23.501",
+		Version: "18.6.0",
 		Number:  "1",
 		Title:   "Scope",
 		Level:   1,
@@ -1189,7 +1190,7 @@ func TestUpsertSection_ReplacesContent(t *testing.T) {
 		t.Fatalf("UpsertSection: %v", err)
 	}
 
-	sections, err := d.GetSection("TS 23.501", "1", false)
+	sections, err := d.GetSection("TS 23.501", "", "1", false)
 	if err != nil {
 		t.Fatalf("GetSection: %v", err)
 	}
@@ -1218,6 +1219,7 @@ func TestImageCRUD(t *testing.T) {
 	payload := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xde, 0xad}
 	img := Image{
 		SpecID:      "TS 23.501",
+		Version:     "18.6.0",
 		Name:        "fig1.png",
 		MIMEType:    "image/png",
 		Data:        payload,
@@ -1233,7 +1235,7 @@ func TestImageCRUD(t *testing.T) {
 		t.Fatalf("UpsertImage (replace): %v", err)
 	}
 
-	got, err := d.GetImage("TS 23.501", "fig1.png")
+	got, err := d.GetImage("TS 23.501", "", "fig1.png")
 	if err != nil {
 		t.Fatalf("GetImage: %v", err)
 	}
@@ -1248,12 +1250,12 @@ func TestImageCRUD(t *testing.T) {
 	}
 
 	// Missing image.
-	if _, err := d.GetImage("TS 23.501", "missing.png"); err == nil {
+	if _, err := d.GetImage("TS 23.501", "", "missing.png"); err == nil {
 		t.Error("expected error for missing image")
 	}
 
 	// ListImages returns only the inserted image.
-	infos, err := d.ListImages("TS 23.501")
+	infos, err := d.ListImages("TS 23.501", "")
 	if err != nil {
 		t.Fatalf("ListImages: %v", err)
 	}
@@ -1262,7 +1264,7 @@ func TestImageCRUD(t *testing.T) {
 	}
 
 	// Empty spec → empty result.
-	infos, err = d.ListImages("TS 00.000")
+	infos, err = d.ListImages("TS 00.000", "")
 	if err != nil {
 		t.Fatalf("ListImages empty: %v", err)
 	}
@@ -1278,13 +1280,13 @@ func TestGetBracketMap(t *testing.T) {
 
 	// Insert a References section into TS 23.501.
 	if err := d.UpsertSection(Section{
-		SpecID: "TS 23.501", Number: "2", Title: "References", Level: 1,
+		SpecID: "TS 23.501", Version: "18.6.0", Number: "2", Title: "References", Level: 1,
 		Content: "## 2 References\n\n[1]\t3GPP TS 29.510: \"NRF\"\n[2]\t3GPP TR 23.700: \"Study\"",
 	}); err != nil {
 		t.Fatalf("UpsertSection: %v", err)
 	}
 
-	m, err := d.GetBracketMap("TS 23.501")
+	m, err := d.GetBracketMap("TS 23.501", "")
 	if err != nil {
 		t.Fatalf("GetBracketMap: %v", err)
 	}
@@ -1296,7 +1298,7 @@ func TestGetBracketMap(t *testing.T) {
 	}
 
 	// TS 29.510 has no References section in seed data → expect nil.
-	m2, err := d.GetBracketMap("TS 29.510")
+	m2, err := d.GetBracketMap("TS 29.510", "")
 	if err != nil {
 		t.Fatalf("GetBracketMap empty: %v", err)
 	}
@@ -1324,7 +1326,7 @@ func TestInsertSpecWithSections_MultiSectionRefs(t *testing.T) {
 		t.Fatalf("InsertSpecWithSections: %v", err)
 	}
 
-	refs, err := d.GetReferences("TS 99.003", "5", "outgoing", false)
+	refs, err := d.GetReferences("TS 99.003", "", "5", "outgoing", false)
 	if err != nil {
 		t.Fatalf("GetReferences: %v", err)
 	}

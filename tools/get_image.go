@@ -27,7 +27,9 @@ func HandleGetImage(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest
 			return errorResult("name is required"), nil, nil
 		}
 
-		img, err := d.GetImage(input.SpecID, input.Name)
+		// Images are only imported for the version the database was built with,
+		// so this always answers about that version.
+		img, err := d.GetImage(input.SpecID, "", input.Name)
 		if err != nil {
 			return errorResult(fmt.Sprintf("image not found: %v", err)), nil, nil
 		}

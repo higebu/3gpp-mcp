@@ -5,6 +5,8 @@ import (
 	"encoding/xml"
 	"regexp"
 	"strings"
+
+	"github.com/higebu/3gpp-mcp/internal/specver"
 )
 
 const (
@@ -89,16 +91,20 @@ func extractMetadata(filename string, props coreProperties, bodyElements []bodyE
 	// Remove multi-part suffixes like _cover, _s00-11
 	baseStem := stem
 
-	var specID, title, version, release string
+	var specID, title, version, versionToken, release string
 
-	// Parse from filename
+	// Parse from filename. The trailing group is the base-36 archive token
+	// (e.g. "i60"), which is normalized to the dotted form used everywhere else.
 	if match := filenameRE.FindStringSubmatch(stem); match != nil {
 		series, num, part, ver := match[1], match[2], match[3], match[4]
 		specID = "TS " + series + "." + num
 		if part != "" {
 			specID += "-" + part
 		}
-		version = ver
+		versionToken = strings.ToLower(ver)
+		if dotted, ok := specver.TokenToDotted(versionToken); ok {
+			version = dotted
+		}
 	} else if match := specPatternRE.FindStringSubmatch(stem); match != nil {
 		specID = "TS " + match[1] + "." + match[2]
 	} else {
@@ -175,11 +181,26 @@ func extractMetadata(filename string, props coreProperties, bodyElements []bodyE
 		}
 	}
 
+	// Fill in whichever version form is still missing. A legacy filename whose
+	// token does not parse leaves only the body-scanned dotted version, and a
+	// filename token that has no dotted counterpart leaves only the token.
+	if version != "" && versionToken == "" {
+		if token, ok := specver.DottedToToken(version); ok {
+			versionToken = token
+		}
+	}
+	// The first version component is the release, so a document that never
+	// spells out "Release N" still gets one.
+	if release == "" {
+		release = specver.ReleaseOf(version)
+	}
+
 	return &SpecMetadata{
-		SpecID:  specID,
-		Title:   title,
-		Version: version,
-		Release: release,
+		SpecID:       specID,
+		Title:        title,
+		Version:      version,
+		VersionToken: versionToken,
+		Release:      release,
 	}
 }
 

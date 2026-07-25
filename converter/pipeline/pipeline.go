@@ -17,6 +17,7 @@ import (
 
 	"github.com/higebu/3gpp-mcp/converter/docx"
 	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/specver"
 )
 
 // docxVersionRE matches 3GPP docx filenames like "21900-j10.docx" or
@@ -204,9 +205,9 @@ func (p *Pipeline) processOne(ctx context.Context, spec *SpecVersion) (string, e
 		}
 
 		dbSpec, dbSections, dbImages := convertToDBRecords(parseResult)
-		if spec.Release != 0 {
-			dbSpec.Release = strconv.Itoa(spec.Release)
-		}
+		// The archive entry knows the release and version of the file we asked
+		// for, so it wins over anything scraped out of the document.
+		applyArchiveVersion(&dbSpec, dbSections, spec)
 
 		// Store in DB (serialized)
 		if err := p.DB.InsertSpecWithSectionsAndImages(dbSpec, dbSections, dbImages); err != nil {
@@ -255,21 +256,42 @@ func (p *Pipeline) processOne(ctx context.Context, spec *SpecVersion) (string, e
 	return "OK", nil
 }
 
+// applyArchiveVersion overwrites the version and release of records parsed out
+// of a document with what the archive entry says. The entry names the exact
+// file that was downloaded, so it is authoritative; document metadata is a
+// best-effort scrape that legacy specs frequently get wrong or omit.
+func applyArchiveVersion(spec *db.Spec, sections []db.Section, sv *SpecVersion) {
+	if sv.Version != "" {
+		spec.VersionToken = sv.Version
+		if dotted, ok := specver.TokenToDotted(sv.Version); ok {
+			spec.Version = dotted
+		}
+	}
+	if sv.Release != 0 {
+		spec.Release = strconv.Itoa(sv.Release)
+	}
+	for i := range sections {
+		sections[i].Version = spec.Version
+	}
+}
+
 // convertToDBRecords converts parsed docx results into DB records.
 func convertToDBRecords(result *docx.ParseResult) (db.Spec, []db.Section, []db.Image) {
 	metadata := result.Metadata
 	dbSpec := db.Spec{
-		ID:      metadata.SpecID,
-		Title:   metadata.Title,
-		Version: metadata.Version,
-		Release: metadata.Release,
-		Series:  metadata.Series(),
+		ID:           metadata.SpecID,
+		Title:        metadata.Title,
+		Version:      metadata.Version,
+		VersionToken: metadata.VersionToken,
+		Release:      metadata.Release,
+		Series:       metadata.Series(),
 	}
 
 	var dbSections []db.Section
 	for _, s := range result.Sections {
 		dbSections = append(dbSections, db.Section{
 			SpecID:       metadata.SpecID,
+			Version:      metadata.Version,
 			Number:       s.Number,
 			Title:        s.Title,
 			Level:        s.Level,
@@ -282,6 +304,7 @@ func convertToDBRecords(result *docx.ParseResult) (db.Spec, []db.Section, []db.I
 	for _, img := range result.Images {
 		dbImages = append(dbImages, db.Image{
 			SpecID:      metadata.SpecID,
+			Version:     metadata.Version,
 			Name:        img.Name,
 			MIMEType:    img.MIMEType,
 			Data:        img.Data,

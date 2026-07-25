@@ -489,6 +489,7 @@ func TestHandleImage(t *testing.T) {
 	imgData := []byte("\x89PNG\r\n\x1a\nfake-png-bytes")
 	if err := d.UpsertImage(db.Image{
 		SpecID:      "TS 23.501",
+		Version:     "18.6.0",
 		Name:        "fig1.png",
 		MIMEType:    "image/png",
 		Data:        imgData,
