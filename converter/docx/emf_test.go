@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestConvertResultImages_Real downloads TS 26.274 from the 3GPP archive and
@@ -326,5 +327,28 @@ func TestUpdateImagePlaceholders_TableImageRef(t *testing.T) {
 	wantPNG := `<table><tr><td><img src="image://image3.png" alt="Figure"></td></tr></table>`
 	if got[2] != wantPNG {
 		t.Errorf("already-PNG table img should be unchanged:\n got:  %q\n want: %q", got[2], wantPNG)
+	}
+}
+
+// TestRunSofficeBatch_Timeout verifies that runSofficeBatch reports a
+// dedicated timeout error instead of hanging when the context deadline is
+// exceeded (see issue #60). Uses an already-expired parent deadline so the
+// test runs instantly and does not depend on soffice being installed.
+func TestRunSofficeBatch_Timeout(t *testing.T) {
+	tmpDir := t.TempDir()
+	inputPath := filepath.Join(tmpDir, "a.emf")
+	if err := os.WriteFile(inputPath, []byte("not a real emf"), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	err := runSofficeBatch(ctx, tmpDir, []string{inputPath})
+	if err == nil {
+		t.Fatal("expected error for expired context, got nil")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("expected timeout error, got: %v", err)
 	}
 }
