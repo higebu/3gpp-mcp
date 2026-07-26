@@ -3,6 +3,7 @@ package docx
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // toPNGName replaces a filename's extension with .png.
@@ -305,6 +307,11 @@ func batchConvertToPNG(ctx context.Context, items []*batchItem) error {
 	return nil
 }
 
+// sofficeTimeout bounds a single soffice invocation. LibreOffice occasionally
+// hangs indefinitely in headless mode (e.g. a stuck first-run profile setup),
+// which would otherwise block ConvertDir forever; see issue #60.
+const sofficeTimeout = 5 * time.Minute
+
 // runSofficeBatch invokes `soffice --convert-to png` with the given inputs,
 // writing PNG outputs to outDir. Each invocation uses a fresh user profile
 // so that repeated calls do not contend for LibreOffice's per-profile lock.
@@ -318,6 +325,9 @@ func runSofficeBatch(ctx context.Context, outDir string, inputs []string) error 
 	}
 	defer os.RemoveAll(profileDir)
 
+	ctx, cancel := context.WithTimeout(ctx, sofficeTimeout)
+	defer cancel()
+
 	args := []string{
 		"--headless",
 		"--norestore",
@@ -330,6 +340,9 @@ func runSofficeBatch(ctx context.Context, outDir string, inputs []string) error 
 	cmd := exec.CommandContext(ctx, "soffice", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("soffice timed out after %s (output: %s)", sofficeTimeout, string(output))
+		}
 		return fmt.Errorf("%w (output: %s)", err, string(output))
 	}
 	return nil
