@@ -381,6 +381,44 @@ func TestConvertDir_ConvertDocNoDocFiles(t *testing.T) {
 	}
 }
 
+// TestConvertDir_ConvertDocFailurePropagates verifies that a .doc conversion
+// failure is surfaced as a non-nil error from ConvertDir instead of being
+// silently logged (#64 review), while a valid pre-existing .docx in the same
+// directory is still imported. PATH is overridden so the libreoffice
+// invocation fails deterministically regardless of whether LibreOffice is
+// actually installed on the host.
+func TestConvertDir_ConvertDocFailurePropagates(t *testing.T) {
+	docxData, err := os.ReadFile(testdataDocxPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "good.docx"), docxData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bad.doc"), []byte("not a real doc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+
+	d := setupTestDB(t)
+
+	err = ConvertDir(context.Background(), d, dir, 1, true, false)
+	if err == nil {
+		t.Fatal("expected error when .doc conversion fails")
+	}
+
+	result, listErr := d.ListSpecs("", "", -1, 0)
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(result.Specs) == 0 {
+		t.Error("expected the pre-existing .docx to still be imported despite the conversion error")
+	}
+}
+
 // TestConvertDir_EmptyDirError verifies ConvertDir returns an error when no
 // .docx files are present.
 func TestConvertDir_EmptyDirError(t *testing.T) {
