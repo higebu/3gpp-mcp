@@ -253,6 +253,7 @@ func cmdConvertDir(args []string) {
 	fs := flag.NewFlagSet("import-dir", flag.ExitOnError)
 	dbPath := fs.String("db", "3gpp.db", "Output SQLite database path")
 	workers := fs.Int("parse-workers", runtime.NumCPU(), "Number of parallel parse workers")
+	convertDoc := fs.Bool("convert-doc", false, "Convert .doc to .docx using LibreOffice")
 	convertImage := fs.Bool("convert-image", false, "Convert EMF/WMF images to PNG using LibreOffice (requires soffice)")
 	_ = fs.Parse(args)
 
@@ -278,7 +279,7 @@ func cmdConvertDir(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	if err := pipeline.ConvertDir(ctx, d, dirPath, *workers, *convertImage); err != nil {
+	if err := pipeline.ConvertDir(ctx, d, dirPath, *workers, *convertDoc, *convertImage); err != nil {
 		log.Fatalf("Convert dir failed: %v", err)
 	}
 }

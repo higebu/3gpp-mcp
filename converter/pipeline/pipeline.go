@@ -348,7 +348,21 @@ func ConvertSingleFile(ctx context.Context, d *db.DB, docxPath string, convertIm
 }
 
 // ConvertDir converts all .docx files in a directory and stores them in the database.
-func ConvertDir(ctx context.Context, d *db.DB, dirPath string, workers int, convertImage bool) error {
+// If convertDoc is true, any .doc files in dirPath are first converted to .docx
+// (written alongside the originals) using LibreOffice before the directory is scanned.
+func ConvertDir(ctx context.Context, d *db.DB, dirPath string, workers int, convertDoc, convertImage bool) error {
+	var docConvertErr error
+	if convertDoc {
+		n, err := ConvertDocFiles(ctx, dirPath, dirPath)
+		if n > 0 {
+			log.Printf("Converted %d .doc file(s) to .docx", n)
+		}
+		if err != nil {
+			log.Printf("doc conversion: %v", err)
+			docConvertErr = fmt.Errorf("convert .doc files: %w", err)
+		}
+	}
+
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
 		return err
@@ -452,5 +466,5 @@ func ConvertDir(ctx context.Context, d *db.DB, dirPath string, workers int, conv
 		log.Printf("  %d of %d files failed to parse", parseErrors, len(files))
 	}
 
-	return nil
+	return docConvertErr
 }

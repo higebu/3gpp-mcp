@@ -310,6 +310,42 @@ func TestCmdConvertDir_HappyPath(t *testing.T) {
 	}
 }
 
+// TestCmdConvertDir_ConvertDocFlag verifies that import-dir accepts
+// -convert-doc (#63). The directory has no .doc files, so ConvertDocFiles is
+// a no-op and this does not require LibreOffice to be installed.
+func TestCmdConvertDir_ConvertDocFlag(t *testing.T) {
+	srcDocx := testdataDocxPath(t)
+	if _, err := os.Stat(srcDocx); err != nil {
+		t.Skipf("testdata .docx not available: %v", err)
+	}
+	docxBytes, err := os.ReadFile(srcDocx)
+	if err != nil {
+		t.Fatalf("read testdata: %v", err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "23274-i20.docx"), docxBytes, 0o644); err != nil {
+		t.Fatalf("write docx: %v", err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "dir.db")
+
+	_ = captureStdout(t, func() {
+		cmdConvertDir([]string{"-db", dbPath, "-parse-workers", "1", "-convert-doc", dir})
+	})
+
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer d.Close()
+	result, err := d.ListSpecs("", "", -1, 0)
+	if err != nil {
+		t.Fatalf("list specs: %v", err)
+	}
+	if len(result.Specs) == 0 {
+		t.Error("expected at least one spec inserted")
+	}
+}
+
 // TestCmdConvert_OptionsAfterPath exercises the os.Exit(1) path taken when a
 // flag is placed after <docx-file>. Go's flag package stops parsing at the
 // first non-flag argument, so a trailing flag like --convert-image would
