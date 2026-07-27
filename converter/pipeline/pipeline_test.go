@@ -86,7 +86,7 @@ func TestConvertDir_Race(t *testing.T) {
 
 	d := setupTestDB(t)
 
-	if err := ConvertDir(context.Background(), d, dir, 4, false); err != nil {
+	if err := ConvertDir(context.Background(), d, dir, 4, false, false); err != nil {
 		t.Fatalf("ConvertDir: %v", err)
 	}
 
@@ -351,12 +351,42 @@ func TestPipelineRun_ContextCancel(t *testing.T) {
 	}
 }
 
+// TestConvertDir_ConvertDocNoDocFiles verifies that passing convertDoc=true
+// to ConvertDir does not break the normal .docx-only import path (#63):
+// ConvertDocFiles is a no-op when the directory has no .doc files, so this
+// does not require LibreOffice.
+func TestConvertDir_ConvertDocNoDocFiles(t *testing.T) {
+	docxData, err := os.ReadFile(testdataDocxPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "spec.docx"), docxData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	d := setupTestDB(t)
+
+	if err := ConvertDir(context.Background(), d, dir, 1, true, false); err != nil {
+		t.Fatalf("ConvertDir with convertDoc=true: %v", err)
+	}
+
+	result, err := d.ListSpecs("", "", -1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Specs) == 0 {
+		t.Error("expected at least one spec in DB after ConvertDir")
+	}
+}
+
 // TestConvertDir_EmptyDirError verifies ConvertDir returns an error when no
 // .docx files are present.
 func TestConvertDir_EmptyDirError(t *testing.T) {
 	dir := t.TempDir()
 	d := setupTestDB(t)
-	err := ConvertDir(context.Background(), d, dir, 1, false)
+	err := ConvertDir(context.Background(), d, dir, 1, false, false)
 	if err == nil {
 		t.Fatal("expected error for empty directory")
 	}
@@ -369,7 +399,7 @@ func TestConvertDir_EmptyDirError(t *testing.T) {
 // when the directory does not exist.
 func TestConvertDir_MissingDir(t *testing.T) {
 	d := setupTestDB(t)
-	err := ConvertDir(context.Background(), d, filepath.Join(t.TempDir(), "nope"), 1, false)
+	err := ConvertDir(context.Background(), d, filepath.Join(t.TempDir(), "nope"), 1, false, false)
 	if err == nil {
 		t.Fatal("expected error for missing directory")
 	}

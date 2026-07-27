@@ -407,6 +407,7 @@ Import all `.docx` files in a directory into the database. Alias: `convert-dir`.
 |------|-------------|---------|
 | `--db` | Output SQLite database path | `3gpp.db` |
 | `--parse-workers` | Number of parallel parse workers | NumCPU |
+| `--convert-doc` | Convert `.doc` to `.docx` using LibreOffice | `false` |
 | `--convert-image` | Convert EMF/WMF images to PNG using LibreOffice | `false` |
 
 Usage: `3gpp-mcp import-dir --db data/3gpp.db ./specs`
