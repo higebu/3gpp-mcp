@@ -100,6 +100,31 @@ func defaultFetchBudget() time.Duration {
 	return versionstore.DefaultBudget
 }
 
+// newMCPServer builds the MCP server and registers every tool. It is shared
+// by cmdServe and the transport tests.
+func newMCPServer(d *db.DB, src *tools.Source) *mcp.Server {
+	s := mcp.NewServer(&mcp.Implementation{
+		Name:    "3gpp-mcp",
+		Version: version,
+	}, &mcp.ServerOptions{
+		Instructions: "3GPP specification server. Use list_specs to find specifications, get_toc to browse structure, get_section to read specification document text (architecture, procedures, requirements), and search to find relevant sections. Use get_references to explore cross-references between specifications (outgoing: what a section references; incoming: what references a spec). For 5G API details (HTTP methods, request/response bodies, paths, schemas, data models) from TS 29.xxx series, use list_openapi to discover APIs and get_openapi to read their OpenAPI definitions. Always prefer get_openapi over get_section when looking up API request/response formats or data type definitions.\n\n" +
+			"Versions: the database holds one version per specification, and every get_section, get_toc and search result names the specification and version it came from. To compare a procedure across releases, call list_versions to see which versions exist, then pass version to get_section or get_toc. A version that is not in the database is downloaded and converted on first use, which takes up to a few minutes for a large specification; when that happens the tool says so and you should call it again with the same arguments. Section numbers move between releases, so check get_toc for the older version before reading a section of it. search only covers the version in the database, and get_image and get_references only have data for that version, so an archived version returns text alone.",
+	})
+
+	mcp.AddTool(s, tools.ListSpecsTool, tools.HandleListSpecs(d))
+	mcp.AddTool(s, tools.ListVersionsTool, tools.HandleListVersions(src))
+	mcp.AddTool(s, tools.GetTOCTool, tools.HandleGetTOC(src))
+	mcp.AddTool(s, tools.GetSectionTool, tools.HandleGetSection(src))
+	mcp.AddTool(s, tools.SearchTool, tools.HandleSearch(d))
+	mcp.AddTool(s, tools.ListOpenAPITool, tools.HandleListOpenAPI(d))
+	mcp.AddTool(s, tools.GetOpenAPITool, tools.HandleGetOpenAPI(d))
+	mcp.AddTool(s, tools.GetReferencesTool, tools.HandleGetReferences(d))
+	mcp.AddTool(s, tools.ListImagesTool, tools.HandleListImages(d))
+	mcp.AddTool(s, tools.GetImageTool, tools.HandleGetImage(d))
+
+	return s
+}
+
 func cmdServe(args []string) {
 	defaultTransport := "stdio"
 	if v := os.Getenv("THREEGPP_MCP_TRANSPORT"); v != "" {
@@ -157,24 +182,7 @@ func cmdServe(args []string) {
 		}
 	}
 
-	s := mcp.NewServer(&mcp.Implementation{
-		Name:    "3gpp-mcp",
-		Version: version,
-	}, &mcp.ServerOptions{
-		Instructions: "3GPP specification server. Use list_specs to find specifications, get_toc to browse structure, get_section to read specification document text (architecture, procedures, requirements), and search to find relevant sections. Use get_references to explore cross-references between specifications (outgoing: what a section references; incoming: what references a spec). For 5G API details (HTTP methods, request/response bodies, paths, schemas, data models) from TS 29.xxx series, use list_openapi to discover APIs and get_openapi to read their OpenAPI definitions. Always prefer get_openapi over get_section when looking up API request/response formats or data type definitions.\n\n" +
-			"Versions: the database holds one version per specification, and every get_section, get_toc and search result names the specification and version it came from. To compare a procedure across releases, call list_versions to see which versions exist, then pass version to get_section or get_toc. A version that is not in the database is downloaded and converted on first use, which takes up to a few minutes for a large specification; when that happens the tool says so and you should call it again with the same arguments. Section numbers move between releases, so check get_toc for the older version before reading a section of it. search only covers the version in the database, and get_image and get_references only have data for that version, so an archived version returns text alone.",
-	})
-
-	mcp.AddTool(s, tools.ListSpecsTool, tools.HandleListSpecs(d))
-	mcp.AddTool(s, tools.ListVersionsTool, tools.HandleListVersions(src))
-	mcp.AddTool(s, tools.GetTOCTool, tools.HandleGetTOC(src))
-	mcp.AddTool(s, tools.GetSectionTool, tools.HandleGetSection(src))
-	mcp.AddTool(s, tools.SearchTool, tools.HandleSearch(d))
-	mcp.AddTool(s, tools.ListOpenAPITool, tools.HandleListOpenAPI(d))
-	mcp.AddTool(s, tools.GetOpenAPITool, tools.HandleGetOpenAPI(d))
-	mcp.AddTool(s, tools.GetReferencesTool, tools.HandleGetReferences(d))
-	mcp.AddTool(s, tools.ListImagesTool, tools.HandleListImages(d))
-	mcp.AddTool(s, tools.GetImageTool, tools.HandleGetImage(d))
+	s := newMCPServer(d, src)
 
 	switch *transport {
 	case "stdio":
@@ -183,9 +191,14 @@ func cmdServe(args []string) {
 			log.Fatalf("Server error: %v", err)
 		}
 	case "http":
+		// Stateless mode is required to serve protocol version 2026-07-28,
+		// whose lifecycle has no initialize handshake or Mcp-Session-Id.
+		// Older clients still work: each request runs in a temporary session.
+		// This server never initiates server->client requests, so nothing is
+		// lost by not keeping sessions.
 		mcpHandler := mcp.NewStreamableHTTPHandler(
 			func(r *http.Request) *mcp.Server { return s },
-			nil,
+			&mcp.StreamableHTTPOptions{Stateless: true},
 		)
 		var mcpH http.Handler = mcpHandler
 		if *bearerToken != "" {

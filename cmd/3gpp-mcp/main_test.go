@@ -14,7 +14,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/testutil"
+	"github.com/higebu/3gpp-mcp/tools"
 )
 
 func TestHealthHandler(t *testing.T) {
@@ -637,5 +641,100 @@ func TestMainDispatch_CompletionBash(t *testing.T) {
 	}
 	if !strings.Contains(string(stdout), "_3gpp_mcp") {
 		t.Errorf("expected bash completion output, got: %s", stdout)
+	}
+}
+
+// TestStreamableHTTP exercises the HTTP transport end to end: an SDK client
+// speaking the latest protocol version against the stateless handler used by
+// cmdServe.
+func TestStreamableHTTP(t *testing.T) {
+	d := testutil.SetupTestDB(t)
+	s := newMCPServer(d, tools.NewSource(d))
+
+	handler := mcp.NewStreamableHTTPHandler(
+		func(r *http.Request) *mcp.Server { return s },
+		&mcp.StreamableHTTPOptions{Stateless: true},
+	)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	ctx := context.Background()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.0"}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: ts.URL}, nil)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer session.Close()
+
+	if got := session.InitializeResult().ProtocolVersion; got != "2026-07-28" {
+		t.Errorf("negotiated protocol version = %q, want %q", got, "2026-07-28")
+	}
+
+	toolsRes, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if len(toolsRes.Tools) != 10 {
+		t.Errorf("got %d tools, want 10", len(toolsRes.Tools))
+	}
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "list_specs",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(list_specs): %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("list_specs returned an error result: %v", res.Content)
+	}
+	if len(res.Content) == 0 {
+		t.Fatal("list_specs returned no content")
+	}
+}
+
+// TestStreamableHTTPNewProtocolRawPOST verifies that a bare 2026-07-28
+// request — no initialize handshake, no session — is served.
+func TestStreamableHTTPNewProtocolRawPOST(t *testing.T) {
+	d := testutil.SetupTestDB(t)
+	s := newMCPServer(d, tools.NewSource(d))
+
+	handler := mcp.NewStreamableHTTPHandler(
+		func(r *http.Request) *mcp.Server { return s },
+		&mcp.StreamableHTTPOptions{Stateless: true},
+	)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{` +
+		`"io.modelcontextprotocol/protocolVersion":"2026-07-28",` +
+		`"io.modelcontextprotocol/clientCapabilities":{}}}}`
+	req, err := http.NewRequest("POST", ts.URL, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("MCP-Protocol-Version", "2026-07-28")
+	// SEP-2243: 2026-07-28 requests mirror the JSON-RPC method in a header.
+	req.Header.Set("Mcp-Method", "tools/list")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, respBody)
+	}
+	if !strings.Contains(string(respBody), "list_specs") {
+		t.Errorf("response does not contain tool list: %s", respBody)
+	}
+	if id := resp.Header.Get("Mcp-Session-Id"); id != "" {
+		t.Errorf("stateless server issued Mcp-Session-Id %q", id)
 	}
 }

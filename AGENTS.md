@@ -126,7 +126,7 @@ Ten tools are exposed via MCP:
 ### Transport
 
 - **stdio** (default): For Claude Code / IDE integration
-- **HTTP**: With optional Bearer token auth (`THREEGPP_MCP_BEARER_TOKEN`) and optional web viewer (`--web`)
+- **HTTP**: With optional Bearer token auth (`THREEGPP_MCP_BEARER_TOKEN`) and optional web viewer (`--web`). Runs stateless (`StreamableHTTPOptions{Stateless: true}`), which is required to serve MCP protocol version 2026-07-28; older protocol versions are served through per-request sessions. The server has no server-initiated features, so statelessness loses nothing.
 
 ### Web Viewer
 

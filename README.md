@@ -140,6 +140,10 @@ Add to your configuration file (`~/Library/Application Support/Claude/claude_des
 
 #### Streamable HTTP (remote deployment)
 
+The HTTP transport is stateless: it supports MCP protocol version 2026-07-28 (no
+initialize handshake, no `Mcp-Session-Id`) while older clients (2024-11-05
+through 2025-11-25) keep working through per-request sessions.
+
 Start the server with HTTP transport:
 
 ```bash
