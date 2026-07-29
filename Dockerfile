@@ -31,8 +31,10 @@ RUN if [ "${RELEASE}" = "latest" ] || [ -z "${RELEASE}" ]; then \
     --timeout 120s \
     --scrape-workers 4
 
-# 3) Final image: just the binary and the baked-in database.
+# 3) Final image: just the binary, the baked-in database, and CA certificates
+#    (needed for on-demand HTTPS fetches of versions not in the prebuilt DB).
 FROM scratch
+COPY --from=db-builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=go-builder /3gpp-mcp /3gpp-mcp
 COPY --from=db-builder /3gpp.db /3gpp.db
 ENTRYPOINT ["/3gpp-mcp"]
