@@ -77,6 +77,37 @@ func TestBearerAuthMiddleware(t *testing.T) {
 			t.Errorf("expected 401, got %d", w.Code)
 		}
 	})
+
+	t.Run("scheme is case-insensitive", func(t *testing.T) {
+		// RFC 7235 auth-scheme tokens are case-insensitive; proxies may
+		// normalize the casing.
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Authorization", "bearer secret-token")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200 for lowercase scheme, got %d", w.Code)
+		}
+	})
+
+	t.Run("401 carries a challenge", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if got := w.Header().Get("WWW-Authenticate"); !strings.Contains(got, "Bearer") {
+			t.Errorf("expected a Bearer challenge, got %q", got)
+		}
+	})
+
+	t.Run("token must not match as a prefix", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Authorization", "Bearer secret-token-extra")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401, got %d", w.Code)
+		}
+	})
 }
 
 // captureStdout runs fn and returns whatever it wrote to os.Stdout.
@@ -737,4 +768,66 @@ func TestStreamableHTTPNewProtocolRawPOST(t *testing.T) {
 	if id := resp.Header.Get("Mcp-Session-Id"); id != "" {
 		t.Errorf("stateless server issued Mcp-Session-Id %q", id)
 	}
+}
+
+// TestBuildHTTPHandler_WebViewerAuth verifies that a bearer token protects the
+// web viewer too, not just the MCP endpoint: the viewer serves the same corpus
+// as the tools, so an unauthenticated viewer would make the token meaningless.
+func TestBuildHTTPHandler_WebViewerAuth(t *testing.T) {
+	d := testutil.SetupTestDB(t)
+	s := newMCPServer(d, tools.NewSource(d))
+
+	t.Run("token set", func(t *testing.T) {
+		handler := buildHTTPHandler(d, s, "secret-token", true)
+		ts := httptest.NewServer(handler)
+		defer ts.Close()
+
+		for _, path := range []string{"/", "/specs/TS%2023.501", "/search?q=architecture", "/mcp/"} {
+			resp, err := http.Get(ts.URL + path)
+			if err != nil {
+				t.Fatalf("GET %s: %v", path, err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusUnauthorized {
+				t.Errorf("GET %s without token = %d, want 401", path, resp.StatusCode)
+			}
+		}
+
+		// The health probe stays open for load balancers.
+		resp, err := http.Get(ts.URL + "/health")
+		if err != nil {
+			t.Fatalf("GET /health: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET /health = %d, want 200", resp.StatusCode)
+		}
+
+		// With the token, the viewer answers.
+		req, _ := http.NewRequest("GET", ts.URL+"/", nil)
+		req.Header.Set("Authorization", "Bearer secret-token")
+		authed, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET / with token: %v", err)
+		}
+		defer authed.Body.Close()
+		if authed.StatusCode != http.StatusOK {
+			t.Errorf("GET / with token = %d, want 200", authed.StatusCode)
+		}
+	})
+
+	t.Run("no token keeps viewer open", func(t *testing.T) {
+		handler := buildHTTPHandler(d, s, "", true)
+		ts := httptest.NewServer(handler)
+		defer ts.Close()
+
+		resp, err := http.Get(ts.URL + "/")
+		if err != nil {
+			t.Fatalf("GET /: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET / without a configured token = %d, want 200", resp.StatusCode)
+		}
+	})
 }
