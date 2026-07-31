@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -158,6 +159,48 @@ func TestGetImageBaseNameFallback(t *testing.T) {
 	// The fallback must not treat LIKE metacharacters in the name as wildcards.
 	if img, err := s.GetImage("TS 23.501", "18.6.0", "image_.emf"); err != nil || img != nil {
 		t.Errorf("GetImage(image_.emf) = %+v, %v; want nil, nil", img, err)
+	}
+
+	// A name without an extension has nothing to fall back on.
+	if img, err := s.GetImage("TS 23.501", "18.6.0", "image1"); err != nil || img != nil {
+		t.Errorf("GetImage(image1) = %+v, %v; want nil, nil", img, err)
+	}
+}
+
+// TestEnsureImagesSingleflight checks that concurrent callers for the same
+// version share one image download.
+func TestEnsureImagesSingleflight(t *testing.T) {
+	release := make(chan struct{})
+	var calls atomic.Int32
+	s := openImageStore(t, DefaultLimitBytes, func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+		calls.Add(1)
+		<-release
+		return fakeImages(8), nil
+	})
+	ensureVersion(t, s, "TS 23.501", "18.6.0")
+
+	const callers = 4
+	var wg sync.WaitGroup
+	errs := make([]error, callers)
+	for i := range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = s.EnsureImages(context.Background(), "TS 23.501", "18.6.0", entry("23.501"), time.Minute)
+		}()
+	}
+	// Give every caller a chance to join the same in-flight fetch.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("caller %d: %v", i, err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("image fetcher called %d times, want 1", got)
 	}
 }
 
@@ -336,5 +379,18 @@ CREATE TABLE IF NOT EXISTS cache_entries (
 	}
 	if fetched, err := s.HasImages("TS 23.501", "18.6.0"); err != nil || fetched {
 		t.Errorf("HasImages = %v, %v; want false for a migrated entry", fetched, err)
+	}
+
+	// Reopening an already-migrated cache must tolerate the existing column.
+	if err := s.Close(); err != nil {
+		t.Fatalf("close migrated cache: %v", err)
+	}
+	reopened, err := Open(Options{Path: path, LimitBytes: DefaultLimitBytes})
+	if err != nil {
+		t.Fatalf("Open on an already-migrated cache: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if has, err := reopened.Has("TS 23.501", "18.6.0"); err != nil || !has {
+		t.Errorf("Has after reopen = %v, %v; want the entry intact", has, err)
 	}
 }

@@ -200,6 +200,73 @@ func TestFetchVersionImages(t *testing.T) {
 	}
 }
 
+// TestFetchVersionImagesSkipsCorruptPart checks that one unparsable part does
+// not lose the images of the others.
+func TestFetchVersionImagesSkipsCorruptPart(t *testing.T) {
+	archive := makeZipWithFiles(t, map[string][]byte{
+		"23501-i60_s01.docx": []byte("not a zip"),
+		"23501-i60_s02.docx": makeDocxWithImage(t, []byte("png-bytes")),
+	})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/23501-i60.zip", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	sv := ParseSpecEntry("23_series/23.501/23501-i60.zip")
+	if sv == nil {
+		t.Fatal("ParseSpecEntry returned nil")
+	}
+	images, err := FetchVersionImages(context.Background(), client, sv, 0)
+	if err != nil {
+		t.Fatalf("FetchVersionImages: %v", err)
+	}
+	if len(images) != 1 || images[0].Name != "image1.png" {
+		t.Fatalf("images = %+v, want the valid part's image1.png", images)
+	}
+}
+
+// TestFetchVersionImagesNoDocuments checks the error for an archive entry that
+// contains no documents at all.
+func TestFetchVersionImagesNoDocuments(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/23501-i60.zip", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(makeRawZipEntry(t, "readme.txt", []byte("nothing here")))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	sv := ParseSpecEntry("23_series/23.501/23501-i60.zip")
+	if sv == nil {
+		t.Fatal("ParseSpecEntry returned nil")
+	}
+	if _, err := FetchVersionImages(context.Background(), client, sv, 0); !errors.Is(err, ErrNoDocx) {
+		t.Fatalf("FetchVersionImages = %v, want ErrNoDocx", err)
+	}
+}
+
+// TestFetchVersionImagesDownloadError checks that a failed download propagates.
+func TestFetchVersionImagesDownloadError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	sv := ParseSpecEntry("23_series/23.501/23501-i60.zip")
+	if sv == nil {
+		t.Fatal("ParseSpecEntry returned nil")
+	}
+	if _, err := FetchVersionImages(context.Background(), client, sv, 0); err == nil {
+		t.Fatal("FetchVersionImages should fail when the download fails")
+	}
+}
+
 // TestFetchVersionImagesDocOnly checks that a legacy .doc-only version reports
 // the same guidance as the section fetch.
 func TestFetchVersionImagesDocOnly(t *testing.T) {

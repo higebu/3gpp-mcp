@@ -271,6 +271,22 @@ func TestGetImageArchivedVersion(t *testing.T) {
 		t.Errorf("image fetcher called %d times, want 1", got)
 	}
 
+	// A name the version does not hold is a not-found error naming the version.
+	missing, _, err := handler(context.Background(), nil, GetImageInput{
+		SpecID:  "TS 23.501",
+		Name:    "missing.png",
+		Version: "19.5.0",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !missing.IsError {
+		t.Fatal("expected an error result for a missing archived image")
+	}
+	if text := getTextContent(missing); !strings.Contains(text, "not found in TS 23.501 v19.5.0") {
+		t.Errorf("expected a versioned not-found message, got: %s", text)
+	}
+
 	// The database version must keep answering from the database.
 	result, _, err := handler(context.Background(), nil, GetImageInput{SpecID: "TS 23.501", Name: "image1.png"})
 	if err != nil {
