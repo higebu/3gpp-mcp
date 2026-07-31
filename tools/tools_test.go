@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -889,5 +890,39 @@ func TestHandleGetOpenAPI_FilteredPagination(t *testing.T) {
 	}
 	if firstText == secondText {
 		t.Error("expected pages to differ")
+	}
+}
+
+// TestHandleGetReferences_Truncation verifies the response cap: a spec-wide
+// incoming query over a heavily-cited spec is cut at MaxReferences with a
+// notice instead of serializing every row.
+func TestHandleGetReferences_Truncation(t *testing.T) {
+	d := setupTestDB(t)
+	handler := HandleGetReferences(d)
+
+	var sb strings.Builder
+	sb.WriteString("INSERT INTO spec_references (source_spec_id, source_version, source_section, target_spec, target_section, context) VALUES ")
+	for i := range MaxReferences + 10 {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, "('TS 90.%03d', '18.0.0', '5.%d', 'TS 23.501', '', 'ctx %d')", i%500, i, i)
+	}
+	if err := d.Exec(sb.String()); err != nil {
+		t.Fatalf("seed references: %v", err)
+	}
+
+	result, _, err := handler(context.Background(), nil, GetReferencesInput{
+		SpecID: "TS 23.501", Direction: "incoming",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := getTextContent(result)
+	if !strings.Contains(text, fmt.Sprintf("[Truncated: showing %d of %d references", MaxReferences, MaxReferences+10)) {
+		t.Errorf("expected a truncation notice, got tail: %s", text[len(text)-200:])
+	}
+	if got := strings.Count(text, `"source_spec_id"`); got != MaxReferences {
+		t.Errorf("expected %d serialized references, got %d", MaxReferences, got)
 	}
 }

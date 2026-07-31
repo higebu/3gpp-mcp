@@ -772,3 +772,18 @@ func readBody(t *testing.T, resp *http.Response) string {
 	}
 	return string(data)
 }
+
+// TestHandleIndex_HugePage verifies that an absurd page number cannot
+// overflow the offset computation; the server must still answer.
+func TestHandleIndex_HugePage(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	resp, err := http.Get(ts.URL + "/?page=400000000000000000")
+	if err != nil {
+		t.Fatalf("GET /?page=...: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+}

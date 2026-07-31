@@ -243,3 +243,31 @@ func TestEscapeMathText(t *testing.T) {
 		}
 	}
 }
+
+// TestParseOMMLNode_DepthCap verifies that absurdly nested OMML cannot
+// exhaust the stack: children past the cap are consumed but not retained.
+func TestParseOMMLNode_DepthCap(t *testing.T) {
+	depth := maxOMMLDepth + 50
+	var sb strings.Builder
+	sb.WriteString(`<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">`)
+	for range depth {
+		sb.WriteString("<m:e>")
+	}
+	sb.WriteString(`<m:t>x</m:t>`)
+	for range depth {
+		sb.WriteString("</m:e>")
+	}
+	sb.WriteString(`</m:oMath>`)
+
+	d := xml.NewDecoder(strings.NewReader(sb.String()))
+	tok, err := d.Token()
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := tok.(xml.StartElement)
+	// Must terminate without a stack overflow and leave the decoder balanced.
+	_ = ommlToLaTeX(d, start)
+	if _, err := d.Token(); err == nil {
+		t.Error("expected the decoder to be fully consumed")
+	}
+}

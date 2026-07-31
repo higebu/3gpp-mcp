@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -828,6 +829,37 @@ func TestBuildHTTPHandler_WebViewerAuth(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("GET / without a configured token = %d, want 200", resp.StatusCode)
+		}
+	})
+}
+
+// TestRunHTTPServer covers the serve loop extracted from cmdServe: graceful
+// shutdown on context cancellation and error propagation on listen failure.
+func TestRunHTTPServer(t *testing.T) {
+	t.Run("graceful shutdown on cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		server := &http.Server{Addr: "127.0.0.1:0", Handler: http.HandlerFunc(healthHandler)}
+
+		done := make(chan error, 1)
+		go func() { done <- runHTTPServer(ctx, server) }()
+		// Give ListenAndServe a moment to bind, then cancel.
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("expected nil after graceful shutdown, got %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("runHTTPServer did not return after cancellation")
+		}
+	})
+
+	t.Run("listen error propagates", func(t *testing.T) {
+		server := &http.Server{Addr: "256.256.256.256:0", Handler: http.HandlerFunc(healthHandler)}
+		if err := runHTTPServer(context.Background(), server); err == nil {
+			t.Error("expected an error for an unbindable address")
 		}
 	})
 }

@@ -368,6 +368,8 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"unterminated phrase closed", `"core network`, `"core network"`},
 		{"parentheses quoted literally", "(38.331 OR SMF)", `"(38.331" OR "SMF)"`},
 		{"empty column filter quoted", "content:", `"content:"`},
+		{"balanced quoted column filter unchanged", `content:"band"`, `content:"band"`},
+		{"unterminated quoted column filter repaired", `content:"band`, `content:"band"`},
 	}
 
 	for _, tt := range tests {
@@ -1448,5 +1450,47 @@ func TestInsertSpecWithSections_MultiSectionRefs(t *testing.T) {
 		if !got[want] {
 			t.Errorf("missing multi-ref %s; got: %+v", want, refs)
 		}
+	}
+}
+
+// TestInsertSpec_DropsSupersededVersions covers the one-version-per-spec
+// invariant: importing a new version removes every other version's rows so
+// the FTS index (which has no version column) cannot double search hits.
+func TestInsertSpec_DropsSupersededVersions(t *testing.T) {
+	d := setupTestDB(t)
+
+	insert := func(version string) {
+		t.Helper()
+		err := d.InsertSpecWithSectionsAndImages(
+			Spec{ID: "TS 99.100", Version: version, Title: "Test", Series: "99"},
+			[]Section{{
+				SpecID: "TS 99.100", Version: version, Number: "1", Title: "Scope",
+				Level: 1, Content: "supersededprobe content referencing TS 23.501 clause 5.1",
+			}},
+			[]Image{{SpecID: "TS 99.100", Version: version, Name: "img.png", MIMEType: "image/png", Data: []byte{1}}},
+		)
+		if err != nil {
+			t.Fatalf("insert v%s: %v", version, err)
+		}
+	}
+
+	insert("17.0.0")
+	insert("18.0.0")
+
+	specs, err := d.ListSpecVersions("TS 99.100")
+	if err != nil {
+		t.Fatalf("ListSpecVersions: %v", err)
+	}
+	if len(specs) != 1 || specs[0].Version != "18.0.0" {
+		t.Fatalf("expected only v18.0.0 to remain, got %+v", specs)
+	}
+
+	// The superseded version's sections must be gone from search too.
+	results, err := d.Search("supersededprobe", nil, 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("expected exactly 1 search hit after supersede, got %d", len(results))
 	}
 }

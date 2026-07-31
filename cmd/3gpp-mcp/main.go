@@ -254,26 +254,34 @@ func cmdServe(args []string) {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
-		errCh := make(chan error, 1)
-		go func() { errCh <- server.ListenAndServe() }()
-		select {
-		case err := <-errCh:
-			if err != nil && !errors.Is(err, http.ErrServerClosed) {
-				log.Fatalf("Server error: %v", err)
-			}
-		case <-ctx.Done():
-			// Drain in-flight requests, then return normally so the deferred
-			// database and version cache closes actually run.
-			log.Println("Shutting down...")
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if err := server.Shutdown(shutdownCtx); err != nil {
-				log.Printf("Shutdown error: %v", err)
-			}
+		if err := runHTTPServer(ctx, server); err != nil {
+			log.Fatalf("Server error: %v", err)
 		}
 	default:
 		log.Fatalf("Unknown transport: %s", *transport)
 	}
+}
+
+// runHTTPServer serves until the listener fails or ctx is cancelled. On
+// cancellation it drains in-flight requests and returns nil, so the caller's
+// deferred database and version cache closes actually run.
+func runHTTPServer(ctx context.Context, server *http.Server) error {
+	errCh := make(chan error, 1)
+	go func() { errCh <- server.ListenAndServe() }()
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+	case <-ctx.Done():
+		log.Println("Shutting down...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Shutdown error: %v", err)
+		}
+	}
+	return nil
 }
 
 func cmdConvert(args []string) {
