@@ -354,8 +354,21 @@ func cmdConvertDir(args []string) {
 	}
 }
 
+// exit is swapped in tests to cover fatal CLI-argument paths without
+// terminating the test process.
+var exit = os.Exit
+
+// requireSelector exits unless at least one spec selector flag was provided.
+func requireSelector(release int, latest bool, spec, series string) {
+	if release != 0 || latest || spec != "" || series != "" {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "Specify --release, --latest, --series, or --spec")
+	exit(1)
+}
+
 // resolveSpecs fetches, parses, and filters specs based on CLI flags.
-func resolveSpecs(ctx context.Context, client *http.Client, specList, specFlag, seriesFlag string, release int, allVersions, useCache bool, scrapeConcurrency int) []*pipeline.SpecVersion {
+func resolveSpecs(ctx context.Context, client *http.Client, specList, specFlag, seriesFlag string, release int, useCache bool, scrapeConcurrency int) []*pipeline.SpecVersion {
 	var seriesFilter []string
 	if seriesFlag != "" {
 		seriesFilter = strings.Split(seriesFlag, ",")
@@ -391,14 +404,13 @@ func resolveSpecs(ctx context.Context, client *http.Client, specList, specFlag, 
 	}
 	fmt.Printf("Parsed %d spec entries\n", len(specs))
 
-	return pipeline.FilterSpecs(specs, release, seriesFilter, specFlag, !allVersions)
+	return pipeline.FilterSpecs(specs, release, seriesFilter, specFlag, true)
 }
 
 func cmdDownload(args []string) {
 	fs := flag.NewFlagSet("download", flag.ExitOnError)
 	release := fs.Int("release", 0, "Download specs for specific release (e.g., 19)")
-	latest := fs.Bool("latest", false, "Download the single latest version of each spec")
-	allVersions := fs.Bool("all", false, "Download all versions")
+	latest := fs.Bool("latest", false, "Select every spec at its latest version (use when no other selector is given)")
 	seriesFlag := fs.String("series", "", "Filter by series, comma-separated (e.g., 23,29)")
 	specFlag := fs.String("spec", "", "Download specific spec (e.g., 23.501)")
 	outputDir := fs.String("output-dir", "specs", "Output directory")
@@ -410,15 +422,12 @@ func cmdDownload(args []string) {
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP timeout")
 	_ = fs.Parse(args)
 
-	if *release == 0 && !*latest && !*allVersions && *specFlag == "" {
-		fmt.Fprintln(os.Stderr, "Specify --release, --latest, --all, or --spec")
-		os.Exit(1)
-	}
+	requireSelector(*release, *latest, *specFlag, *seriesFlag)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	client := &http.Client{Timeout: *timeout}
-	filtered := resolveSpecs(ctx, client, *specList, *specFlag, *seriesFlag, *release, *allVersions, !*noCache, *scrapeWorkers)
+	filtered := resolveSpecs(ctx, client, *specList, *specFlag, *seriesFlag, *release, !*noCache, *scrapeWorkers)
 
 	if len(filtered) == 0 {
 		fmt.Println("No specs matched the filters.")
@@ -444,8 +453,7 @@ func cmdPipeline(args []string) {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	dbPath := fs.String("db", "3gpp.db", "Output SQLite database path")
 	release := fs.Int("release", 0, "Download specs for specific release (e.g., 19)")
-	latest := fs.Bool("latest", false, "Download the single latest version of each spec")
-	allVersions := fs.Bool("all", false, "Download all versions")
+	latest := fs.Bool("latest", false, "Select every spec at its latest version (use when no other selector is given)")
 	seriesFlag := fs.String("series", "", "Filter by series, comma-separated (e.g., 23,29)")
 	specFlag := fs.String("spec", "", "Download specific spec (e.g., 23.501)")
 	workers := fs.Int("workers", runtime.NumCPU(), "Number of parallel workers")
@@ -457,10 +465,7 @@ func cmdPipeline(args []string) {
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP timeout")
 	_ = fs.Parse(args)
 
-	if *release == 0 && !*latest && !*allVersions && *specFlag == "" {
-		fmt.Fprintln(os.Stderr, "Specify --release, --latest, --all, or --spec")
-		os.Exit(1)
-	}
+	requireSelector(*release, *latest, *specFlag, *seriesFlag)
 
 	d, err := db.OpenReadWrite(*dbPath)
 	if err != nil {
@@ -475,7 +480,7 @@ func cmdPipeline(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	client := &http.Client{Timeout: *timeout}
-	filtered := resolveSpecs(ctx, client, *specList, *specFlag, *seriesFlag, *release, *allVersions, !*noCache, *scrapeWorkers)
+	filtered := resolveSpecs(ctx, client, *specList, *specFlag, *seriesFlag, *release, !*noCache, *scrapeWorkers)
 
 	if len(filtered) == 0 {
 		fmt.Println("No specs matched the filters.")

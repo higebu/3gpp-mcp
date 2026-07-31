@@ -222,14 +222,13 @@ func TestResolveSpecs_FromSpecList(t *testing.T) {
 			"",    // specFlag
 			"",    // seriesFlag
 			0,     // release
-			false, // allVersions
 			false, // useCache
 			0,     // scrapeConcurrency
 		)
 		if len(specs) == 0 {
 			t.Error("expected at least one spec, got 0")
 		}
-		// latestOnly=true (because allVersions=false), so expect 1 per SpecID.
+		// resolveSpecs keeps only the latest version, so expect 1 per SpecID.
 		ids := map[string]bool{}
 		for _, s := range specs {
 			ids[s.SpecID] = true
@@ -265,7 +264,6 @@ func TestResolveSpecs_FetchBySpecFlag(t *testing.T) {
 			"23.501", // specFlag
 			"",       // seriesFlag
 			0,        // release
-			false,    // allVersions
 			false,    // useCache
 			0,        // scrapeConcurrency
 		)
@@ -279,6 +277,71 @@ func TestResolveSpecs_FetchBySpecFlag(t *testing.T) {
 	if !strings.Contains(out, "Fetching versions for 23.501") {
 		t.Errorf("expected progress message, got: %s", out)
 	}
+}
+
+// TestRequireSelector covers the selector guard shared by cmdDownload and
+// cmdPipeline, including --series as a valid sole selector and the exit path
+// taken when no selector is given.
+func TestRequireSelector(t *testing.T) {
+	tests := []struct {
+		name     string
+		release  int
+		latest   bool
+		spec     string
+		series   string
+		wantExit bool
+	}{
+		{"none", 0, false, "", "", true},
+		{"release", 19, false, "", "", false},
+		{"latest", 0, true, "", "", false},
+		{"spec", 0, false, "23.501", "", false},
+		{"series alone", 0, false, "", "23,29", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exitCode := -1
+			orig := exit
+			exit = func(code int) { exitCode = code }
+			t.Cleanup(func() { exit = orig })
+
+			stderr := captureStderr(t, func() {
+				requireSelector(tt.release, tt.latest, tt.spec, tt.series)
+			})
+
+			if tt.wantExit {
+				if exitCode != 1 {
+					t.Errorf("exit code = %d, want 1", exitCode)
+				}
+				if !strings.Contains(stderr, "Specify --release, --latest, --series, or --spec") {
+					t.Errorf("stderr = %q, want selector message", stderr)
+				}
+			} else if exitCode != -1 {
+				t.Errorf("exit(%d) called, want no exit", exitCode)
+			}
+		})
+	}
+}
+
+// captureStderr runs fn and returns whatever it wrote to os.Stderr.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = orig }()
+
+	done := make(chan string)
+	go func() {
+		data, _ := io.ReadAll(r)
+		done <- string(data)
+	}()
+
+	fn()
+	w.Close()
+	return <-done
 }
 
 // TestCmdConvert_HappyPath imports a single real 3GPP .docx testdata file via
@@ -432,7 +495,7 @@ func TestCmdDownload_NoMatch(t *testing.T) {
 
 	out := captureStdout(t, func() {
 		cmdDownload([]string{
-			"-all",
+			"-latest",
 			"-spec-list", listPath,
 			"-output-dir", outDir,
 			"-no-cache",
@@ -454,7 +517,7 @@ func TestCmdPipeline_NoMatch(t *testing.T) {
 
 	out := captureStdout(t, func() {
 		cmdPipeline([]string{
-			"-all",
+			"-latest",
 			"-db", dbPath,
 			"-spec-list", listPath,
 			"-no-cache",
@@ -586,7 +649,6 @@ func TestResolveSpecs_FetchAllSeries(t *testing.T) {
 			"",    // specFlag
 			"23",  // seriesFlag
 			0,     // release
-			false, // allVersions (latestOnly=true)
 			false, // useCache
 			0,     // scrapeConcurrency
 		)

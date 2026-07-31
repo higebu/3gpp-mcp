@@ -365,8 +365,7 @@ Download and import specifications into the database (recommended for initial se
 |------|-------------|---------|
 | `--db` | Output SQLite database path | `3gpp.db` |
 | `--release` | Process specs for a specific release (e.g. `19`) | |
-| `--latest` | Process the latest version across all releases | `false` |
-| `--all` | Process all versions | `false` |
+| `--latest` | Select every spec at its latest version (use when no other selector is given) | `false` |
 | `--spec` | Process a specific spec (e.g. `23.501`) | |
 | `--series` | Filter by series, comma-separated (e.g. `23,29`) | |
 | `--workers` | Number of parallel workers | NumCPU |
@@ -381,8 +380,7 @@ Download specifications without conversion.
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--release` | Download specs for a specific release | |
-| `--latest` | Download the latest version across all releases | `false` |
-| `--all` | Download all versions | `false` |
+| `--latest` | Select every spec at its latest version (use when no other selector is given) | `false` |
 | `--spec` | Download a specific spec (e.g. `23.501`) | |
 | `--series` | Filter by series, comma-separated | |
 | `--output-dir` | Output directory | `specs` |
