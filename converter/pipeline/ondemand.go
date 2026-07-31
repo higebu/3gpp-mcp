@@ -97,13 +97,20 @@ func ResolveVersion(ctx context.Context, client *http.Client, specID, version st
 
 // releaseRequest recognises a bare release selector such as "18" or "Rel-18".
 // A dotted version is never a release selector, so "18.6.0" does not match.
+// Without a prefix, only one or two digits count: a three-digit string such
+// as "920" is a base-36 archive token (9.2.0), not a request for Rel-920.
 func releaseRequest(s string) (int, bool) {
 	trimmed := s
+	prefixed := false
 	for _, prefix := range []string{"Rel-", "rel-", "REL-", "R", "r"} {
 		if len(trimmed) > len(prefix) && trimmed[:len(prefix)] == prefix {
 			trimmed = trimmed[len(prefix):]
+			prefixed = true
 			break
 		}
+	}
+	if !prefixed && len(trimmed) > 2 {
+		return 0, false
 	}
 	n, err := strconv.Atoi(trimmed)
 	if err != nil || n < 0 {

@@ -263,6 +263,21 @@ func TestFetchSpecZips(t *testing.T) {
 			t.Error("expected error for malformed spec ID")
 		}
 	})
+
+	t.Run("path traversal specID rejected", func(t *testing.T) {
+		// The normalized ID becomes a cache filename and a URL path segment,
+		// so traversal sequences must never pass validation.
+		for _, id := range []string{
+			"../../../../etc/passwd",
+			"23.501/../../secret",
+			"..\\..\\config",
+			"23.%",
+		} {
+			if _, err := FetchSpecZips(context.Background(), client, id, true); err == nil {
+				t.Errorf("expected error for spec ID %q", id)
+			}
+		}
+	})
 }
 
 // TestFetchSpecList_Race exercises FetchSpecList with a mock 3GPP directory
