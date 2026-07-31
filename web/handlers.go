@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	htmlpkg "html"
 	"html/template"
 	"log"
 	"net/http"
@@ -83,8 +84,15 @@ type errorData struct {
 
 func (h *handler) initTemplates() {
 	funcMap := template.FuncMap{
-		"safeHTML": func(s string) template.HTML {
-			return template.HTML(s) //nolint:gosec
+		// snippetHTML renders an FTS5 snippet: the surrounding text is raw
+		// document content (which can itself contain HTML and angle-bracket
+		// placeholders like <SUPI>), so everything is escaped and only the
+		// <mark> delimiters that db.Search asked snippet() for are restored.
+		"snippetHTML": func(s string) template.HTML {
+			escaped := htmlpkg.EscapeString(s)
+			escaped = strings.ReplaceAll(escaped, "&lt;mark&gt;", "<mark>")
+			escaped = strings.ReplaceAll(escaped, "&lt;/mark&gt;", "</mark>")
+			return template.HTML(escaped) //nolint:gosec
 		},
 		"specURL": func(specID string) string {
 			return "/specs/" + url.PathEscape(specID)
@@ -141,6 +149,12 @@ func (h *handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
+	}
+	// Bound the page so the offset multiplication cannot overflow into a
+	// negative value; far beyond any real page count either way.
+	const maxPage = 1_000_000
+	if page > maxPage {
+		page = maxPage
 	}
 	limit := 50
 	offset := (page - 1) * limit

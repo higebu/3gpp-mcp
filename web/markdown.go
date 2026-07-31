@@ -155,12 +155,12 @@ func highlightYAML(content string) string {
 
 	iterator, err := lexer.Tokenise(nil, content)
 	if err != nil {
-		return "<pre><code>" + content + "</code></pre>"
+		return "<pre><code>" + htmlpkg.EscapeString(content) + "</code></pre>"
 	}
 
 	var buf bytes.Buffer
 	if err := formatter.Format(&buf, style, iterator); err != nil {
-		return "<pre><code>" + content + "</code></pre>"
+		return "<pre><code>" + htmlpkg.EscapeString(content) + "</code></pre>"
 	}
 	return buf.String()
 }
