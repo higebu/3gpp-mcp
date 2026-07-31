@@ -242,6 +242,7 @@ func FetchVersionImages(ctx context.Context, client *http.Client, sv *SpecVersio
 	// Parts of a multi-file spec each number their images from image1, so the
 	// same policy as the section merge applies: last write wins by name.
 	index := map[string]int{}
+	parsedFiles := 0
 
 	for _, docxPath := range result.DocxFiles {
 		if err := ctx.Err(); err != nil {
@@ -252,6 +253,7 @@ func FetchVersionImages(ctx context.Context, client *http.Client, sv *SpecVersio
 			log.Printf("  on-demand parse error %s: %v", filepath.Base(docxPath), err)
 			continue
 		}
+		parsedFiles++
 		if convertImages {
 			if n := docx.ConvertResultImages(ctx, parsed); n > 0 {
 				log.Printf("  %s: converted %d images to PNG", sv.SpecID, n)
@@ -269,6 +271,12 @@ func FetchVersionImages(ctx context.Context, client *http.Client, sv *SpecVersio
 		if err := os.Remove(docxPath); err != nil {
 			log.Printf("  warning: failed to remove %s: %v", filepath.Base(docxPath), err)
 		}
+	}
+	// Zero images from parsed documents means the version has no figures, but
+	// zero parsed documents means the download was unusable — succeeding would
+	// cache "no figures" permanently for a version that may well have them.
+	if parsedFiles == 0 {
+		return nil, fmt.Errorf("%w: %s v%s produced no readable documents", ErrNoDocx, sv.SpecID, displayVersion(sv))
 	}
 	return images, nil
 }

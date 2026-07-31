@@ -62,14 +62,15 @@ func HandleGetSection(src *Source) func(ctx context.Context, req *mcp.CallToolRe
 // e.g. "[Source: TS 23.501 v18.6.0 (Rel-18) — Section 5.1]". Archived versions
 // say so, because get_references only covers the version the database was
 // built with and would silently answer about a different one; images are
-// downloaded on first use, so they stay available.
+// downloaded on first use, but only when the image tools are told the version,
+// so the header reminds the caller to pass it.
 func sourceHeader(s db.Section, withSubsections, archived bool) string {
 	h := fmt.Sprintf("[Source: %s — Section %s", specLabel(s), s.Number)
 	if withSubsections {
 		h += " (+subsections)"
 	}
 	if archived {
-		h += " (archived version; cross-references unavailable)"
+		h += " (archived version; cross-references unavailable; pass this version to get_image/list_images)"
 	}
 	return h + "]"
 }

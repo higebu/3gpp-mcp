@@ -318,8 +318,10 @@ func (s *Store) GetImage(specID, version, name string) (*db.Image, error) {
 	if base == "" || base == name {
 		return nil, nil
 	}
+	// Prefer a readable row, then order by name, so several images sharing a
+	// base name resolve the same way on every call.
 	err = s.conn.QueryRow(
-		projection+" AND name LIKE ? ESCAPE '\\' LIMIT 1",
+		projection+" AND name LIKE ? ESCAPE '\\' ORDER BY llm_readable DESC, name LIMIT 1",
 		specID, version, db.EscapeLikePattern(base)+".%",
 	).Scan(&img.SpecID, &img.Version, &img.Name, &img.MIMEType, &img.Data, &img.LLMReadable)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -501,6 +503,13 @@ func (s *Store) put(spec db.Spec, sections []db.Section) error {
 
 	if _, err := tx.Exec("DELETE FROM sections WHERE spec_id = ? AND version = ?", spec.ID, spec.Version); err != nil {
 		return fmt.Errorf("clear cached sections: %w", err)
+	}
+	// The REPLACE of cache_entries below resets images_fetched to zero, so any
+	// image rows from an earlier life of this version — possible when several
+	// processes share the cache file — must go with it, or their bytes would
+	// escape the account and the flag would deny they exist.
+	if _, err := tx.Exec("DELETE FROM images WHERE spec_id = ? AND version = ?", spec.ID, spec.Version); err != nil {
+		return fmt.Errorf("clear cached images: %w", err)
 	}
 	stmt, err := tx.Prepare(
 		"INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES (?, ?, ?, ?, ?, ?, ?)",

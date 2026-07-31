@@ -167,6 +167,55 @@ func TestGetImageBaseNameFallback(t *testing.T) {
 	}
 }
 
+// TestGetImageFallbackPrefersReadable checks that when several cached images
+// share a base name, the fallback deterministically picks the readable one.
+func TestGetImageFallbackPrefersReadable(t *testing.T) {
+	s := openImageStore(t, DefaultLimitBytes, func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+		return []db.Image{
+			{Name: "image1.emf", MIMEType: "image/x-emf", Data: []byte("emf")},
+			{Name: "image1.png", MIMEType: "image/png", Data: []byte("png"), LLMReadable: true},
+		}, nil
+	})
+	ensureVersion(t, s, "TS 23.501", "18.6.0")
+	if err := s.EnsureImages(context.Background(), "TS 23.501", "18.6.0", entry("23.501"), time.Minute); err != nil {
+		t.Fatalf("EnsureImages: %v", err)
+	}
+
+	img, err := s.GetImage("TS 23.501", "18.6.0", "image1.wmf")
+	if err != nil || img == nil {
+		t.Fatalf("GetImage(image1.wmf) = %+v, %v; want a fallback match", img, err)
+	}
+	if img.Name != "image1.png" || !img.LLMReadable {
+		t.Errorf("fallback picked %q, want the readable image1.png", img.Name)
+	}
+}
+
+// TestPutClearsStaleImages checks that re-caching a version's sections drops
+// image rows from an earlier life of the entry: the REPLACE of cache_entries
+// resets images_fetched, so keeping the blobs would corrupt the account.
+func TestPutClearsStaleImages(t *testing.T) {
+	s := openImageStore(t, DefaultLimitBytes, func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+		return fakeImages(8), nil
+	})
+	ensureVersion(t, s, "TS 23.501", "18.6.0")
+	if err := s.EnsureImages(context.Background(), "TS 23.501", "18.6.0", entry("23.501"), time.Minute); err != nil {
+		t.Fatalf("EnsureImages: %v", err)
+	}
+
+	// Another process re-caching the same version calls put directly.
+	spec, sections := fakeSpec("TS 23.501", "18.6.0", 16)
+	if err := s.put(spec, sections); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	if fetched, _ := s.HasImages("TS 23.501", "18.6.0"); fetched {
+		t.Error("images_fetched survived a re-put; the flag must reset with the entry")
+	}
+	if img, err := s.GetImage("TS 23.501", "18.6.0", "image1.png"); err != nil || img != nil {
+		t.Errorf("stale image row survived a re-put: %+v, %v", img, err)
+	}
+}
+
 // TestEnsureImagesSingleflight checks that concurrent callers for the same
 // version share one image download.
 func TestEnsureImagesSingleflight(t *testing.T) {

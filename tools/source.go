@@ -201,6 +201,11 @@ func (s *Source) GetImage(ctx context.Context, specID, version, name string) (*d
 			return nil, res, err
 		}
 		img, err := s.Store.GetImage(specID, res.version, name)
+		if err == nil && img == nil {
+			if err := s.imagesStillCached(specID, res); err != nil {
+				return nil, res, err
+			}
+		}
 		return img, res, err
 	}
 	img, err := s.DB.GetImage(specID, res.version, name)
@@ -219,10 +224,30 @@ func (s *Source) ListImages(ctx context.Context, specID, version string) ([]db.I
 			return nil, res, err
 		}
 		infos, err := s.Store.ListImages(specID, res.version)
+		if err == nil && len(infos) == 0 {
+			if err := s.imagesStillCached(specID, res); err != nil {
+				return nil, res, err
+			}
+		}
 		return infos, res, err
 	}
 	infos, err := s.DB.ListImages(specID, res.version)
 	return infos, res, err
+}
+
+// imagesStillCached distinguishes "the version holds no such images" from "the
+// version was evicted between ensureImages and the read": a concurrent fetch's
+// eviction can drop it in that window, and answering a definitive not-found
+// then would hide content a retry recovers.
+func (s *Source) imagesStillCached(specID string, res resolution) error {
+	fetched, err := s.Store.HasImages(specID, res.version)
+	if err != nil {
+		return err
+	}
+	if !fetched {
+		return &errFetchInProgress{specID: specID, version: res.version, images: true}
+	}
+	return nil
 }
 
 // ensureImages makes an archived version's images available in the cache. The

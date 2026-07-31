@@ -148,7 +148,7 @@ func TestHandleGetSectionArchivedHeader(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	text := getTextContent(result)
-	want := "[Source: TS 23.501 v19.5.0 (Rel-19) — Section 5.1 (archived version; cross-references unavailable)]"
+	want := "[Source: TS 23.501 v19.5.0 (Rel-19) — Section 5.1 (archived version; cross-references unavailable; pass this version to get_image/list_images)]"
 	if !strings.HasPrefix(text, want) {
 		t.Errorf("header = %q, want prefix %q", text, want)
 	}
