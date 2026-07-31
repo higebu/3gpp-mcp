@@ -88,7 +88,10 @@ type DB struct {
 }
 
 func Open(path string) (*DB, error) {
-	conn, err := sql.Open("sqlite", path+"?mode=ro")
+	// The driver only honors URI query parameters on "file:" DSNs; on a bare
+	// path it strips the query and opens READWRITE|CREATE, silently creating
+	// an empty database when the path is wrong.
+	conn, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -360,18 +363,27 @@ func (d *DB) UpsertSpec(spec Spec) error {
 
 // UpsertSection deletes then re-inserts a section to trigger FTS update.
 func (d *DB) UpsertSection(section Section) error {
-	_, err := d.conn.Exec(
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() // no-op after Commit per database/sql docs
+
+	_, err = tx.Exec(
 		"DELETE FROM sections WHERE spec_id = ? AND version = ? AND number = ?",
 		section.SpecID, section.Version, section.Number,
 	)
 	if err != nil {
 		return err
 	}
-	_, err = d.conn.Exec(
+	_, err = tx.Exec(
 		"INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES (?, ?, ?, ?, ?, ?, ?)",
 		section.SpecID, section.Version, section.Number, section.Title, section.Level, section.ParentNumber, section.Content,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // UpsertImage inserts or replaces an image record.
@@ -497,19 +509,23 @@ func (d *DB) InsertSpecWithSectionsAndImages(spec Spec, sections []Section, imag
 	// index has no version column, so a second version of the same spec would
 	// double every hit. Superseding a version therefore drops the old one.
 	// Multi-file specs call this once per DOCX with the same version, so this
-	// only fires on the first call.
-	for _, table := range []string{"sections", "images", "spec_references"} {
-		column, versionColumn := "spec_id", "version"
-		if table == "spec_references" {
-			column, versionColumn = "source_spec_id", "source_version"
+	// only fires on the first call. A file whose version could not be
+	// determined must not wipe correctly-versioned data, so the cleanup is
+	// skipped for it.
+	if spec.Version != "" {
+		for _, table := range []string{"sections", "images", "spec_references"} {
+			column, versionColumn := "spec_id", "version"
+			if table == "spec_references" {
+				column, versionColumn = "source_spec_id", "source_version"
+			}
+			q := fmt.Sprintf("DELETE FROM %s WHERE %s = ? AND %s <> ?", table, column, versionColumn)
+			if _, err = tx.Exec(q, spec.ID, spec.Version); err != nil {
+				return fmt.Errorf("drop superseded %s: %w", table, err)
+			}
 		}
-		q := fmt.Sprintf("DELETE FROM %s WHERE %s = ? AND %s <> ?", table, column, versionColumn)
-		if _, err = tx.Exec(q, spec.ID, spec.Version); err != nil {
-			return fmt.Errorf("drop superseded %s: %w", table, err)
+		if _, err = tx.Exec("DELETE FROM specs WHERE id = ? AND version <> ?", spec.ID, spec.Version); err != nil {
+			return fmt.Errorf("drop superseded spec versions: %w", err)
 		}
-	}
-	if _, err = tx.Exec("DELETE FROM specs WHERE id = ? AND version <> ?", spec.ID, spec.Version); err != nil {
-		return fmt.Errorf("drop superseded spec versions: %w", err)
 	}
 
 	// The spec row is the authority on the version, so child rows take it from
@@ -570,7 +586,7 @@ func (d *DB) ListSpecs(series, query string, limit, offset int) (*ListSpecsResul
 		// Match three ways a user might type the prefix: the bare number
 		// (e.g. "23.501"), or with an explicit "TS "/"TR " document-type
 		// prefix already included (e.g. "TS 23.501").
-		pattern := escapeLikePattern(query) + "%"
+		pattern := EscapeLikePattern(query) + "%"
 		conditions = append(conditions, "(id LIKE ? ESCAPE '\\' OR id LIKE 'TS ' || ? ESCAPE '\\' OR id LIKE 'TR ' || ? ESCAPE '\\')")
 		filterArgs = append(filterArgs, pattern, pattern, pattern)
 	}
@@ -653,10 +669,10 @@ func (d *DB) GetTOC(specID, version string) ([]Section, error) {
 	return sections, nil
 }
 
-// escapeLikePattern escapes SQLite LIKE wildcards (% and _) in a
+// EscapeLikePattern escapes SQLite LIKE wildcards (% and _) in a
 // user-supplied string so it can be used as a literal prefix with an
 // ESCAPE '\' clause.
-func escapeLikePattern(s string) string {
+func EscapeLikePattern(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
 	return r.Replace(s)
 }
@@ -668,7 +684,7 @@ func escapeLikePattern(s string) string {
 func (d *DB) FindSpecIDsByFamily(familyID string) ([]string, error) {
 	rows, err := d.conn.Query(
 		"SELECT DISTINCT id FROM specs WHERE id LIKE ? || '-%' ESCAPE '\\' ORDER BY id",
-		escapeLikePattern(familyID),
+		EscapeLikePattern(familyID),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("find spec ids by family: %w", err)
@@ -707,8 +723,8 @@ func (d *DB) GetSection(specID, version, number string, includeSubsections bool)
 	var rows *sql.Rows
 	if includeSubsections {
 		rows, err = d.conn.Query(
-			projection+" AND (s.number = ? OR s.number LIKE ? || '.%') ORDER BY s.id",
-			specID, version, number, number,
+			projection+" AND (s.number = ? OR s.number LIKE ? || '.%' ESCAPE '\\') ORDER BY s.id",
+			specID, version, number, EscapeLikePattern(number),
 		)
 	} else {
 		rows, err = d.conn.Query(
@@ -839,10 +855,18 @@ var fts5Operators = map[string]bool{
 
 // needsFTS5Quoting reports whether a bare token contains a character FTS5
 // cannot parse as part of an unquoted bareword: a hyphen (misread as the
-// column-filter/NOT operator) or a period (e.g. spec numbers like "38.101",
-// which FTS5 otherwise rejects with "syntax error near \".\"").
+// column-filter/NOT operator), a period (e.g. spec numbers like "38.101",
+// which FTS5 otherwise rejects with "syntax error near \".\""), a stray
+// double quote, or a parenthesis riding along inside the token (an
+// unquoted "(38.331" or "SMF)" is a hard syntax error).
 func needsFTS5Quoting(s string) bool {
-	return strings.ContainsRune(s, '-') || strings.ContainsRune(s, '.')
+	return strings.ContainsAny(s, `-."()`)
+}
+
+// quoteFTS5String wraps s in double quotes, doubling any quote already
+// inside it (FTS5's string escape).
+func quoteFTS5String(s string) string {
+	return "\"" + strings.ReplaceAll(s, "\"", "\"\"") + "\""
 }
 
 // classifyToken quotes a bareword or "col:val" column-filter token if it
@@ -852,14 +876,27 @@ func classifyToken(token string) string {
 		col := token[:colIdx]
 		val := token[colIdx+1:]
 		if fts5Columns[col] {
-			if needsFTS5Quoting(val) && !strings.HasPrefix(val, "\"") {
-				return col + ":\"" + val + "\""
+			if val == "" {
+				// "content:" with no value is a syntax error; treat the
+				// whole token as a literal search term instead.
+				return quoteFTS5String(token)
+			}
+			if strings.HasPrefix(val, "\"") {
+				// Already phrase-quoted (content:"foo"). Repair it if the
+				// closing quote is missing.
+				if len(val) >= 2 && strings.HasSuffix(val, "\"") {
+					return token
+				}
+				return col + ":" + quoteFTS5String(strings.Trim(val, "\""))
+			}
+			if needsFTS5Quoting(val) {
+				return col + ":" + quoteFTS5String(val)
 			}
 			return token
 		}
 	}
 	if needsFTS5Quoting(token) {
-		return "\"" + token + "\""
+		return quoteFTS5String(token)
 	}
 	return token
 }
@@ -887,10 +924,17 @@ func sanitizeFTS5Query(query string) string {
 			for j < n && query[j] != '"' {
 				j++
 			}
-			if j < n {
+			closed := j < n
+			if closed {
 				j++
 			}
-			result = append(result, query[i:j])
+			run := query[i:j]
+			if !closed {
+				// An unterminated phrase would reach FTS5 as a syntax
+				// error; supply the missing closing quote.
+				run += "\""
+			}
+			result = append(result, run)
 			i = j
 			continue
 		}
@@ -937,7 +981,7 @@ func sanitizeFTS5Query(query string) string {
 			if canNegate {
 				result = append(result, "NOT", classifyToken(token[1:]))
 			} else {
-				result = append(result, "\""+token+"\"")
+				result = append(result, quoteFTS5String(token))
 			}
 			continue
 		}
@@ -972,7 +1016,7 @@ func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, 
 		conds := make([]string, len(specIDs))
 		for i, id := range specIDs {
 			conds[i] = "sections_fts.spec_id = ? OR sections_fts.spec_id LIKE ? ESCAPE '\\'"
-			args = append(args, id, escapeLikePattern(id)+"-%")
+			args = append(args, id, EscapeLikePattern(id)+"-%")
 		}
 		sqlQuery += " AND (" + strings.Join(conds, " OR ") + ")"
 	}
@@ -1330,9 +1374,9 @@ func (d *DB) GetReferences(specID, version, sectionNumber, direction string, inc
 			return nil, fmt.Errorf("get references: %w", err)
 		}
 		if includeSubsections {
-			where = ` WHERE r.source_spec_id = ? AND r.source_version = ? AND (r.source_section = ? OR r.source_section LIKE ? || '.%')
+			where = ` WHERE r.source_spec_id = ? AND r.source_version = ? AND (r.source_section = ? OR r.source_section LIKE ? || '.%' ESCAPE '\')
 				ORDER BY r.source_section, r.target_spec, r.target_section`
-			args = []any{specID, resolved, sectionNumber, sectionNumber}
+			args = []any{specID, resolved, sectionNumber, EscapeLikePattern(sectionNumber)}
 		} else {
 			where = ` WHERE r.source_spec_id = ? AND r.source_version = ? AND r.source_section = ?
 				ORDER BY r.target_spec, r.target_section`
@@ -1340,9 +1384,9 @@ func (d *DB) GetReferences(specID, version, sectionNumber, direction string, inc
 		}
 	case DirectionIncoming:
 		if sectionNumber != "" {
-			where = ` WHERE r.target_spec = ? AND (r.target_section = ? OR r.target_section LIKE ? || '.%' OR r.target_section = '')
+			where = ` WHERE r.target_spec = ? AND (r.target_section = ? OR r.target_section LIKE ? || '.%' ESCAPE '\' OR r.target_section = '')
 				ORDER BY r.source_spec_id, r.source_section`
-			args = []any{specID, sectionNumber, sectionNumber}
+			args = []any{specID, sectionNumber, EscapeLikePattern(sectionNumber)}
 		} else {
 			where = ` WHERE r.target_spec = ?
 				ORDER BY r.source_spec_id, r.source_section`

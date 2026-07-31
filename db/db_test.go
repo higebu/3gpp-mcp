@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -303,6 +304,26 @@ func TestGetSection(t *testing.T) {
 			t.Fatalf("expected 0 sections, got %d", len(sections))
 		}
 	})
+
+	t.Run("LIKE wildcards in section number are literal", func(t *testing.T) {
+		// "_" is SQLite's single-character wildcard; unescaped it would match
+		// section 5.1 and its subtree.
+		sections, err := d.GetSection("TS 23.501", "", "5_1", true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(sections) != 0 {
+			t.Fatalf("expected 0 sections for literal 5_1, got %d", len(sections))
+		}
+		// "%" unescaped would match every dotted section of the spec.
+		sections, err = d.GetSection("TS 23.501", "", "%", true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(sections) != 0 {
+			t.Fatalf("expected 0 sections for literal %%, got %d", len(sections))
+		}
+	})
 }
 
 func TestSanitizeFTS5Query(t *testing.T) {
@@ -343,6 +364,10 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"leading hyphen column filter with dotted value becomes NOT", "AMF -title:38.101", `AMF NOT title:"38.101"`},
 		{"leading hyphen after AND operator falls back", "AMF AND -excluded", `AMF AND "-excluded"`},
 		{"leading hyphen after OR operator falls back", "AMF OR -excluded", `AMF OR "-excluded"`},
+		{"embedded quote doubled", `Rel-18"`, `"Rel-18"""`},
+		{"unterminated phrase closed", `"core network`, `"core network"`},
+		{"parentheses quoted literally", "(38.331 OR SMF)", `"(38.331" OR "SMF)"`},
+		{"empty column filter quoted", "content:", `"content:"`},
 	}
 
 	for _, tt := range tests {
@@ -388,6 +413,8 @@ func TestSanitizeFTS5Query_ExecutesWithoutError(t *testing.T) {
 		"AMF -title:band", "AMF -title:38.101",
 		"AMF AND -excluded", "AMF OR -excluded",
 		"-excluded", "-one-two",
+		`Rel-18"`, `"core network`, "(38.331 OR SMF)", "content:",
+		`AMF"`, `content:"band`,
 	}
 	for _, q := range queries {
 		sanitized := sanitizeFTS5Query(q)
@@ -843,6 +870,25 @@ func TestGetReferences(t *testing.T) {
 			t.Fatal("expected error for invalid direction")
 		}
 	})
+
+	t.Run("LIKE wildcards in section number are literal", func(t *testing.T) {
+		// Unescaped, "%" would match every section with outgoing refs.
+		refs, err := d.GetReferences("TS 24.229", "", "%", "outgoing", true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(refs) != 0 {
+			t.Fatalf("expected 0 refs for literal %%, got %d", len(refs))
+		}
+		refs, err = d.GetReferences("TS 33.203", "", "6_1", "incoming", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Only the general spec ref (target_section="") should match, not 6.1.
+		if len(refs) != 1 {
+			t.Fatalf("expected 1 ref for literal 6_1, got %d", len(refs))
+		}
+	})
 }
 
 func TestInsertSpecWithSections_References(t *testing.T) {
@@ -1085,6 +1131,24 @@ func TestOpen_ReadOnly(t *testing.T) {
 	}
 	if len(result.Specs) != 1 || result.Specs[0].ID != "TS 23.501" {
 		t.Errorf("expected TS 23.501, got %+v", result.Specs)
+	}
+
+	// A read-only handle must reject writes.
+	if err := ro.Exec("DELETE FROM specs"); err == nil {
+		t.Error("expected write through read-only handle to fail")
+	}
+}
+
+// TestOpen_MissingFile guards against the driver silently creating an empty
+// database when the path is wrong: serve must fail at startup instead.
+func TestOpen_MissingFile(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "does-not-exist.db")
+	if d, err := Open(dbPath); err == nil {
+		d.Close()
+		t.Fatal("expected Open to fail for a nonexistent database")
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Errorf("Open must not create the database file, stat err = %v", err)
 	}
 }
 
