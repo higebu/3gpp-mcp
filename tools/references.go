@@ -9,6 +9,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// MaxReferences bounds a single get_references response.
+const MaxReferences = 500
+
 type GetReferencesInput struct {
 	SpecID             string `json:"spec_id" jsonschema:"required,Specification ID (e.g. TS 23.501)"`
 	SectionNumber      string `json:"section_number,omitempty" jsonschema:"Section number (e.g. 5.1.2). Required for outgoing direction."`
@@ -55,11 +58,22 @@ func HandleGetReferences(d *db.DB) func(ctx context.Context, req *mcp.CallToolRe
 			return textResult("[]"), nil, nil
 		}
 
+		// A heavily-cited spec can have tens of thousands of incoming
+		// references; without a cap a single call would serialize them all.
+		total := len(refs)
+		if total > MaxReferences {
+			refs = refs[:MaxReferences]
+		}
+
 		data, err := json.MarshalIndent(refs, "", "  ")
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to marshal: %v", err)), nil, nil
 		}
 
-		return textResult(string(data)), nil, nil
+		text := string(data)
+		if total > MaxReferences {
+			text += fmt.Sprintf("\n[Truncated: showing %d of %d references. Narrow the query with section_number.]", MaxReferences, total)
+		}
+		return textResult(text), nil, nil
 	}
 }

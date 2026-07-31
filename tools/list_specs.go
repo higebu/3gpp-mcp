@@ -23,6 +23,12 @@ var ListSpecsTool = &mcp.Tool{
 
 func HandleListSpecs(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, input ListSpecsInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input ListSpecsInput) (*mcp.CallToolResult, any, error) {
+		// A negative limit means "no limit" inside db.ListSpecs, which is
+		// reserved for internal callers; from the tool it would bypass
+		// MaxListSpecsLimit and dump the whole table.
+		if input.Limit < 0 {
+			input.Limit = 0
+		}
 		result, err := d.ListSpecs(input.Series, input.Query, input.Limit, input.Offset)
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to list specs: %v", err)), nil, nil
