@@ -1139,6 +1139,42 @@ func TestOpen_ReadOnly(t *testing.T) {
 	}
 }
 
+// TestOpen_PathWithURIReservedChars guards the file: URI construction: a
+// literal %, # (or ?) in the database path must not be reinterpreted as a
+// percent-escape, fragment or query string.
+func TestOpen_PathWithURIReservedChars(t *testing.T) {
+	// "%41" would percent-decode to "A" and "#" starts a URI fragment if the
+	// path were inserted unencoded. ("?" is excluded: the driver's bare-path
+	// DSN parsing in OpenReadWrite cannot create such a file to begin with.)
+	dbPath := filepath.Join(t.TempDir(), "spec %41 #1.db")
+
+	rw, err := OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadWrite: %v", err)
+	}
+	if err := rw.InitSchema(); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+	if err := rw.UpsertSpec(Spec{ID: "TS 23.501", Title: "Arch", Series: "23"}); err != nil {
+		t.Fatalf("UpsertSpec: %v", err)
+	}
+	rw.Close()
+
+	ro, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer ro.Close()
+
+	result, err := ro.ListSpecs("", "", 0, 0)
+	if err != nil {
+		t.Fatalf("ListSpecs: %v", err)
+	}
+	if len(result.Specs) != 1 {
+		t.Errorf("expected the seeded spec, got %+v", result.Specs)
+	}
+}
+
 // TestOpen_MissingFile guards against the driver silently creating an empty
 // database when the path is wrong: serve must fail at startup instead.
 func TestOpen_MissingFile(t *testing.T) {

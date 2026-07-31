@@ -87,11 +87,16 @@ type DB struct {
 	conn *sql.DB
 }
 
+// uriPathEscaper encodes the characters SQLite treats specially in a URI
+// filename, so a literal ?, # or % in a database path is not reinterpreted
+// as a query string, fragment or percent-escape.
+var uriPathEscaper = strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23")
+
 func Open(path string) (*DB, error) {
 	// The driver only honors URI query parameters on "file:" DSNs; on a bare
 	// path it strips the query and opens READWRITE|CREATE, silently creating
 	// an empty database when the path is wrong.
-	conn, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	conn, err := sql.Open("sqlite", "file:"+uriPathEscaper.Replace(path)+"?mode=ro")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
