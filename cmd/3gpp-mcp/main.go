@@ -354,9 +354,17 @@ func cmdConvertDir(args []string) {
 	}
 }
 
-// selectorGiven reports whether at least one spec selector flag was provided.
-func selectorGiven(release int, latest bool, spec, series string) bool {
-	return release != 0 || latest || spec != "" || series != ""
+// exit is swapped in tests to cover fatal CLI-argument paths without
+// terminating the test process.
+var exit = os.Exit
+
+// requireSelector exits unless at least one spec selector flag was provided.
+func requireSelector(release int, latest bool, spec, series string) {
+	if release != 0 || latest || spec != "" || series != "" {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "Specify --release, --latest, --series, or --spec")
+	exit(1)
 }
 
 // resolveSpecs fetches, parses, and filters specs based on CLI flags.
@@ -414,10 +422,7 @@ func cmdDownload(args []string) {
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP timeout")
 	_ = fs.Parse(args)
 
-	if !selectorGiven(*release, *latest, *specFlag, *seriesFlag) {
-		fmt.Fprintln(os.Stderr, "Specify --release, --latest, --series, or --spec")
-		os.Exit(1)
-	}
+	requireSelector(*release, *latest, *specFlag, *seriesFlag)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -460,10 +465,7 @@ func cmdPipeline(args []string) {
 	timeout := fs.Duration("timeout", 30*time.Second, "HTTP timeout")
 	_ = fs.Parse(args)
 
-	if !selectorGiven(*release, *latest, *specFlag, *seriesFlag) {
-		fmt.Fprintln(os.Stderr, "Specify --release, --latest, --series, or --spec")
-		os.Exit(1)
-	}
+	requireSelector(*release, *latest, *specFlag, *seriesFlag)
 
 	d, err := db.OpenReadWrite(*dbPath)
 	if err != nil {

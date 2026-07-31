@@ -279,31 +279,69 @@ func TestResolveSpecs_FetchBySpecFlag(t *testing.T) {
 	}
 }
 
-// TestSelectorGiven covers the selector guard shared by cmdDownload and
-// cmdPipeline, including --series as a valid sole selector.
-func TestSelectorGiven(t *testing.T) {
+// TestRequireSelector covers the selector guard shared by cmdDownload and
+// cmdPipeline, including --series as a valid sole selector and the exit path
+// taken when no selector is given.
+func TestRequireSelector(t *testing.T) {
 	tests := []struct {
-		name    string
-		release int
-		latest  bool
-		spec    string
-		series  string
-		want    bool
+		name     string
+		release  int
+		latest   bool
+		spec     string
+		series   string
+		wantExit bool
 	}{
-		{"none", 0, false, "", "", false},
-		{"release", 19, false, "", "", true},
-		{"latest", 0, true, "", "", true},
-		{"spec", 0, false, "23.501", "", true},
-		{"series alone", 0, false, "", "23,29", true},
+		{"none", 0, false, "", "", true},
+		{"release", 19, false, "", "", false},
+		{"latest", 0, true, "", "", false},
+		{"spec", 0, false, "23.501", "", false},
+		{"series alone", 0, false, "", "23,29", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := selectorGiven(tt.release, tt.latest, tt.spec, tt.series); got != tt.want {
-				t.Errorf("selectorGiven(%d, %v, %q, %q) = %v, want %v",
-					tt.release, tt.latest, tt.spec, tt.series, got, tt.want)
+			exitCode := -1
+			orig := exit
+			exit = func(code int) { exitCode = code }
+			t.Cleanup(func() { exit = orig })
+
+			stderr := captureStderr(t, func() {
+				requireSelector(tt.release, tt.latest, tt.spec, tt.series)
+			})
+
+			if tt.wantExit {
+				if exitCode != 1 {
+					t.Errorf("exit code = %d, want 1", exitCode)
+				}
+				if !strings.Contains(stderr, "Specify --release, --latest, --series, or --spec") {
+					t.Errorf("stderr = %q, want selector message", stderr)
+				}
+			} else if exitCode != -1 {
+				t.Errorf("exit(%d) called, want no exit", exitCode)
 			}
 		})
 	}
+}
+
+// captureStderr runs fn and returns whatever it wrote to os.Stderr.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = orig }()
+
+	done := make(chan string)
+	go func() {
+		data, _ := io.ReadAll(r)
+		done <- string(data)
+	}()
+
+	fn()
+	w.Close()
+	return <-done
 }
 
 // TestCmdConvert_HappyPath imports a single real 3GPP .docx testdata file via
