@@ -235,9 +235,12 @@ database, so:
 
 - `search` covers only the version in the database — cross-release full-text
   search is not supported
-- `get_image` and `get_references` only have data for the version in the
-  database, so a section read from an archived version returns text alone and
-  says so in its header
+- `get_references` only has data for the version in the database, and a section
+  read from an archived version says so in its header
+- `get_image` and `list_images` accept a `version` too: an archived version's
+  images are downloaded on their own first use (one extra archive download per
+  version, with the same retry behavior), and EMF/WMF figures are converted to
+  PNG when LibreOffice is installed on the server
 - section numbers move between releases; check `get_toc` for the older version
   before reading a section of it
 
@@ -272,10 +275,10 @@ The `search` tool supports [SQLite FTS5](https://www.sqlite.org/fts5.html) query
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `list_images` | List embedded images in a spec | `spec_id` (required) |
-| `get_image` | Get an embedded image as base64 data viewable by LLMs | `spec_id`, `name` (required): image filename |
+| `list_images` | List embedded images in a spec | `spec_id` (required), `version` (optional) |
+| `get_image` | Get an embedded image as base64 data viewable by LLMs | `spec_id`, `name` (required): image filename, `version` (optional) |
 
-The `build` command extracts images from DOCX files and stores them in the database. PNG/JPEG/GIF/WebP images are directly viewable by LLMs. EMF/WMF images (most 3GPP figures use this format) are stored as raw data by default; use `--convert-image` to convert them to PNG via LibreOffice at build time.
+The `build` command extracts images from DOCX files and stores them in the database. PNG/JPEG/GIF/WebP images are directly viewable by LLMs. EMF/WMF images (most 3GPP figures use this format) are stored as raw data by default; use `--convert-image` to convert them to PNG via LibreOffice at build time. For archived versions read via `version`, images are fetched into the on-demand cache the first time one is requested, and EMF/WMF figures are converted to PNG when LibreOffice is available at runtime.
 
 ```bash
 # Convert EMF/WMF to PNG for LLM viewing (requires LibreOffice)

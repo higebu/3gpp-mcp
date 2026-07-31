@@ -204,12 +204,30 @@ CREATE INDEX IF NOT EXISTS idx_sections_spec ON sections(spec_id, version);
 CREATE INDEX IF NOT EXISTS idx_sections_number ON sections(spec_id, version, number);
 `
 
+// ImagesTableSchema defines the table that holds embedded images, keyed by
+// (spec_id, version, name). The version cache reuses it verbatim for images
+// fetched on demand.
+const ImagesTableSchema = `
+CREATE TABLE IF NOT EXISTS images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    spec_id TEXT NOT NULL,
+    version TEXT NOT NULL,
+    name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    data BLOB NOT NULL,
+    llm_readable BOOLEAN NOT NULL DEFAULT 0,
+    UNIQUE(spec_id, version, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_images_spec ON images(spec_id, version);
+`
+
 // Schema is the SQL schema for the 3GPP database.
 //
 // A build imports one version per spec, so the FTS index covers exactly that
 // version. Versions fetched on demand are stored in a separate cache database
 // that has no FTS tables, keeping cross-release rows out of search results.
-const Schema = SpecTablesSchema + `
+const Schema = SpecTablesSchema + ImagesTableSchema + `
 
 CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
     spec_id, number, title, content,
@@ -233,19 +251,6 @@ CREATE TRIGGER IF NOT EXISTS sections_au AFTER UPDATE ON sections BEGIN
     INSERT INTO sections_fts(rowid, spec_id, number, title, content)
     VALUES (new.id, new.spec_id, new.number, new.title, new.content);
 END;
-
-CREATE TABLE IF NOT EXISTS images (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    spec_id TEXT NOT NULL,
-    version TEXT NOT NULL,
-    name TEXT NOT NULL,
-    mime_type TEXT NOT NULL,
-    data BLOB NOT NULL,
-    llm_readable BOOLEAN NOT NULL DEFAULT 0,
-    UNIQUE(spec_id, version, name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_images_spec ON images(spec_id, version);
 
 -- OpenAPI definitions are not keyed by spec version. They ship as standalone
 -- YAML files carrying their own api version, and the pipeline imports them

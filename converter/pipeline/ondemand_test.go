@@ -127,6 +127,191 @@ func TestReleaseRequest(t *testing.T) {
 	}
 }
 
+// makeDocxWithImage builds a minimal .docx whose only paragraph embeds
+// word/media/image1.png with the given bytes.
+func makeDocxWithImage(t *testing.T, pngData []byte) []byte {
+	t.Helper()
+	const contentTypes = `<?xml version="1.0"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="xml" ContentType="application/xml"/>
+<Default Extension="png" ContentType="image/png"/>
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`
+	const rels = `<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`
+	const docRels = `<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>
+</Relationships>`
+	const doc = `<?xml version="1.0"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<w:body>
+<w:p><w:pPr><w:pStyle w:val="Heading 1"/></w:pPr><w:r><w:t>5 Test</w:t></w:r></w:p>
+<w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">` +
+		`<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData>` +
+		`<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill>` +
+		`<a:blip r:embed="rId5"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>
+</w:body>
+</w:document>`
+	return makeZipWithFiles(t, map[string][]byte{
+		"[Content_Types].xml":          []byte(contentTypes),
+		"_rels/.rels":                  []byte(rels),
+		"word/document.xml":            []byte(doc),
+		"word/_rels/document.xml.rels": []byte(docRels),
+		"word/media/image1.png":        pngData,
+	})
+}
+
+// TestFetchVersionImages covers the lazy image download: images come out of
+// the archive ZIP, and parts of a multi-file spec merge last-write-wins by
+// name, as the section merge does.
+func TestFetchVersionImages(t *testing.T) {
+	archive := makeZipWithFiles(t, map[string][]byte{
+		"23501-i60_s01.docx": makeDocxWithImage(t, []byte("png-part-one")),
+		"23501-i60_s02.docx": makeDocxWithImage(t, []byte("png-part-two")),
+	})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/23501-i60.zip", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	sv := ParseSpecEntry("23_series/23.501/23501-i60.zip")
+	if sv == nil {
+		t.Fatal("ParseSpecEntry returned nil")
+	}
+	images, err := FetchVersionImages(context.Background(), client, sv, 0)
+	if err != nil {
+		t.Fatalf("FetchVersionImages: %v", err)
+	}
+	if len(images) != 1 {
+		t.Fatalf("got %d images, want the parts merged into 1: %+v", len(images), images)
+	}
+	img := images[0]
+	if img.Name != "image1.png" || img.MIMEType != "image/png" || !img.LLMReadable {
+		t.Errorf("image = %+v, want a readable image1.png", img)
+	}
+	if string(img.Data) != "png-part-two" {
+		t.Errorf("Data = %q, want the later part to win", img.Data)
+	}
+}
+
+// TestFetchVersionImagesSkipsCorruptPart checks that one unparsable part does
+// not lose the images of the others.
+func TestFetchVersionImagesSkipsCorruptPart(t *testing.T) {
+	archive := makeZipWithFiles(t, map[string][]byte{
+		"23501-i60_s01.docx": []byte("not a zip"),
+		"23501-i60_s02.docx": makeDocxWithImage(t, []byte("png-bytes")),
+	})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/23501-i60.zip", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	sv := ParseSpecEntry("23_series/23.501/23501-i60.zip")
+	if sv == nil {
+		t.Fatal("ParseSpecEntry returned nil")
+	}
+	images, err := FetchVersionImages(context.Background(), client, sv, 0)
+	if err != nil {
+		t.Fatalf("FetchVersionImages: %v", err)
+	}
+	if len(images) != 1 || images[0].Name != "image1.png" {
+		t.Fatalf("images = %+v, want the valid part's image1.png", images)
+	}
+}
+
+// TestFetchVersionImagesAllPartsCorrupt checks that an entry whose every part
+// fails to parse errors out instead of reporting a figure-less version, which
+// would be cached permanently.
+func TestFetchVersionImagesAllPartsCorrupt(t *testing.T) {
+	archive := makeZipWithFiles(t, map[string][]byte{
+		"23501-i60_s01.docx": []byte("not a zip"),
+		"23501-i60_s02.docx": []byte("also not a zip"),
+	})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/23501-i60.zip", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	sv := ParseSpecEntry("23_series/23.501/23501-i60.zip")
+	if sv == nil {
+		t.Fatal("ParseSpecEntry returned nil")
+	}
+	if _, err := FetchVersionImages(context.Background(), client, sv, 0); !errors.Is(err, ErrNoDocx) {
+		t.Fatalf("FetchVersionImages = %v, want ErrNoDocx when nothing parses", err)
+	}
+}
+
+// TestFetchVersionImagesNoDocuments checks the error for an archive entry that
+// contains no documents at all.
+func TestFetchVersionImagesNoDocuments(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/23501-i60.zip", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(makeRawZipEntry(t, "readme.txt", []byte("nothing here")))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	sv := ParseSpecEntry("23_series/23.501/23501-i60.zip")
+	if sv == nil {
+		t.Fatal("ParseSpecEntry returned nil")
+	}
+	if _, err := FetchVersionImages(context.Background(), client, sv, 0); !errors.Is(err, ErrNoDocx) {
+		t.Fatalf("FetchVersionImages = %v, want ErrNoDocx", err)
+	}
+}
+
+// TestFetchVersionImagesDownloadError checks that a failed download propagates.
+func TestFetchVersionImagesDownloadError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	sv := ParseSpecEntry("23_series/23.501/23501-i60.zip")
+	if sv == nil {
+		t.Fatal("ParseSpecEntry returned nil")
+	}
+	if _, err := FetchVersionImages(context.Background(), client, sv, 0); err == nil {
+		t.Fatal("FetchVersionImages should fail when the download fails")
+	}
+}
+
+// TestFetchVersionImagesDocOnly checks that a legacy .doc-only version reports
+// the same guidance as the section fetch.
+func TestFetchVersionImagesDocOnly(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/23501-300.zip", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(makeRawZipEntry(t, "23501-300.doc", []byte("legacy")))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	sv := ParseSpecEntry("23_series/23.501/23501-300.zip")
+	if sv == nil {
+		t.Fatal("ParseSpecEntry returned nil")
+	}
+	if _, err := FetchVersionImages(context.Background(), client, sv, 0); !errors.Is(err, ErrNoDocx) {
+		t.Fatalf("FetchVersionImages = %v, want ErrNoDocx", err)
+	}
+}
+
 // TestFetchVersionDocOnly checks the error a legacy .doc-only version gives,
 // since old versions hit this far more often than recent ones.
 func TestFetchVersionDocOnly(t *testing.T) {
