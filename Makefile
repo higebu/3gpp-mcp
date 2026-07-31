@@ -1,4 +1,4 @@
-.PHONY: build install import import-dir build-db download-specs download-latest-specs download-all-specs update-specs db-info test clean web
+.PHONY: build install import import-dir build-db download-specs download-latest-specs update-specs db-info test clean web
 
 SPECS_DIR ?= specs
 DB_PATH ?= data/3gpp.db
@@ -39,10 +39,6 @@ download-specs: build
 # Download the single latest version of each spec across all releases
 download-latest-specs: build
 	./$(BIN_DIR)/3gpp-mcp download --latest --output-dir $(SPECS_DIR) --convert-doc
-
-# Download all versions of all specs across all releases
-download-all-specs: build
-	./$(BIN_DIR)/3gpp-mcp download --all --output-dir $(SPECS_DIR) --convert-doc
 
 # Update specs in DB to latest versions
 update-specs: build

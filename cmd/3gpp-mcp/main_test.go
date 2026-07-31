@@ -222,14 +222,13 @@ func TestResolveSpecs_FromSpecList(t *testing.T) {
 			"",    // specFlag
 			"",    // seriesFlag
 			0,     // release
-			false, // allVersions
 			false, // useCache
 			0,     // scrapeConcurrency
 		)
 		if len(specs) == 0 {
 			t.Error("expected at least one spec, got 0")
 		}
-		// latestOnly=true (because allVersions=false), so expect 1 per SpecID.
+		// resolveSpecs keeps only the latest version, so expect 1 per SpecID.
 		ids := map[string]bool{}
 		for _, s := range specs {
 			ids[s.SpecID] = true
@@ -265,7 +264,6 @@ func TestResolveSpecs_FetchBySpecFlag(t *testing.T) {
 			"23.501", // specFlag
 			"",       // seriesFlag
 			0,        // release
-			false,    // allVersions
 			false,    // useCache
 			0,        // scrapeConcurrency
 		)
@@ -278,6 +276,33 @@ func TestResolveSpecs_FetchBySpecFlag(t *testing.T) {
 	})
 	if !strings.Contains(out, "Fetching versions for 23.501") {
 		t.Errorf("expected progress message, got: %s", out)
+	}
+}
+
+// TestSelectorGiven covers the selector guard shared by cmdDownload and
+// cmdPipeline, including --series as a valid sole selector.
+func TestSelectorGiven(t *testing.T) {
+	tests := []struct {
+		name    string
+		release int
+		latest  bool
+		spec    string
+		series  string
+		want    bool
+	}{
+		{"none", 0, false, "", "", false},
+		{"release", 19, false, "", "", true},
+		{"latest", 0, true, "", "", true},
+		{"spec", 0, false, "23.501", "", true},
+		{"series alone", 0, false, "", "23,29", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := selectorGiven(tt.release, tt.latest, tt.spec, tt.series); got != tt.want {
+				t.Errorf("selectorGiven(%d, %v, %q, %q) = %v, want %v",
+					tt.release, tt.latest, tt.spec, tt.series, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -432,7 +457,7 @@ func TestCmdDownload_NoMatch(t *testing.T) {
 
 	out := captureStdout(t, func() {
 		cmdDownload([]string{
-			"-all",
+			"-latest",
 			"-spec-list", listPath,
 			"-output-dir", outDir,
 			"-no-cache",
@@ -454,7 +479,7 @@ func TestCmdPipeline_NoMatch(t *testing.T) {
 
 	out := captureStdout(t, func() {
 		cmdPipeline([]string{
-			"-all",
+			"-latest",
 			"-db", dbPath,
 			"-spec-list", listPath,
 			"-no-cache",
@@ -586,7 +611,6 @@ func TestResolveSpecs_FetchAllSeries(t *testing.T) {
 			"",    // specFlag
 			"23",  // seriesFlag
 			0,     // release
-			false, // allVersions (latestOnly=true)
 			false, // useCache
 			0,     // scrapeConcurrency
 		)
