@@ -776,3 +776,27 @@ func TestHeadingStyles(t *testing.T) {
 		t.Errorf("getHeadingLevel('Normal') = %d, want 0", level)
 	}
 }
+
+// TestParseBody_TruncatedXML verifies that a decode error surfaces instead of
+// silently returning the elements parsed so far: a half-parsed document must
+// not be imported as a complete one.
+func TestParseBody_TruncatedXML(t *testing.T) {
+	full := `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>` +
+		`<w:p><w:r><w:t>hello</w:t></w:r></w:p>` +
+		`<w:p><w:r><w:t>world</w:t></w:r></w:p>` +
+		`</w:body></w:document>`
+
+	if _, err := parseBody([]byte(full)); err != nil {
+		t.Fatalf("well-formed body: %v", err)
+	}
+
+	truncated := full[:len(full)/2]
+	if _, err := parseBody([]byte(truncated)); err == nil {
+		t.Error("expected an error for truncated document.xml")
+	}
+
+	malformed := `<w:document><w:body><w:p></w:tbl></w:body></w:document>`
+	if _, err := parseBody([]byte(malformed)); err == nil {
+		t.Error("expected an error for mismatched tags")
+	}
+}

@@ -40,18 +40,25 @@ type ommlNode struct {
 	Children []*ommlNode
 }
 
+// maxOMMLDepth bounds parseOMMLNode's recursion. Real formulas nest a few
+// dozen levels at most; anything deeper is corrupt or hostile input that
+// would otherwise exhaust the stack.
+const maxOMMLDepth = 100
+
 // ommlToLaTeX consumes the m:oMath / m:oMathPara subtree from d (the start
 // element has already been consumed by the caller) and returns a LaTeX string
 // without surrounding "$" delimiters.
 func ommlToLaTeX(d *xml.Decoder, start xml.StartElement) string {
-	root := parseOMMLNode(d, start)
+	root := parseOMMLNode(d, start, 0)
 	return strings.TrimSpace(renderOMML(root))
 }
 
 // parseOMMLNode builds the subtree rooted at start, reading tokens from d until
 // the matching end element. It recurses into every child (including unknown
 // elements) so the decoder is always balanced regardless of the OMML content.
-func parseOMMLNode(d *xml.Decoder, start xml.StartElement) *ommlNode {
+// Children beyond maxOMMLDepth are consumed (keeping the decoder balanced) but
+// not retained.
+func parseOMMLNode(d *xml.Decoder, start xml.StartElement, depth int) *ommlNode {
 	n := &ommlNode{Local: start.Name.Local}
 	for _, a := range start.Attr {
 		if n.Attr == nil {
@@ -66,7 +73,11 @@ func parseOMMLNode(d *xml.Decoder, start xml.StartElement) *ommlNode {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
-			n.Children = append(n.Children, parseOMMLNode(d, t))
+			if depth >= maxOMMLDepth {
+				_ = d.Skip()
+				continue
+			}
+			n.Children = append(n.Children, parseOMMLNode(d, t, depth+1))
 		case xml.CharData:
 			n.Text += string(t)
 		case xml.EndElement:

@@ -128,6 +128,27 @@ func TestExtractMetadata_FilenameVariants(t *testing.T) {
 			wantVersion: "19.11.0",
 			wantToken:   "jb0",
 		},
+		{
+			name:        "legacy digit-leading version token",
+			filename:    "23060-920.docx",
+			wantSpecID:  "TS 23.060",
+			wantVersion: "9.2.0",
+			wantToken:   "920",
+		},
+		{
+			name:        "multi-part spec with digit-leading token",
+			filename:    "38101-1-100.docx",
+			wantSpecID:  "TS 38.101-1",
+			wantVersion: "1.0.0",
+			wantToken:   "100",
+		},
+		{
+			name:        "digit-leading token in split body chunk",
+			filename:    "36133-920_s00-11.docx",
+			wantSpecID:  "TS 36.133",
+			wantVersion: "9.2.0",
+			wantToken:   "920",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
