@@ -2,6 +2,9 @@ package tools
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -359,6 +362,69 @@ func TestGetImageArchivedInProgress(t *testing.T) {
 	if !strings.Contains(text, "Images for TS 23.501 v19.5.0 are being downloaded") || !strings.Contains(text, "Call the same tool again") {
 		t.Errorf("message = %q, want an image retry hint", text)
 	}
+}
+
+// TestGetImageArchivedFetchError checks that a failed image download surfaces
+// as a version-unavailable error result.
+func TestGetImageArchivedFetchError(t *testing.T) {
+	d := setupTestDB(t)
+	src := sourceWithImageStore(t, d, func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+		return nil, errors.New("download blew up")
+	})
+	handler := HandleGetImage(src)
+
+	result, _, err := handler(context.Background(), nil, GetImageInput{
+		SpecID:  "TS 23.501",
+		Name:    "figure1.png",
+		Version: "19.5.0",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected an error result for a failed image fetch")
+	}
+	if text := getTextContent(result); !strings.Contains(text, "download blew up") {
+		t.Errorf("expected the fetch failure reason, got: %s", text)
+	}
+}
+
+// TestListImagesArchivedReResolveFails covers the cached fast path: the
+// version's sections are already cached (so resolve carries no archive entry)
+// and the archive listing has become unreachable, which must fail the image
+// call with a version-unavailable error rather than a panic or a silent miss.
+func TestListImagesArchivedReResolveFails(t *testing.T) {
+	d := setupTestDB(t)
+	src := sourceWithImageStore(t, d, func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+		t.Error("image fetcher must not run when the archive entry cannot be resolved")
+		return nil, nil
+	})
+	if err := src.Store.Ensure(context.Background(), "TS 23.501", "19.5.0", &pipeline.SpecVersion{SpecID: "23.501", Version: "j50", Release: 19}, time.Minute); err != nil {
+		t.Fatalf("prime section cache: %v", err)
+	}
+	src.Client = unreachableArchiveClient(t)
+	handler := HandleListImages(src)
+
+	result, _, err := handler(context.Background(), nil, ListImagesInput{SpecID: "TS 23.501", Version: "19.5.0"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected an error result when the archive listing is unreachable")
+	}
+	if text := getTextContent(result); !strings.Contains(text, "not available") {
+		t.Errorf("expected a version-unavailable message, got: %s", text)
+	}
+}
+
+// unreachableArchiveClient serves 404 for every archive request.
+func unreachableArchiveClient(t *testing.T) *http.Client {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(ts.Close)
+	return &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
 }
 
 // TestGetImageArchivedNonReadable checks the error for an archived EMF/WMF

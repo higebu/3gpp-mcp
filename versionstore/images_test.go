@@ -185,6 +185,58 @@ func TestEnsureImagesBudgetExceeded(t *testing.T) {
 	}
 }
 
+// TestEnsureImagesSurvivesCallerCancellation checks that a cancelled request
+// does not throw away the image download it started.
+func TestEnsureImagesSurvivesCallerCancellation(t *testing.T) {
+	started := make(chan struct{})
+	s := openImageStore(t, DefaultLimitBytes, func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+		close(started)
+		time.Sleep(30 * time.Millisecond)
+		return fakeImages(8), nil
+	})
+	ensureVersion(t, s, "TS 23.501", "18.6.0")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-started
+		cancel()
+	}()
+	if err := s.EnsureImages(ctx, "TS 23.501", "18.6.0", entry("23.501"), time.Minute); !errors.Is(err, context.Canceled) {
+		t.Fatalf("EnsureImages = %v, want context.Canceled", err)
+	}
+
+	// The detached fetch should still land in the cache. A zero budget also
+	// exercises the default-budget fallback.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if fetched, _ := s.HasImages("TS 23.501", "18.6.0"); fetched {
+			if err := s.EnsureImages(context.Background(), "TS 23.501", "18.6.0", entry("23.501"), 0); err != nil {
+				t.Fatalf("EnsureImages after completion: %v", err)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Error("image fetch did not complete after the caller was cancelled")
+}
+
+// TestEnsureImagesPropagatesFetchError checks that a failed fetch reaches the
+// caller and leaves the version marked as not fetched.
+func TestEnsureImagesPropagatesFetchError(t *testing.T) {
+	want := errors.New("boom")
+	s := openImageStore(t, DefaultLimitBytes, func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+		return nil, want
+	})
+	ensureVersion(t, s, "TS 23.501", "18.6.0")
+
+	if err := s.EnsureImages(context.Background(), "TS 23.501", "18.6.0", entry("23.501"), time.Minute); !errors.Is(err, want) {
+		t.Errorf("EnsureImages = %v, want %v", err, want)
+	}
+	if fetched, _ := s.HasImages("TS 23.501", "18.6.0"); fetched {
+		t.Error("a failed fetch must not mark images as fetched")
+	}
+}
+
 // TestImageBytesCountTowardLimit checks that image blobs join the eviction
 // account and that an evicted version takes its images with it.
 func TestImageBytesCountTowardLimit(t *testing.T) {
