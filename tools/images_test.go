@@ -2,10 +2,15 @@ package tools
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/higebu/3gpp-mcp/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/versionstore"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -47,7 +52,7 @@ func seedImages(t *testing.T, d *db.DB) {
 func TestHandleListImages(t *testing.T) {
 	d := setupTestDB(t)
 	seedImages(t, d)
-	handler := HandleListImages(d)
+	handler := HandleListImages(NewSource(d))
 
 	t.Run("valid spec returns images", func(t *testing.T) {
 		result, _, err := handler(context.Background(), nil, ListImagesInput{SpecID: "TS 23.501"})
@@ -125,7 +130,7 @@ func TestHandleListImages(t *testing.T) {
 func TestHandleGetImage(t *testing.T) {
 	d := setupTestDB(t)
 	seedImages(t, d)
-	handler := HandleGetImage(d)
+	handler := HandleGetImage(NewSource(d))
 
 	t.Run("returns image content", func(t *testing.T) {
 		result, _, err := handler(context.Background(), nil, GetImageInput{
@@ -202,4 +207,181 @@ func TestHandleGetImage(t *testing.T) {
 			t.Error("expected error result for empty name")
 		}
 	})
+}
+
+// sourceWithImageStore builds a Source whose version cache serves canned
+// sections and images instead of downloading.
+func sourceWithImageStore(t *testing.T, d *db.DB, imageFetcher versionstore.ImageFetcher) *Source {
+	t.Helper()
+	store, err := versionstore.Open(versionstore.Options{
+		Path:         filepath.Join(t.TempDir(), "versions.db"),
+		Fetcher:      cannedFetcher,
+		ImageFetcher: imageFetcher,
+	})
+	if err != nil {
+		t.Fatalf("versionstore.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	src := NewSource(d)
+	src.Store = store
+	src.Client = archiveClient(t)
+	src.UseCache = false
+	src.Budget = 5 * time.Second
+	return src
+}
+
+// TestGetImageArchivedVersion covers the lazy image path end to end: the first
+// request downloads and caches every image of the version, later requests hit
+// the cache, and the original EMF name still finds the converted PNG.
+func TestGetImageArchivedVersion(t *testing.T) {
+	d := setupTestDB(t)
+	seedImages(t, d)
+	var calls atomic.Int32
+	src := sourceWithImageStore(t, d, func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+		calls.Add(1)
+		return []db.Image{{Name: "figure1.png", MIMEType: "image/png", Data: []byte("archived-png"), LLMReadable: true}}, nil
+	})
+	handler := HandleGetImage(src)
+
+	for _, name := range []string{"figure1.png", "figure1.emf"} {
+		result, _, err := handler(context.Background(), nil, GetImageInput{
+			SpecID:  "TS 23.501",
+			Name:    name,
+			Version: "19.5.0",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("GetImage(%s): unexpected error result: %s", name, getTextContent(result))
+		}
+		ic, ok := result.Content[0].(*mcp.ImageContent)
+		if !ok {
+			t.Fatalf("expected ImageContent, got %T", result.Content[0])
+		}
+		if string(ic.Data) != "archived-png" {
+			t.Errorf("unexpected image data: %q", string(ic.Data))
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("image fetcher called %d times, want 1", got)
+	}
+
+	// The database version must keep answering from the database.
+	result, _, err := handler(context.Background(), nil, GetImageInput{SpecID: "TS 23.501", Name: "image1.png"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %s", getTextContent(result))
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("image fetcher ran for the database version (%d calls)", got)
+	}
+}
+
+// TestListImagesArchivedVersion checks listing and the empty-result message on
+// the archived path.
+func TestListImagesArchivedVersion(t *testing.T) {
+	d := setupTestDB(t)
+	seedImages(t, d)
+	src := sourceWithImageStore(t, d, func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+		return []db.Image{{Name: "figure1.png", MIMEType: "image/png", Data: []byte("x"), LLMReadable: true}}, nil
+	})
+	handler := HandleListImages(src)
+
+	result, _, err := handler(context.Background(), nil, ListImagesInput{SpecID: "TS 23.501", Version: "19.5.0"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %s", getTextContent(result))
+	}
+	text := getTextContent(result)
+	if !strings.Contains(text, "figure1.png") || !strings.Contains(text, `"count":1`) {
+		t.Errorf("expected the archived image listed, got: %s", text)
+	}
+	if strings.Contains(text, "image1.png") {
+		t.Errorf("archived listing leaked database images: %s", text)
+	}
+}
+
+func TestListImagesArchivedVersionEmpty(t *testing.T) {
+	d := setupTestDB(t)
+	src := sourceWithImageStore(t, d, func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+		return nil, nil
+	})
+	handler := HandleListImages(src)
+
+	result, _, err := handler(context.Background(), nil, ListImagesInput{SpecID: "TS 23.501", Version: "19.5.0"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %s", getTextContent(result))
+	}
+	if text := getTextContent(result); !strings.Contains(text, "No images found for TS 23.501 v19.5.0") {
+		t.Errorf("expected a versioned no-images message, got: %s", text)
+	}
+}
+
+// TestGetImageArchivedInProgress checks that an image fetch exceeding the
+// budget returns a retry hint rather than a tool error.
+func TestGetImageArchivedInProgress(t *testing.T) {
+	d := setupTestDB(t)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	src := sourceWithImageStore(t, d, func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+		<-release
+		return nil, nil
+	})
+	src.Budget = 20 * time.Millisecond
+	handler := HandleGetImage(src)
+
+	// Prime the section cache so only the image fetch is outstanding.
+	if err := src.Store.Ensure(context.Background(), "TS 23.501", "19.5.0", &pipeline.SpecVersion{SpecID: "23.501", Version: "j50", Release: 19}, time.Minute); err != nil {
+		t.Fatalf("prime section cache: %v", err)
+	}
+
+	result, _, err := handler(context.Background(), nil, GetImageInput{
+		SpecID:  "TS 23.501",
+		Name:    "figure1.png",
+		Version: "19.5.0",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Error("an image fetch that is still running should not be reported as a tool error")
+	}
+	text := getTextContent(result)
+	if !strings.Contains(text, "Images for TS 23.501 v19.5.0 are being downloaded") || !strings.Contains(text, "Call the same tool again") {
+		t.Errorf("message = %q, want an image retry hint", text)
+	}
+}
+
+// TestGetImageArchivedNonReadable checks the error for an archived EMF/WMF
+// image that could not be converted.
+func TestGetImageArchivedNonReadable(t *testing.T) {
+	d := setupTestDB(t)
+	src := sourceWithImageStore(t, d, func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+		return []db.Image{{Name: "figure1.emf", MIMEType: "image/x-emf", Data: []byte("emf")}}, nil
+	})
+	handler := HandleGetImage(src)
+
+	result, _, err := handler(context.Background(), nil, GetImageInput{
+		SpecID:  "TS 23.501",
+		Name:    "figure1.emf",
+		Version: "19.5.0",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected an error result for an unconverted EMF image")
+	}
+	if text := getTextContent(result); !strings.Contains(text, "soffice") {
+		t.Errorf("expected a LibreOffice hint, got: %s", text)
+	}
 }

@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,15 +47,19 @@ const maxFetchDuration = 30 * time.Minute
 // DefaultFileName is the cache file created inside the XDG cache directory.
 const DefaultFileName = "versions.db"
 
-// schema mirrors the spec and section tables of the main database, without the
-// full-text index: cached versions must never appear in search results.
-const schema = db.SpecTablesSchema + `
+// schema mirrors the spec, section and image tables of the main database,
+// without the full-text index: cached versions must never appear in search
+// results. images_fetched distinguishes "images fetched, none found" from
+// "never fetched", so a figure-less version does not re-download its ZIP on
+// every image call.
+const schema = db.SpecTablesSchema + db.ImagesTableSchema + `
 CREATE TABLE IF NOT EXISTS cache_entries (
     spec_id TEXT NOT NULL,
     version TEXT NOT NULL,
     bytes INTEGER NOT NULL,
     fetched_at INTEGER NOT NULL,
     last_used_at INTEGER NOT NULL,
+    images_fetched INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (spec_id, version)
 );
 
@@ -63,11 +68,12 @@ CREATE INDEX IF NOT EXISTS idx_cache_lru ON cache_entries(last_used_at);
 
 // Store is a size-bounded cache of converted spec versions.
 type Store struct {
-	conn       *sql.DB
-	limitBytes int64
-	client     *http.Client
-	timeout    time.Duration
-	fetcher    Fetcher
+	conn         *sql.DB
+	limitBytes   int64
+	client       *http.Client
+	timeout      time.Duration
+	fetcher      Fetcher
+	imageFetcher ImageFetcher
 
 	mu       sync.Mutex
 	inflight map[string]*fetch
@@ -76,6 +82,10 @@ type Store struct {
 // Fetcher downloads and converts one archive entry. Only tests set it; the
 // zero value uses the real pipeline.
 type Fetcher func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error)
+
+// ImageFetcher downloads one archive entry's images. Only tests set it; the
+// zero value uses the real pipeline.
+type ImageFetcher func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error)
 
 // fetch tracks one in-progress download so concurrent callers asking for the
 // same version share a single download instead of racing.
@@ -100,6 +110,8 @@ type Options struct {
 	Timeout time.Duration
 	// Fetcher replaces the download-and-convert step. Only tests set it.
 	Fetcher Fetcher
+	// ImageFetcher replaces the image download step. Only tests set it.
+	ImageFetcher ImageFetcher
 }
 
 // DefaultPath returns the cache file location inside the XDG cache directory.
@@ -156,14 +168,22 @@ func Open(opts Options) (*Store, error) {
 		_ = conn.Close()
 		return nil, fmt.Errorf("create version cache schema: %w", err)
 	}
+	// Cache files created before images were cached lack this column; the
+	// CREATE TABLE above is IF NOT EXISTS and does not add it.
+	if _, err := conn.Exec("ALTER TABLE cache_entries ADD COLUMN images_fetched INTEGER NOT NULL DEFAULT 0"); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column name") {
+		_ = conn.Close()
+		return nil, fmt.Errorf("migrate version cache schema: %w", err)
+	}
 
 	return &Store{
-		conn:       conn,
-		limitBytes: opts.LimitBytes,
-		client:     opts.Client,
-		timeout:    opts.Timeout,
-		fetcher:    opts.Fetcher,
-		inflight:   map[string]*fetch{},
+		conn:         conn,
+		limitBytes:   opts.LimitBytes,
+		client:       opts.Client,
+		timeout:      opts.Timeout,
+		fetcher:      opts.Fetcher,
+		imageFetcher: opts.ImageFetcher,
+		inflight:     map[string]*fetch{},
 	}, nil
 }
 
@@ -185,6 +205,23 @@ func (s *Store) Has(specID, version string) (bool, error) {
 		return false, fmt.Errorf("check version cache: %w", err)
 	}
 	return true, nil
+}
+
+// HasImages reports whether a cached version's images have been fetched. False
+// with a nil error also covers a version that is not cached at all.
+func (s *Store) HasImages(specID, version string) (bool, error) {
+	var fetched int
+	err := s.conn.QueryRow(
+		"SELECT images_fetched FROM cache_entries WHERE spec_id = ? AND version = ?",
+		specID, version,
+	).Scan(&fetched)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check image cache: %w", err)
+	}
+	return fetched != 0, nil
 }
 
 // CachedVersions returns the versions of a spec held in the cache, newest
@@ -257,6 +294,68 @@ func (s *Store) GetSection(specID, version, number string, includeSubsections bo
 		)
 	}
 	return s.querySections(projection+" AND s.number = ?", specID, version, number)
+}
+
+// GetImage returns a cached image, or nil when the version holds no image of
+// that name. EMF/WMF images are renamed to .png when they are converted during
+// the fetch, while cached section Markdown keeps naming the original file, so
+// a missed exact match falls back to matching the name without its extension.
+func (s *Store) GetImage(specID, version, name string) (*db.Image, error) {
+	s.touch(specID, version)
+	const projection = "SELECT spec_id, version, name, mime_type, data, llm_readable FROM images WHERE spec_id = ? AND version = ?"
+
+	var img db.Image
+	err := s.conn.QueryRow(projection+" AND name = ?", specID, version, name).
+		Scan(&img.SpecID, &img.Version, &img.Name, &img.MIMEType, &img.Data, &img.LLMReadable)
+	if err == nil {
+		return &img, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("get cached image: %w", err)
+	}
+
+	base := strings.TrimSuffix(name, filepath.Ext(name))
+	if base == "" || base == name {
+		return nil, nil
+	}
+	err = s.conn.QueryRow(
+		projection+" AND name LIKE ? ESCAPE '\\' LIMIT 1",
+		specID, version, db.EscapeLikePattern(base)+".%",
+	).Scan(&img.SpecID, &img.Version, &img.Name, &img.MIMEType, &img.Data, &img.LLMReadable)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get cached image: %w", err)
+	}
+	return &img, nil
+}
+
+// ListImages returns metadata for a cached version's images, without the
+// binary data.
+func (s *Store) ListImages(specID, version string) ([]db.ImageInfo, error) {
+	s.touch(specID, version)
+	rows, err := s.conn.Query(
+		"SELECT spec_id, version, name, mime_type, llm_readable FROM images WHERE spec_id = ? AND version = ? ORDER BY name",
+		specID, version,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list cached images: %w", err)
+	}
+	defer rows.Close()
+
+	var infos []db.ImageInfo
+	for rows.Next() {
+		var info db.ImageInfo
+		if err := rows.Scan(&info.SpecID, &info.Version, &info.Name, &info.MIMEType, &info.LLMReadable); err != nil {
+			return nil, fmt.Errorf("scan cached image info: %w", err)
+		}
+		infos = append(infos, info)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list cached images: iterate: %w", err)
+	}
+	return infos, nil
 }
 
 func (s *Store) querySections(query string, args ...any) ([]db.Section, error) {
@@ -439,6 +538,157 @@ func (s *Store) put(spec db.Spec, sections []db.Section) error {
 	return nil
 }
 
+// EnsureImages makes a cached version's images available, downloading them when
+// necessary. The version's sections must already be cached — image fetching is
+// only reachable through a resolved version — and like Ensure, a fetch that
+// outlives budget keeps running detached and reports ErrInProgress, so
+// repeating the call later returns the cached images.
+func (s *Store) EnsureImages(ctx context.Context, specID, version string, sv *pipeline.SpecVersion, budget time.Duration) error {
+	fetched, err := s.HasImages(specID, version)
+	if err != nil {
+		return err
+	}
+	if fetched {
+		return nil
+	}
+	if budget <= 0 {
+		budget = DefaultBudget
+	}
+
+	// The "#" keeps this key disjoint from Ensure's section keys, so a section
+	// fetch and an image fetch of the same version never share an entry.
+	key := specID + "@" + version + "#images"
+	s.mu.Lock()
+	f, running := s.inflight[key]
+	if !running {
+		// Re-check under the lock: a fetch that completed between the HasImages
+		// call above and here has already been removed from inflight, and
+		// starting a fresh download for it would repeat minutes of work.
+		if fetched, err := s.HasImages(specID, version); err != nil || fetched {
+			s.mu.Unlock()
+			return err
+		}
+		f = &fetch{done: make(chan struct{})}
+		s.inflight[key] = f
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maxFetchDuration)
+		go func() {
+			defer cancel()
+			s.runImages(fetchCtx, key, specID, version, sv, f)
+		}()
+	}
+	s.mu.Unlock()
+
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case <-f.done:
+		return f.err
+	case <-timer.C:
+		return fmt.Errorf("%w: images for %s v%s", ErrInProgress, specID, version)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// runImages performs one image fetch and publishes its outcome to everyone
+// waiting on it.
+func (s *Store) runImages(ctx context.Context, key, specID, version string, sv *pipeline.SpecVersion, f *fetch) {
+	defer func() {
+		s.mu.Lock()
+		delete(s.inflight, key)
+		s.mu.Unlock()
+		close(f.done)
+	}()
+
+	images, err := s.fetchImages(ctx, sv)
+	if err != nil {
+		f.err = err
+		return
+	}
+	for i := range images {
+		images[i].SpecID = specID
+		images[i].Version = version
+	}
+	if err := s.putImages(specID, version, images); err != nil {
+		f.err = err
+	}
+}
+
+// fetchImages downloads one archive entry's images. It is a field so tests can
+// supply images without reaching the network.
+func (s *Store) fetchImages(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+	if s.imageFetcher != nil {
+		return s.imageFetcher(ctx, sv)
+	}
+	return pipeline.FetchVersionImages(ctx, s.client, sv, s.timeout)
+}
+
+// putImages writes a version's images into the cache and enforces the size
+// limit. Image bytes count against the same cache entry as the sections, so
+// eviction drops a version's text and figures as one unit.
+func (s *Store) putImages(specID, version string, images []db.Image) error {
+	tx, err := s.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin cache transaction: %w", err)
+	}
+	defer tx.Rollback() // no-op after Commit per database/sql docs
+
+	// Replacing an earlier image set must not leave its bytes in the account.
+	var oldBytes int64
+	if err := tx.QueryRow(
+		"SELECT COALESCE(SUM(LENGTH(data) + LENGTH(name)), 0) FROM images WHERE spec_id = ? AND version = ?",
+		specID, version,
+	).Scan(&oldBytes); err != nil {
+		return fmt.Errorf("measure cached images: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM images WHERE spec_id = ? AND version = ?", specID, version); err != nil {
+		return fmt.Errorf("clear cached images: %w", err)
+	}
+
+	stmt, err := tx.Prepare(
+		"INSERT INTO images (spec_id, version, name, mime_type, data, llm_readable) VALUES (?, ?, ?, ?, ?, ?)",
+	)
+	if err != nil {
+		return fmt.Errorf("prepare image insert: %w", err)
+	}
+	defer stmt.Close()
+
+	var bytes int64
+	for _, img := range images {
+		if _, err := stmt.Exec(img.SpecID, img.Version, img.Name, img.MIMEType, img.Data, img.LLMReadable); err != nil {
+			return fmt.Errorf("cache image: %w", err)
+		}
+		bytes += int64(len(img.Data)) + int64(len(img.Name))
+	}
+
+	res, err := tx.Exec(
+		"UPDATE cache_entries SET bytes = bytes + ?, images_fetched = 1 WHERE spec_id = ? AND version = ?",
+		bytes-oldBytes, specID, version,
+	)
+	if err != nil {
+		return fmt.Errorf("record image bytes: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("record image bytes: %w", err)
+	} else if n == 0 {
+		// The version was evicted while its images downloaded. Committing would
+		// orphan the blobs and break the invariant that a cache entry always
+		// accompanies cached rows, so give up; the next call re-fetches the
+		// sections first.
+		return fmt.Errorf("%s v%s was evicted while its images downloaded; call the tool again", specID, version)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit cache transaction: %w", err)
+	}
+	// The images are cached and readable at this point, so an eviction failure
+	// must not be reported as a failed fetch: it only costs cache size accuracy.
+	if err := s.evict(specID, version); err != nil {
+		log.Printf("warning: version cache eviction failed: %v", err)
+	}
+	return nil
+}
+
 // evict drops least-recently-used versions until the cache fits its limit. The
 // entry named by keepSpecID/keepVersion is never dropped: it was just fetched,
 // and evicting it would make the fetch pointless when a single spec is larger
@@ -486,6 +736,7 @@ func (s *Store) delete(specID, version string) error {
 
 	for _, q := range []string{
 		"DELETE FROM sections WHERE spec_id = ? AND version = ?",
+		"DELETE FROM images WHERE spec_id = ? AND version = ?",
 		"DELETE FROM specs WHERE id = ? AND version = ?",
 		"DELETE FROM cache_entries WHERE spec_id = ? AND version = ?",
 	} {

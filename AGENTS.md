@@ -102,9 +102,14 @@ separate SQLite file (`$XDG_CACHE_HOME/3gpp-mcp/versions.db`). That file has no
 FTS tables, so cached versions never reach search. Fetches are deduplicated per
 `(spec, version)`, run on a context detached from the caller so a client timeout
 does not discard minutes of work, and are evicted least-recently-used once the
-size limit is exceeded. The on-demand path deliberately skips images, OpenAPI
-YAML and cross-reference extraction — those are served from the prebuilt
-database for its version only.
+size limit is exceeded. The section fetch skips images, OpenAPI YAML and
+cross-reference extraction. Images are fetched lazily instead: the first
+`get_image`/`list_images` call for an archived version downloads that version's
+ZIP again via `pipeline.FetchVersionImages`, converts EMF/WMF figures to PNG
+when LibreOffice (`soffice`) is available, and caches every image of the
+version alongside its sections (image bytes count against the same LRU limit,
+and a version's text and images are evicted as one unit). OpenAPI YAML and
+cross-references remain prebuilt-only.
 
 ### MCP Tools
 
@@ -120,8 +125,8 @@ Ten tools are exposed via MCP:
 | `list_openapi` | List OpenAPI definitions |
 | `get_openapi` | Get OpenAPI definition (paginated) |
 | `get_references` | Get cross-references for a section (incoming/outgoing) |
-| `list_images` | List embedded images in a spec |
-| `get_image` | Retrieve an embedded image (base64 or PNG) |
+| `list_images` | List embedded images in a spec (optionally a past version) |
+| `get_image` | Retrieve an embedded image (base64 or PNG, optionally a past version) |
 
 ### Transport
 

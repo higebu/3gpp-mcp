@@ -60,15 +60,16 @@ func HandleGetSection(src *Source) func(ctx context.Context, req *mcp.CallToolRe
 
 // sourceHeader builds the provenance line prepended to every get_section page,
 // e.g. "[Source: TS 23.501 v18.6.0 (Rel-18) — Section 5.1]". Archived versions
-// say so, because get_image and get_references only cover the version the
-// database was built with and would silently answer about a different one.
+// say so, because get_references only covers the version the database was
+// built with and would silently answer about a different one; images are
+// downloaded on first use, so they stay available.
 func sourceHeader(s db.Section, withSubsections, archived bool) string {
 	h := fmt.Sprintf("[Source: %s — Section %s", specLabel(s), s.Number)
 	if withSubsections {
 		h += " (+subsections)"
 	}
 	if archived {
-		h += " (archived version; images and cross-references unavailable)"
+		h += " (archived version; cross-references unavailable)"
 	}
 	return h + "]"
 }

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -123,9 +124,9 @@ func releaseRequest(s string) (int, bool) {
 // and returns the resulting records without writing them anywhere.
 //
 // Unlike the build pipeline it deliberately skips images, OpenAPI YAML and
-// cross-reference extraction: those are served from the prebuilt database for
-// the current version only, and carrying them for every fetched version would
-// bloat the cache with data no tool reads.
+// cross-reference extraction. Images are fetched separately and lazily by
+// FetchVersionImages when a tool actually asks for one; carrying them for every
+// fetched version would bloat the cache with data no tool reads.
 func FetchVersion(ctx context.Context, client *http.Client, sv *SpecVersion, timeout time.Duration) (db.Spec, []db.Section, error) {
 	tmpDir, err := os.MkdirTemp("", "3gpp-ondemand-"+sv.SpecID+"-")
 	if err != nil {
@@ -201,6 +202,75 @@ func FetchVersion(ctx context.Context, client *http.Client, sv *SpecVersion, tim
 		sections[i].SpecID = spec.ID
 	}
 	return spec, sections, nil
+}
+
+// FetchVersionImages downloads one archive entry and returns only its embedded
+// images. It backs the lazy image path: the archive offers no partial download,
+// so retrieving even a single image of an archived version costs a full ZIP
+// download, and callers are expected to cache everything returned here.
+//
+// When LibreOffice (soffice) is available, EMF/WMF images are converted to PNG
+// before they are returned, renaming them from image1.emf to image1.png; the
+// caller's lookups must tolerate that rename because section Markdown cached by
+// FetchVersion still names the original file. Zero images is a success, not an
+// error: many specifications simply ship no figures.
+func FetchVersionImages(ctx context.Context, client *http.Client, sv *SpecVersion, timeout time.Duration) ([]db.Image, error) {
+	tmpDir, err := os.MkdirTemp("", "3gpp-ondemand-img-"+sv.SpecID+"-")
+	if err != nil {
+		return nil, fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	result, err := DownloadAndExtract(ctx, client, sv, tmpDir, timeout)
+	if err != nil {
+		return nil, err
+	}
+	switch result.Status {
+	case "OK":
+	case "DOC_ONLY":
+		return nil, fmt.Errorf("%w: %s v%s ships only legacy .doc files, which need LibreOffice to convert; build it into the database with `3gpp-mcp build --convert-doc`",
+			ErrNoDocx, sv.SpecID, displayVersion(sv))
+	default:
+		return nil, fmt.Errorf("%w: %s v%s (%s)", ErrNoDocx, sv.SpecID, displayVersion(sv), result.Status)
+	}
+
+	sortCoverLast(result.DocxFiles)
+	_, sofficeErr := exec.LookPath("soffice")
+	convertImages := sofficeErr == nil
+
+	var images []db.Image
+	// Parts of a multi-file spec each number their images from image1, so the
+	// same policy as the section merge applies: last write wins by name.
+	index := map[string]int{}
+
+	for _, docxPath := range result.DocxFiles {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		parsed, err := docx.ParseDocx(docxPath)
+		if err != nil {
+			log.Printf("  on-demand parse error %s: %v", filepath.Base(docxPath), err)
+			continue
+		}
+		if convertImages {
+			if n := docx.ConvertResultImages(ctx, parsed); n > 0 {
+				log.Printf("  %s: converted %d images to PNG", sv.SpecID, n)
+			}
+		}
+		_, _, fileImages := convertToDBRecords(parsed)
+		for _, img := range fileImages {
+			if i, ok := index[img.Name]; ok {
+				images[i] = img
+				continue
+			}
+			index[img.Name] = len(images)
+			images = append(images, img)
+		}
+		if err := os.Remove(docxPath); err != nil {
+			log.Printf("  warning: failed to remove %s: %v", filepath.Base(docxPath), err)
+		}
+	}
+	return images, nil
 }
 
 // displayVersion formats an archive entry's version for messages, preferring
