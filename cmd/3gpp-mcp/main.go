@@ -402,7 +402,7 @@ func resolveSpecs(ctx context.Context, client *http.Client, specList, specFlag, 
 func cmdDownload(args []string) {
 	fs := flag.NewFlagSet("download", flag.ExitOnError)
 	release := fs.Int("release", 0, "Download specs for specific release (e.g., 19)")
-	latest := fs.Bool("latest", false, "Download the single latest version of each spec (the default selection)")
+	latest := fs.Bool("latest", false, "Select every spec at its latest version (use when no other selector is given)")
 	seriesFlag := fs.String("series", "", "Filter by series, comma-separated (e.g., 23,29)")
 	specFlag := fs.String("spec", "", "Download specific spec (e.g., 23.501)")
 	outputDir := fs.String("output-dir", "specs", "Output directory")
@@ -448,7 +448,7 @@ func cmdPipeline(args []string) {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	dbPath := fs.String("db", "3gpp.db", "Output SQLite database path")
 	release := fs.Int("release", 0, "Download specs for specific release (e.g., 19)")
-	latest := fs.Bool("latest", false, "Process the single latest version of each spec (the default selection)")
+	latest := fs.Bool("latest", false, "Select every spec at its latest version (use when no other selector is given)")
 	seriesFlag := fs.String("series", "", "Filter by series, comma-separated (e.g., 23,29)")
 	specFlag := fs.String("spec", "", "Download specific spec (e.g., 23.501)")
 	workers := fs.Int("workers", runtime.NumCPU(), "Number of parallel workers")
