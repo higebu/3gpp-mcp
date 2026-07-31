@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/higebu/3gpp-mcp/converter/pipeline"
@@ -34,15 +36,52 @@ func healthHandler(w http.ResponseWriter, _ *http.Request) {
 }
 
 func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
-	expected := []byte("Bearer " + token)
+	expected := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := []byte(r.Header.Get("Authorization"))
-		if subtle.ConstantTimeCompare(auth, expected) != 1 {
+		// RFC 7235 makes the auth-scheme case-insensitive, so split it off
+		// and compare only the credentials in constant time.
+		scheme, credentials, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+		if !ok || !strings.EqualFold(scheme, "Bearer") ||
+			subtle.ConstantTimeCompare([]byte(strings.TrimSpace(credentials)), expected) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="3gpp-mcp"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// buildHTTPHandler assembles the HTTP transport's handler tree. When a bearer
+// token is set it guards everything except the health probe: the web viewer
+// serves the same corpus as the MCP tools, so leaving it open would make the
+// token meaningless.
+func buildHTTPHandler(d *db.DB, s *mcp.Server, bearerToken string, enableWeb bool) http.Handler {
+	// Stateless mode is required to serve protocol version 2026-07-28,
+	// whose lifecycle has no initialize handshake or Mcp-Session-Id.
+	// Older clients still work: each request runs in a temporary session.
+	// This server never initiates server->client requests, so nothing is
+	// lost by not keeping sessions.
+	mcpHandler := mcp.NewStreamableHTTPHandler(
+		func(r *http.Request) *mcp.Server { return s },
+		&mcp.StreamableHTTPOptions{Stateless: true},
+	)
+
+	appMux := http.NewServeMux()
+	if enableWeb {
+		appMux.Handle("/mcp/", http.StripPrefix("/mcp", mcpHandler))
+		appMux.Handle("/", web.NewServer(d))
+	} else {
+		appMux.Handle("/", mcpHandler)
+	}
+
+	var app http.Handler = appMux
+	if bearerToken != "" {
+		app = bearerAuthMiddleware(bearerToken, appMux)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", healthHandler)
+	mux.Handle("/", app)
+	return mux
 }
 
 func main() {
@@ -191,40 +230,58 @@ func cmdServe(args []string) {
 			log.Fatalf("Server error: %v", err)
 		}
 	case "http":
-		// Stateless mode is required to serve protocol version 2026-07-28,
-		// whose lifecycle has no initialize handshake or Mcp-Session-Id.
-		// Older clients still work: each request runs in a temporary session.
-		// This server never initiates server->client requests, so nothing is
-		// lost by not keeping sessions.
-		mcpHandler := mcp.NewStreamableHTTPHandler(
-			func(r *http.Request) *mcp.Server { return s },
-			&mcp.StreamableHTTPOptions{Stateless: true},
-		)
-		var mcpH http.Handler = mcpHandler
-		if *bearerToken != "" {
-			mcpH = bearerAuthMiddleware(*bearerToken, mcpHandler)
-		} else {
-			log.Println("WARNING: HTTP transport running without authentication. Set -bearer-token or THREEGPP_MCP_BEARER_TOKEN to secure the server.")
-		}
-
-		mux := http.NewServeMux()
-		mux.HandleFunc("/health", healthHandler)
 		if *enableWeb {
-			mux.Handle("/mcp/", http.StripPrefix("/mcp", mcpH))
-			mux.Handle("/", web.NewServer(d))
 			log.Printf("Starting 3gpp-mcp server on %s (HTTP + Web viewer)...", *addr)
 			log.Printf("  MCP endpoint: http://localhost%s/mcp/", *addr)
 			log.Printf("  Web viewer:   http://localhost%s/", *addr)
 		} else {
-			mux.Handle("/", mcpH)
 			log.Printf("Starting 3gpp-mcp server on %s (HTTP)...", *addr)
 		}
-		if err := http.ListenAndServe(*addr, mux); err != nil {
+		if *bearerToken == "" {
+			log.Println("WARNING: HTTP transport running without authentication. Set -bearer-token or THREEGPP_MCP_BEARER_TOKEN to secure the server.")
+		}
+
+		server := &http.Server{
+			Addr:    *addr,
+			Handler: buildHTTPHandler(d, s, *bearerToken, *enableWeb),
+			// Bound header reads and idle keep-alives so stalled connections
+			// (slowloris) cannot pile up. No overall write timeout: MCP
+			// responses may legitimately stream for a long time.
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       120 * time.Second,
+		}
+
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+
+		if err := runHTTPServer(ctx, server); err != nil {
 			log.Fatalf("Server error: %v", err)
 		}
 	default:
 		log.Fatalf("Unknown transport: %s", *transport)
 	}
+}
+
+// runHTTPServer serves until the listener fails or ctx is cancelled. On
+// cancellation it drains in-flight requests and returns nil, so the caller's
+// deferred database and version cache closes actually run.
+func runHTTPServer(ctx context.Context, server *http.Server) error {
+	errCh := make(chan error, 1)
+	go func() { errCh <- server.ListenAndServe() }()
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+	case <-ctx.Done():
+		log.Println("Shutting down...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Shutdown error: %v", err)
+		}
+	}
+	return nil
 }
 
 func cmdConvert(args []string) {

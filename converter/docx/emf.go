@@ -78,9 +78,12 @@ func ConvertResultImages(ctx context.Context, result *ParseResult) int {
 	}
 	n := ConvertImages(ctx, imageMap)
 	if n > 0 {
-		result.Images = result.Images[:0]
-		for _, img := range imageMap {
-			result.Images = append(result.Images, img)
+		// Update in place rather than rebuilding from the map, which would
+		// randomize the order.
+		for i, img := range result.Images {
+			if updated, ok := imageMap[img.Name]; ok {
+				result.Images[i] = updated
+			}
 		}
 	}
 	return n
@@ -218,6 +221,13 @@ func stripEMFPlus(data []byte) []byte {
 	if !hasEMFPlus {
 		return data
 	}
+	if len(out) < emfHeaderMinSize {
+		// The surviving records do not even cover the header, so the fields
+		// at offsets 48/52 cannot be patched (writing into spare capacity
+		// beyond len(out) would be silently dropped). Hand LibreOffice the
+		// original data instead of a corrupt stream.
+		return data
+	}
 
 	// Patch EMF header: file size (offset 48) and record count (offset 52)
 	binary.LittleEndian.PutUint32(out[48:52], uint32(len(out)))
@@ -243,7 +253,7 @@ func batchConvertToPNG(ctx context.Context, items []*batchItem) error {
 	defer os.RemoveAll(tmpDir)
 
 	var inputPaths []string
-	for _, item := range items {
+	for i, item := range items {
 		name := item.original.Name
 		data := item.original.Data
 
@@ -263,6 +273,10 @@ func batchConvertToPNG(ctx context.Context, items []*batchItem) error {
 			data = stripEMFPlus(data)
 		}
 
+		// Prefix with the item index: soffice names every output after the
+		// input's base name, so "image1.emf" and "image1.wmf" in one batch
+		// would both produce "image1.png" and silently share one result.
+		name = fmt.Sprintf("i%d_%s", i, name)
 		inputPath := filepath.Join(tmpDir, name)
 		if err := os.WriteFile(inputPath, data, 0o600); err != nil {
 			item.err = fmt.Errorf("write temp file: %w", err)
@@ -338,6 +352,10 @@ func runSofficeBatch(ctx context.Context, outDir string, inputs []string) error 
 	args = append(args, inputs...)
 
 	cmd := exec.CommandContext(ctx, "soffice", args...)
+	// The soffice wrapper forks soffice.bin; killing only the wrapper on
+	// timeout leaves a child holding the output pipe, which would block
+	// CombinedOutput forever. WaitDelay forcibly releases it.
+	cmd.WaitDelay = 10 * time.Second
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -178,10 +179,14 @@ func FetchSpecZips(ctx context.Context, client *http.Client, specID string, useC
 		normalized = normalized[:2] + "." + normalized[2:]
 	}
 
-	parts := strings.SplitN(normalized, ".", 2)
-	if len(parts) != 2 {
+	// The normalized ID becomes both a cache filename component and a URL
+	// path segment, so anything that is not a plain spec directory name
+	// (path separators, "..", wildcards) must be rejected here.
+	if !specDirRE.MatchString(normalized) {
 		return nil, fmt.Errorf("invalid spec ID format: %s", specID)
 	}
+
+	parts := strings.SplitN(normalized, ".", 2)
 
 	// Check cache
 	cacheKey := CacheKey("speczips", normalized)
@@ -271,6 +276,7 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 	var allSpecPairs []specPair
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	var fetchFailures atomic.Int64
 	sem := make(chan struct{}, scrapeConcurrency)
 
 	for _, sd := range seriesDirs {
@@ -283,6 +289,7 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 			html, err := fetchPage(ctx, client, baseURL+sd+"/")
 			if err != nil {
 				log.Printf("Failed to fetch %s: %v", sd, err)
+				fetchFailures.Add(1)
 				return
 			}
 			links := extractLinks(html)
@@ -313,6 +320,7 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 			html, err := fetchPage(ctx, client, baseURL+pair.seriesDir+"/"+pair.specDir+"/")
 			if err != nil {
 				log.Printf("Failed to fetch %s/%s: %v", pair.seriesDir, pair.specDir, err)
+				fetchFailures.Add(1)
 				return
 			}
 			links := extractLinks(html)
@@ -329,7 +337,11 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 
 	log.Printf("Total: %d spec versions found", len(entries))
 
-	if useCache {
+	// A list missing the specs whose listings failed to fetch must not be
+	// cached: every build within the TTL would silently skip them.
+	if failed := fetchFailures.Load(); failed > 0 {
+		log.Printf("warning: %d directory listing(s) failed to fetch; not caching this partial spec list", failed)
+	} else if useCache {
 		if err := SaveCache(cacheKey, entries); err != nil {
 			log.Printf("warning: failed to save cache: %v", err)
 		}

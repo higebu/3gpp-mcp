@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -122,8 +123,14 @@ func parseBody(data []byte) ([]bodyElement, error) {
 
 	for {
 		tok, err := decoder.Token()
-		if err != nil {
+		if errors.Is(err, io.EOF) {
 			break
+		}
+		if err != nil {
+			// A decode error means the document is truncated or malformed.
+			// Returning the partial elements as a success would let a
+			// half-parsed document replace a previously complete import.
+			return nil, fmt.Errorf("decode document.xml: %w", err)
 		}
 
 		switch t := tok.(type) {

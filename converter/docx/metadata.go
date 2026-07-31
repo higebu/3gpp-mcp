@@ -21,7 +21,11 @@ const (
 )
 
 var (
-	filenameRE    = regexp.MustCompile(`^(\d{2})(\d{3})(?:-(\d{1,2}))?-?([a-z][0-9a-z]+)`)
+	// The trailing group is the base-36 archive version token: exactly three
+	// characters, each a digit or letter. Legacy releases 1-9 have tokens
+	// that start with a digit ("920" is 9.2.0), so the first character must
+	// not be restricted to letters.
+	filenameRE    = regexp.MustCompile(`^(\d{2})(\d{3})(?:-(\d{1,2}))?-?([0-9a-z]{3})`)
 	specPatternRE = regexp.MustCompile(`(?i)(?:TS|TR)\s*(\d+)\.(\d+)`)
 	versionRE     = regexp.MustCompile(`V(\d+\.\d+\.\d+)`)
 	releaseRE     = regexp.MustCompile(`Release\s+(\d+)`)

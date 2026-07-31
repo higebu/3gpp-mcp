@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -523,6 +524,18 @@ func TestPaginateText(t *testing.T) {
 			t.Errorf("expected at least one line, got: %s", text)
 		}
 	})
+
+	t.Run("max_chars is not exceeded by smart cut", func(t *testing.T) {
+		// The char budget cuts at line 5 (5 lines x 6 chars = 30); the
+		// paragraph boundary at line 6 is within the smart-cut lookahead
+		// (hardLimit = 5 + 5/5 = 6) and must not pull lines past the budget.
+		paraContent := "line1\nline2\nline3\nline4\nline5\n\nline7\nline8\nline9\nline0"
+		result := paginateText(paraContent, 0, 10, 30)
+		text := getTextContent(result)
+		if !strings.Contains(text, "[Lines 1-5 of 10]") {
+			t.Errorf("expected char budget to hold at 5 lines, got: %s", text)
+		}
+	})
 }
 
 func TestHandleGetReferences(t *testing.T) {
@@ -830,4 +843,86 @@ func TestHandleListSpecs_InvalidPagination(t *testing.T) {
 			t.Errorf("expected total_count in output, got: %s", text)
 		}
 	})
+
+	t.Run("negative limit falls back to the default", func(t *testing.T) {
+		// A negative limit reaching db.ListSpecs means "no limit" (internal
+		// use only); the handler must not let tool input select that mode.
+		result, _, err := handler(context.Background(), nil, ListSpecsInput{Limit: -1})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, `"limit": 20`) {
+			t.Errorf("expected the default limit of 20, got: %s", text)
+		}
+	})
+}
+
+// TestHandleGetOpenAPI_FilteredPagination verifies that offset/max_lines are
+// honored when a path or schema filter is set, and that a follow-up page
+// actually advances.
+func TestHandleGetOpenAPI_FilteredPagination(t *testing.T) {
+	d := setupTestDB(t)
+	handler := HandleGetOpenAPI(d)
+
+	first, _, err := handler(context.Background(), nil, GetOpenAPIInput{
+		SpecID: "TS 29.510", APIName: "Nnrf_NFManagement",
+		Path: "/nf-instances", MaxLines: 2,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	firstText := getTextContent(first)
+	if !strings.Contains(firstText, "[Lines 1-2 of ") {
+		t.Errorf("expected filtered output to paginate, got: %s", firstText)
+	}
+
+	second, _, err := handler(context.Background(), nil, GetOpenAPIInput{
+		SpecID: "TS 29.510", APIName: "Nnrf_NFManagement",
+		Path: "/nf-instances", MaxLines: 2, Offset: 2,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	secondText := getTextContent(second)
+	if !strings.Contains(secondText, "[Lines 3-") {
+		t.Errorf("expected second page to advance, got: %s", secondText)
+	}
+	if firstText == secondText {
+		t.Error("expected pages to differ")
+	}
+}
+
+// TestHandleGetReferences_Truncation verifies the response cap: a spec-wide
+// incoming query over a heavily-cited spec is cut at MaxReferences with a
+// notice instead of serializing every row.
+func TestHandleGetReferences_Truncation(t *testing.T) {
+	d := setupTestDB(t)
+	handler := HandleGetReferences(d)
+
+	var sb strings.Builder
+	sb.WriteString("INSERT INTO spec_references (source_spec_id, source_version, source_section, target_spec, target_section, context) VALUES ")
+	for i := range MaxReferences + 10 {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, "('TS 90.%03d', '18.0.0', '5.%d', 'TS 23.501', '', 'ctx %d')", i%500, i, i)
+	}
+	if err := d.Exec(sb.String()); err != nil {
+		t.Fatalf("seed references: %v", err)
+	}
+
+	result, _, err := handler(context.Background(), nil, GetReferencesInput{
+		SpecID: "TS 23.501", Direction: "incoming",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := getTextContent(result)
+	if !strings.Contains(text, fmt.Sprintf("[Truncated: showing %d of %d references", MaxReferences, MaxReferences+10)) {
+		t.Errorf("expected a truncation notice, got tail: %s", text[len(text)-200:])
+	}
+	if got := strings.Count(text, `"source_spec_id"`); got != MaxReferences {
+		t.Errorf("expected %d serialized references, got %d", MaxReferences, got)
+	}
 }

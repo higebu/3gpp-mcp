@@ -320,7 +320,16 @@ func parseParagraphFromDecoder(d *xml.Decoder, _ xml.StartElement) paragraphInfo
 // equivalent mc:Fallback in the legacy VML form for compatibility, and this
 // converter only understands VML shapes, so processing both would double
 // every label and image.
-func scanDrawingSubtree(d *xml.Decoder, _ xml.StartElement) (imgs []imageRef, labels []string, hasGroup, hasRaster bool) {
+func scanDrawingSubtree(d *xml.Decoder, start xml.StartElement) (imgs []imageRef, labels []string, hasGroup, hasRaster bool) {
+	return scanDrawingSubtreeDepth(d, start, 0)
+}
+
+// maxDrawingDepth bounds scanDrawingSubtree's recursion. Real diagrams nest a
+// handful of levels; anything deeper is corrupt or hostile input that would
+// otherwise exhaust the stack.
+const maxDrawingDepth = 100
+
+func scanDrawingSubtreeDepth(d *xml.Decoder, _ xml.StartElement, depth int) (imgs []imageRef, labels []string, hasGroup, hasRaster bool) {
 	for {
 		tok, err := d.Token()
 		if err != nil {
@@ -359,7 +368,11 @@ func scanDrawingSubtree(d *xml.Decoder, _ xml.StartElement) (imgs []imageRef, la
 				if t.Name.Local == "group" {
 					hasGroup = true
 				}
-				subImgs, subLabels, subHasGroup, subHasRaster := scanDrawingSubtree(d, t)
+				if depth >= maxDrawingDepth {
+					_ = d.Skip()
+					continue
+				}
+				subImgs, subLabels, subHasGroup, subHasRaster := scanDrawingSubtreeDepth(d, t, depth+1)
 				imgs = append(imgs, subImgs...)
 				labels = append(labels, subLabels...)
 				hasGroup = hasGroup || subHasGroup

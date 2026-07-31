@@ -17,11 +17,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/higebu/3gpp-mcp/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/specver"
 	_ "modernc.org/sqlite"
 )
 
@@ -36,6 +38,10 @@ const DefaultLimitBytes int64 = 1024 << 20 // 1 GiB
 // DefaultBudget is how long a caller waits for a fetch before being told to
 // come back. MCP clients time out well before a large spec finishes.
 const DefaultBudget = 60 * time.Second
+
+// maxFetchDuration bounds a detached background fetch. Large specs take a few
+// minutes to download and convert; anything beyond this is a stalled transfer.
+const maxFetchDuration = 30 * time.Minute
 
 // DefaultFileName is the cache file created inside the XDG cache directory.
 const DefaultFileName = "versions.db"
@@ -181,10 +187,11 @@ func (s *Store) Has(specID, version string) (bool, error) {
 	return true, nil
 }
 
-// CachedVersions returns the versions of a spec held in the cache.
+// CachedVersions returns the versions of a spec held in the cache, newest
+// first.
 func (s *Store) CachedVersions(specID string) ([]string, error) {
 	rows, err := s.conn.Query(
-		"SELECT version FROM cache_entries WHERE spec_id = ? ORDER BY version",
+		"SELECT version FROM cache_entries WHERE spec_id = ?",
 		specID,
 	)
 	if err != nil {
@@ -200,7 +207,15 @@ func (s *Store) CachedVersions(specID string) ([]string, error) {
 		}
 		versions = append(versions, v)
 	}
-	return versions, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Dotted versions do not order correctly as text ("18.10.0" would sort
+	// before "18.6.0"), so sort semantically.
+	sort.Slice(versions, func(i, j int) bool {
+		return specver.Compare(versions[i], versions[j]) > 0
+	})
+	return versions, nil
 }
 
 // GetSpec returns the cached spec record for a version.
@@ -237,8 +252,8 @@ func (s *Store) GetSection(specID, version, number string, includeSubsections bo
 		"FROM sections s LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version WHERE s.spec_id = ? AND s.version = ?"
 	if includeSubsections {
 		return s.querySections(
-			projection+" AND (s.number = ? OR s.number LIKE ? || '.%') ORDER BY s.id",
-			specID, version, number, number,
+			projection+" AND (s.number = ? OR s.number LIKE ? || '.%' ESCAPE '\\') ORDER BY s.id",
+			specID, version, number, db.EscapeLikePattern(number),
 		)
 	}
 	return s.querySections(projection+" AND s.number = ?", specID, version, number)
@@ -303,11 +318,25 @@ func (s *Store) Ensure(ctx context.Context, specID, version string, sv *pipeline
 	s.mu.Lock()
 	f, running := s.inflight[key]
 	if !running {
+		// Re-check under the lock: a fetch that completed between the Has
+		// call above and here has already been removed from inflight, and
+		// starting a fresh download for it would repeat minutes of work.
+		if cached, err := s.Has(specID, version); err != nil || cached {
+			s.mu.Unlock()
+			return err
+		}
 		f = &fetch{done: make(chan struct{})}
 		s.inflight[key] = f
 		// The fetch outlives this request on purpose: a caller that gives up
 		// waiting should not throw away minutes of download and conversion.
-		go s.run(context.WithoutCancel(ctx), key, specID, version, sv, f)
+		// It still gets a generous deadline: the download path has no overall
+		// timeout of its own, so a stalled connection would otherwise keep
+		// this inflight entry - and every future caller - stuck forever.
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maxFetchDuration)
+		go func() {
+			defer cancel()
+			s.run(fetchCtx, key, specID, version, sv, f)
+		}()
 	}
 	s.mu.Unlock()
 
@@ -401,7 +430,13 @@ func (s *Store) put(spec db.Spec, sections []db.Section) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit cache transaction: %w", err)
 	}
-	return s.evict(spec.ID, spec.Version)
+	// The version is cached and readable at this point, so an eviction
+	// failure must not be reported as a failed fetch: it only costs cache
+	// size accuracy.
+	if err := s.evict(spec.ID, spec.Version); err != nil {
+		log.Printf("warning: version cache eviction failed: %v", err)
+	}
+	return nil
 }
 
 // evict drops least-recently-used versions until the cache fits its limit. The

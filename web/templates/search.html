@@ -12,7 +12,7 @@
                 <a href="{{sectionURL .SpecID .Number}}">{{.SpecID}}{{if ne .Number .Title}} &sect;{{.Number}}{{end}}</a>
                 <span class="result-title">{{.Title}}</span>
             </h3>
-            <p class="result-snippet">{{safeHTML .Snippet}}</p>
+            <p class="result-snippet">{{snippetHTML .Snippet}}</p>
         </div>
         {{else}}
         <p class="no-results">No results found. Try a different search term.</p>

@@ -354,3 +354,52 @@ func TestOpenRejectsUnwritablePath(t *testing.T) {
 		t.Error("Open on an unwritable path should fail so the caller can disable fetching")
 	}
 }
+
+// TestCachedVersionsSemanticOrder checks that versions are ordered by their
+// numeric components, not lexicographically ("18.10.0" after "18.6.0" as
+// text, but newer semantically).
+func TestCachedVersionsSemanticOrder(t *testing.T) {
+	s := openStore(t, DefaultLimitBytes, func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		spec, sections := fakeSpec("placeholder", "placeholder", 8)
+		return spec, sections, nil
+	})
+	for _, v := range []string{"18.6.0", "18.10.0", "17.9.0"} {
+		if err := s.Ensure(context.Background(), "TS 23.501", v, entry("23.501"), time.Minute); err != nil {
+			t.Fatalf("Ensure %s: %v", v, err)
+		}
+	}
+	versions, err := s.CachedVersions("TS 23.501")
+	if err != nil {
+		t.Fatalf("CachedVersions: %v", err)
+	}
+	want := []string{"18.10.0", "18.6.0", "17.9.0"}
+	if len(versions) != len(want) {
+		t.Fatalf("CachedVersions = %v, want %v", versions, want)
+	}
+	for i := range want {
+		if versions[i] != want[i] {
+			t.Fatalf("CachedVersions = %v, want %v", versions, want)
+		}
+	}
+}
+
+// TestGetSectionWildcardsAreLiteral checks that LIKE metacharacters in a
+// section number do not act as wildcards against the cache.
+func TestGetSectionWildcardsAreLiteral(t *testing.T) {
+	s := openStore(t, DefaultLimitBytes, func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		spec, sections := fakeSpec("placeholder", "placeholder", 8)
+		return spec, sections, nil
+	})
+	if err := s.Ensure(context.Background(), "TS 23.501", "18.6.0", entry("23.501"), time.Minute); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	for _, number := range []string{"%", "1_1", "_"} {
+		sections, err := s.GetSection("TS 23.501", "18.6.0", number, true)
+		if err != nil {
+			t.Fatalf("GetSection(%q): %v", number, err)
+		}
+		if len(sections) != 0 {
+			t.Errorf("GetSection(%q) matched %d sections, want 0", number, len(sections))
+		}
+	}
+}

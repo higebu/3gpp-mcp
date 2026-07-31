@@ -264,6 +264,42 @@ func TestStripEMFPlus_TooSmall(t *testing.T) {
 	}
 }
 
+// TestStripEMFPlus_ShortOutput covers a header whose declared record size is
+// smaller than the real header: the surviving records then do not reach
+// offset 56, the fileSize/nRecords patch cannot be applied, and the original
+// data must be returned instead of a corrupt stream.
+func TestStripEMFPlus_ShortOutput(t *testing.T) {
+	var data []byte
+
+	// EMR_HEADER claiming recSize=12 (undersized).
+	header := make([]byte, 12)
+	binary.LittleEndian.PutUint32(header[0:4], 0x01)
+	binary.LittleEndian.PutUint32(header[4:8], 12)
+	data = append(data, header...)
+
+	// EMF+ comment record (stripped).
+	comment := make([]byte, 20)
+	binary.LittleEndian.PutUint32(comment[0:4], emrComment)
+	binary.LittleEndian.PutUint32(comment[4:8], 20)
+	binary.LittleEndian.PutUint32(comment[8:12], 8) // DataSize
+	binary.LittleEndian.PutUint32(comment[12:16], emfPlusSignature)
+	data = append(data, comment...)
+
+	// EOF record.
+	eof := make([]byte, 8)
+	binary.LittleEndian.PutUint32(eof[0:4], 0x0E)
+	binary.LittleEndian.PutUint32(eof[4:8], 8)
+	data = append(data, eof...)
+
+	// Pad past the 56-byte minimum so the initial header check passes.
+	data = append(data, make([]byte, 16)...)
+
+	result := stripEMFPlus(data)
+	if len(result) != len(data) {
+		t.Errorf("expected the original data back, got %d of %d bytes", len(result), len(data))
+	}
+}
+
 // sofficeCanConvertImages checks whether LibreOffice Draw is available by
 // attempting a trivial SVG-to-PNG conversion.
 func sofficeCanConvertImages(t *testing.T) bool {

@@ -263,6 +263,21 @@ func TestFetchSpecZips(t *testing.T) {
 			t.Error("expected error for malformed spec ID")
 		}
 	})
+
+	t.Run("path traversal specID rejected", func(t *testing.T) {
+		// The normalized ID becomes a cache filename and a URL path segment,
+		// so traversal sequences must never pass validation.
+		for _, id := range []string{
+			"../../../../etc/passwd",
+			"23.501/../../secret",
+			"..\\..\\config",
+			"23.%",
+		} {
+			if _, err := FetchSpecZips(context.Background(), client, id, true); err == nil {
+				t.Errorf("expected error for spec ID %q", id)
+			}
+		}
+	})
 }
 
 // TestFetchSpecList_Race exercises FetchSpecList with a mock 3GPP directory
@@ -339,5 +354,50 @@ func TestFetchSpecList_Race(t *testing.T) {
 	expected := len(series) * specsPerSeries * zipsPerSpec
 	if len(entries) != expected {
 		t.Errorf("expected %d entries, got %d", expected, len(entries))
+	}
+}
+
+// TestFetchSpecList_PartialNotCached verifies that a spec list assembled
+// while some directory listings failed to fetch is not written to the cache:
+// every build within the TTL would otherwise silently miss those specs.
+func TestFetchSpecList_PartialNotCached(t *testing.T) {
+	cacheHome := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+
+	archivePath := "/ftp/Specs/archive/"
+	mux := http.NewServeMux()
+	mux.HandleFunc(archivePath, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != archivePath {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `<a href="23_series/">23_series</a>`+"\n")
+	})
+	mux.HandleFunc(archivePath+"23_series/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="23.001/">23.001</a>`+"\n"+`<a href="23.002/">23.002</a>`+"\n")
+	})
+	mux.HandleFunc(archivePath+"23_series/23.001/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="23001-a00.zip">23001-a00.zip</a>`+"\n")
+	})
+	// 23.002 fails: its listing is missing from the assembled list.
+	mux.HandleFunc(archivePath+"23_series/23.002/", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	entries, err := FetchSpecList(context.Background(), client, nil, true, 2)
+	if err != nil {
+		t.Fatalf("FetchSpecList: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry from the healthy spec, got %d", len(entries))
+	}
+
+	cachePath := filepath.Join(cacheHome, "3gpp-mcp", CacheKey("speclist"))
+	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
+		t.Errorf("partial spec list must not be cached; stat err = %v", err)
 	}
 }

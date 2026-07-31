@@ -434,6 +434,41 @@ func TestHandleSearch(t *testing.T) {
 	}
 }
 
+// TestHandleSearch_SnippetEscaped verifies that raw HTML inside section
+// content is escaped in search snippets (it would otherwise execute in the
+// viewer's origin), while the <mark> highlight delimiters survive.
+func TestHandleSearch_SnippetEscaped(t *testing.T) {
+	ts, d := setupTestServer(t)
+
+	if err := d.UpsertSection(db.Section{
+		SpecID:  "TS 23.501",
+		Version: "18.6.0",
+		Number:  "9",
+		Title:   "Injected",
+		Level:   1,
+		Content: `The xssprobe placeholder <img src=x onerror=alert(1)> and <SUPI> markers.`,
+	}); err != nil {
+		t.Fatalf("UpsertSection: %v", err)
+	}
+
+	resp, err := http.Get(ts.URL + "/search?q=xssprobe")
+	if err != nil {
+		t.Fatalf("GET /search error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if strings.Contains(body, "<img src=x") {
+		t.Error("raw HTML from section content must not reach the page unescaped")
+	}
+	if !strings.Contains(body, "&lt;img src=x onerror=alert(1)&gt;") {
+		t.Errorf("expected the injected tag to be escaped, got:\n%s", body)
+	}
+	if !strings.Contains(body, "<mark>xssprobe</mark>") {
+		t.Errorf("expected the match highlight to survive escaping, got:\n%s", body)
+	}
+}
+
 func TestHandleOpenAPIList(t *testing.T) {
 	ts, _ := setupTestServer(t)
 
@@ -736,4 +771,19 @@ func readBody(t *testing.T, resp *http.Response) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+// TestHandleIndex_HugePage verifies that an absurd page number cannot
+// overflow the offset computation; the server must still answer.
+func TestHandleIndex_HugePage(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	resp, err := http.Get(ts.URL + "/?page=400000000000000000")
+	if err != nil {
+		t.Fatalf("GET /?page=...: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
 }

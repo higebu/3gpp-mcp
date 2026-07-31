@@ -113,6 +113,11 @@ func TestReleaseRequest(t *testing.T) {
 		{"i60", 0, false},
 		{"", 0, false},
 		{"Rel-", 0, false},
+		// A bare three-digit string is an archive token (9.2.0), never a
+		// release selector.
+		{"920", 0, false},
+		{"100", 0, false},
+		{"Rel-920", 920, true},
 	}
 	for _, tt := range tests {
 		got, ok := releaseRequest(tt.in)

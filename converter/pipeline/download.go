@@ -19,12 +19,18 @@ import (
 
 const defaultMaxZipSizeMB = 512
 
+// sofficeTimeout bounds a single LibreOffice invocation; headless conversions
+// occasionally hang forever (e.g. a stuck first-run profile setup).
+const sofficeTimeout = 5 * time.Minute
+
 // maxZipSize is the upper limit for ZIP downloads. Configurable via THREEGPP_MAX_ZIP_SIZE_MB.
 var maxZipSize = int64(defaultMaxZipSizeMB) << 20
 
 func init() {
 	if v := os.Getenv("THREEGPP_MAX_ZIP_SIZE_MB"); v != "" {
-		if mb, err := strconv.ParseInt(v, 10, 64); err == nil && mb > 0 {
+		// The upper bound keeps the <<20 shift from overflowing int64 into a
+		// negative limit that would reject every download.
+		if mb, err := strconv.ParseInt(v, 10, 64); err == nil && mb > 0 && mb <= (1<<63-1)>>20 {
 			maxZipSize = mb << 20
 		}
 	}
@@ -181,14 +187,22 @@ func ConvertDocFiles(ctx context.Context, docDir, outputDir string) (int, error)
 			failed++
 			continue
 		}
-		cmd := exec.CommandContext(ctx, "libreoffice",
+		// LibreOffice occasionally hangs indefinitely in headless mode, so
+		// each invocation gets its own deadline. WaitDelay covers the case
+		// where a leftover child process keeps the output pipe open after
+		// the wrapper is killed, which would otherwise block CombinedOutput
+		// past the context cancellation.
+		convertCtx, cancel := context.WithTimeout(ctx, sofficeTimeout)
+		cmd := exec.CommandContext(convertCtx, "libreoffice",
 			"--headless",
 			"-env:UserInstallation=file://"+profileDir,
 			"--convert-to", "docx",
 			"--outdir", outputDir,
 			inPath,
 		)
+		cmd.WaitDelay = 10 * time.Second
 		out, err := cmd.CombinedOutput()
+		cancel()
 		_ = os.RemoveAll(profileDir)
 		if err != nil {
 			log.Printf("  libreoffice convert %s: %v\n%s", entry.Name(), err, string(out))
@@ -345,8 +359,10 @@ func extractFile(f *zip.File, outPath string) error {
 		return err
 	}
 	defer out.Close() // safety net; explicit Close below handles errors
-	// Limit extraction size to prevent decompression bombs.
-	n, err := io.Copy(out, io.LimitReader(rc, maxZipSize))
+	// Limit extraction size to prevent decompression bombs. Reading one byte
+	// past the limit distinguishes a file of exactly maxZipSize (valid) from
+	// a truncated larger one.
+	n, err := io.Copy(out, io.LimitReader(rc, maxZipSize+1))
 	if closeErr := out.Close(); closeErr != nil && err == nil {
 		err = closeErr
 	}
@@ -354,7 +370,7 @@ func extractFile(f *zip.File, outPath string) error {
 		_ = os.Remove(outPath)
 		return err
 	}
-	if n >= maxZipSize {
+	if n > maxZipSize {
 		_ = os.Remove(outPath)
 		return fmt.Errorf("extracted file %s exceeds maximum size of %d MB", f.Name, maxZipSize>>20)
 	}

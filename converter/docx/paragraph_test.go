@@ -1,6 +1,7 @@
 package docx
 
 import (
+	"encoding/xml"
 	"strings"
 	"testing"
 )
@@ -610,5 +611,32 @@ func TestParseShapeStyle(t *testing.T) {
 				t.Errorf("parseShapeStyle(%q) = (%d, %d), want (%d, %d)", tt.in, w, h, tt.w, tt.h)
 			}
 		})
+	}
+}
+
+// TestScanDrawingSubtree_DepthCap verifies that absurdly nested shape markup
+// cannot exhaust the stack; the decoder still ends up balanced.
+func TestScanDrawingSubtree_DepthCap(t *testing.T) {
+	depth := maxDrawingDepth + 50
+	var sb strings.Builder
+	sb.WriteString("<pict>")
+	for range depth {
+		sb.WriteString("<shape>")
+	}
+	sb.WriteString(`<imagedata id="rId9"/>`)
+	for range depth {
+		sb.WriteString("</shape>")
+	}
+	sb.WriteString("</pict>")
+
+	d := xml.NewDecoder(strings.NewReader(sb.String()))
+	tok, err := d.Token()
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := tok.(xml.StartElement)
+	_, _, _, _ = scanDrawingSubtree(d, start)
+	if _, err := d.Token(); err == nil {
+		t.Error("expected the decoder to be fully consumed")
 	}
 }

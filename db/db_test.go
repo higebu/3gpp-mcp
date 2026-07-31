@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -303,6 +304,26 @@ func TestGetSection(t *testing.T) {
 			t.Fatalf("expected 0 sections, got %d", len(sections))
 		}
 	})
+
+	t.Run("LIKE wildcards in section number are literal", func(t *testing.T) {
+		// "_" is SQLite's single-character wildcard; unescaped it would match
+		// section 5.1 and its subtree.
+		sections, err := d.GetSection("TS 23.501", "", "5_1", true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(sections) != 0 {
+			t.Fatalf("expected 0 sections for literal 5_1, got %d", len(sections))
+		}
+		// "%" unescaped would match every dotted section of the spec.
+		sections, err = d.GetSection("TS 23.501", "", "%", true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(sections) != 0 {
+			t.Fatalf("expected 0 sections for literal %%, got %d", len(sections))
+		}
+	})
 }
 
 func TestSanitizeFTS5Query(t *testing.T) {
@@ -343,6 +364,12 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"leading hyphen column filter with dotted value becomes NOT", "AMF -title:38.101", `AMF NOT title:"38.101"`},
 		{"leading hyphen after AND operator falls back", "AMF AND -excluded", `AMF AND "-excluded"`},
 		{"leading hyphen after OR operator falls back", "AMF OR -excluded", `AMF OR "-excluded"`},
+		{"embedded quote doubled", `Rel-18"`, `"Rel-18"""`},
+		{"unterminated phrase closed", `"core network`, `"core network"`},
+		{"parentheses quoted literally", "(38.331 OR SMF)", `"(38.331" OR "SMF)"`},
+		{"empty column filter quoted", "content:", `"content:"`},
+		{"balanced quoted column filter unchanged", `content:"band"`, `content:"band"`},
+		{"unterminated quoted column filter repaired", `content:"band`, `content:"band"`},
 	}
 
 	for _, tt := range tests {
@@ -388,6 +415,8 @@ func TestSanitizeFTS5Query_ExecutesWithoutError(t *testing.T) {
 		"AMF -title:band", "AMF -title:38.101",
 		"AMF AND -excluded", "AMF OR -excluded",
 		"-excluded", "-one-two",
+		`Rel-18"`, `"core network`, "(38.331 OR SMF)", "content:",
+		`AMF"`, `content:"band`,
 	}
 	for _, q := range queries {
 		sanitized := sanitizeFTS5Query(q)
@@ -843,6 +872,25 @@ func TestGetReferences(t *testing.T) {
 			t.Fatal("expected error for invalid direction")
 		}
 	})
+
+	t.Run("LIKE wildcards in section number are literal", func(t *testing.T) {
+		// Unescaped, "%" would match every section with outgoing refs.
+		refs, err := d.GetReferences("TS 24.229", "", "%", "outgoing", true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(refs) != 0 {
+			t.Fatalf("expected 0 refs for literal %%, got %d", len(refs))
+		}
+		refs, err = d.GetReferences("TS 33.203", "", "6_1", "incoming", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Only the general spec ref (target_section="") should match, not 6.1.
+		if len(refs) != 1 {
+			t.Fatalf("expected 1 ref for literal 6_1, got %d", len(refs))
+		}
+	})
 }
 
 func TestInsertSpecWithSections_References(t *testing.T) {
@@ -1085,6 +1133,60 @@ func TestOpen_ReadOnly(t *testing.T) {
 	}
 	if len(result.Specs) != 1 || result.Specs[0].ID != "TS 23.501" {
 		t.Errorf("expected TS 23.501, got %+v", result.Specs)
+	}
+
+	// A read-only handle must reject writes.
+	if err := ro.Exec("DELETE FROM specs"); err == nil {
+		t.Error("expected write through read-only handle to fail")
+	}
+}
+
+// TestOpen_PathWithURIReservedChars guards the file: URI construction: a
+// literal %, # (or ?) in the database path must not be reinterpreted as a
+// percent-escape, fragment or query string.
+func TestOpen_PathWithURIReservedChars(t *testing.T) {
+	// "%41" would percent-decode to "A" and "#" starts a URI fragment if the
+	// path were inserted unencoded. ("?" is excluded: the driver's bare-path
+	// DSN parsing in OpenReadWrite cannot create such a file to begin with.)
+	dbPath := filepath.Join(t.TempDir(), "spec %41 #1.db")
+
+	rw, err := OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadWrite: %v", err)
+	}
+	if err := rw.InitSchema(); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+	if err := rw.UpsertSpec(Spec{ID: "TS 23.501", Title: "Arch", Series: "23"}); err != nil {
+		t.Fatalf("UpsertSpec: %v", err)
+	}
+	rw.Close()
+
+	ro, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer ro.Close()
+
+	result, err := ro.ListSpecs("", "", 0, 0)
+	if err != nil {
+		t.Fatalf("ListSpecs: %v", err)
+	}
+	if len(result.Specs) != 1 {
+		t.Errorf("expected the seeded spec, got %+v", result.Specs)
+	}
+}
+
+// TestOpen_MissingFile guards against the driver silently creating an empty
+// database when the path is wrong: serve must fail at startup instead.
+func TestOpen_MissingFile(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "does-not-exist.db")
+	if d, err := Open(dbPath); err == nil {
+		d.Close()
+		t.Fatal("expected Open to fail for a nonexistent database")
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Errorf("Open must not create the database file, stat err = %v", err)
 	}
 }
 
@@ -1348,5 +1450,47 @@ func TestInsertSpecWithSections_MultiSectionRefs(t *testing.T) {
 		if !got[want] {
 			t.Errorf("missing multi-ref %s; got: %+v", want, refs)
 		}
+	}
+}
+
+// TestInsertSpec_DropsSupersededVersions covers the one-version-per-spec
+// invariant: importing a new version removes every other version's rows so
+// the FTS index (which has no version column) cannot double search hits.
+func TestInsertSpec_DropsSupersededVersions(t *testing.T) {
+	d := setupTestDB(t)
+
+	insert := func(version string) {
+		t.Helper()
+		err := d.InsertSpecWithSectionsAndImages(
+			Spec{ID: "TS 99.100", Version: version, Title: "Test", Series: "99"},
+			[]Section{{
+				SpecID: "TS 99.100", Version: version, Number: "1", Title: "Scope",
+				Level: 1, Content: "supersededprobe content referencing TS 23.501 clause 5.1",
+			}},
+			[]Image{{SpecID: "TS 99.100", Version: version, Name: "img.png", MIMEType: "image/png", Data: []byte{1}}},
+		)
+		if err != nil {
+			t.Fatalf("insert v%s: %v", version, err)
+		}
+	}
+
+	insert("17.0.0")
+	insert("18.0.0")
+
+	specs, err := d.ListSpecVersions("TS 99.100")
+	if err != nil {
+		t.Fatalf("ListSpecVersions: %v", err)
+	}
+	if len(specs) != 1 || specs[0].Version != "18.0.0" {
+		t.Fatalf("expected only v18.0.0 to remain, got %+v", specs)
+	}
+
+	// The superseded version's sections must be gone from search too.
+	results, err := d.Search("supersededprobe", nil, 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("expected exactly 1 search hit after supersede, got %d", len(results))
 	}
 }

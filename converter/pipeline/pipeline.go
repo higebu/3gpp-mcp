@@ -74,10 +74,11 @@ func (p *Pipeline) Run(ctx context.Context, specs []*SpecVersion) error {
 	total := len(specs)
 
 	for i, spec := range specs {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+		if ctx.Err() != nil {
+			// Stop launching, but fall through to wg.Wait: workers still
+			// running must finish (or notice the cancellation) so their
+			// temp directories are removed and DB writes complete.
+			break
 		}
 
 		spec := spec
@@ -133,6 +134,13 @@ func (p *Pipeline) Run(ctx context.Context, specs []*SpecVersion) error {
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// A run where nothing succeeded should not report success to cron/CI.
+	if len(specs) > 0 && stats["OK"] == 0 && stats["FAILED"] > 0 {
+		return fmt.Errorf("all %d specs failed", stats["FAILED"])
+	}
 	return nil
 }
 

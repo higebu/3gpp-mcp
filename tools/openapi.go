@@ -51,7 +51,7 @@ type GetOpenAPIInput struct {
 	Path     string `json:"path,omitempty" jsonschema:"Filter by API path (e.g. /nf-instances)"`
 	Schema   string `json:"schema,omitempty" jsonschema:"Filter by schema name (e.g. NFProfile)"`
 	Offset   int    `json:"offset,omitempty" jsonschema:"Start line number for pagination (0-based, default: 0)"`
-	MaxLines int    `json:"max_lines,omitempty" jsonschema:"Maximum lines to return (default: 200, 0 = all)"`
+	MaxLines int    `json:"max_lines,omitempty" jsonschema:"Maximum lines to return (default: 200)"`
 }
 
 var GetOpenAPITool = &mcp.Tool{
@@ -79,10 +79,9 @@ func HandleGetOpenAPI(d *db.DB) func(ctx context.Context, req *mcp.CallToolReque
 			if err != nil {
 				return errorResult(fmt.Sprintf("failed to filter openapi: %v", err)), nil, nil
 			}
-			return textResult(filtered), nil, nil
+			content = filtered
 		}
 
-		// No filter: paginate raw content
 		return paginateText(content, input.Offset, input.MaxLines, 0), nil, nil
 	}
 }

@@ -550,3 +550,50 @@ func TestSortCoverLast(t *testing.T) {
 	sortCoverLast(nil)
 	sortCoverLast([]string{})
 }
+
+// TestPipelineRun_CanceledContext verifies that a cancelled context stops the
+// run with the context error after waiting for workers.
+func TestPipelineRun_CanceledContext(t *testing.T) {
+	d := setupTestDB(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	p := &Pipeline{DB: d, Workers: 1, Timeout: time.Second}
+	specs := []*SpecVersion{{SpecID: "23.501", URL: "http://192.0.2.1/none.zip"}}
+	if err := p.Run(ctx, specs); err == nil {
+		t.Error("expected the context error, got nil")
+	}
+}
+
+// TestPipelineRun_AllFailed verifies that a run in which every spec failed
+// reports an error instead of success, so cron/CI builds cannot silently
+// produce an empty database.
+func TestPipelineRun_AllFailed(t *testing.T) {
+	// A valid ZIP whose only .docx cannot be parsed makes processOne fail
+	// quickly, without the download retry backoff.
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	f, err := zw.Create("bad.docx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("not a docx")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		_, _ = w.Write(buf.Bytes())
+	}))
+	defer ts.Close()
+
+	d := setupTestDB(t)
+	p := &Pipeline{DB: d, Client: ts.Client(), Workers: 1, Timeout: 10 * time.Second}
+	specs := []*SpecVersion{{SpecID: "23.501", Filename: "23501-i60.zip", URL: ts.URL + "/23501-i60.zip"}}
+	if err := p.Run(context.Background(), specs); err == nil {
+		t.Error("expected an error when every spec failed")
+	}
+}
