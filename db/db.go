@@ -1064,8 +1064,10 @@ func (d *DB) Search(query string, specIDs []string, limit, offset int) (*SearchR
 
 	// Column -1 lets FTS5 pick the best-matching column for the snippet, so a
 	// title-only hit shows the marked title instead of an unmarked content head.
+	// The rowid tie-breaker keeps equal-scoring rows in a stable order, so
+	// paging with OFFSET never duplicates or drops a hit.
 	sqlQuery := "SELECT sections_fts.spec_id, sections_fts.number, sections_fts.title, snippet(sections_fts, -1, '<mark>', '</mark>', '...', 32), s.version, COALESCE(p.release, '') " +
-		fromWhere + " ORDER BY " + bm25Weights + " LIMIT ? OFFSET ?"
+		fromWhere + " ORDER BY " + bm25Weights + ", sections_fts.rowid LIMIT ? OFFSET ?"
 	args := append(append([]any{}, filterArgs...), limit, offset)
 
 	rows, err := d.conn.Query(sqlQuery, args...)
