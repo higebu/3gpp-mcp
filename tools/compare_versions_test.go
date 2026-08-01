@@ -304,6 +304,38 @@ func TestCompareVersionsBothFetchesInProgress(t *testing.T) {
 	}
 }
 
+// TestDiffStructureRenumberedWithContentChange checks that a section that was
+// renumbered and edited shows up in both lists — the move must not hide the
+// edit.
+func TestDiffStructureRenumberedWithContentChange(t *testing.T) {
+	oldSecs := []db.Section{
+		{Number: "7", Title: "Overview", Content: "# 7 Overview\nOld body."},
+	}
+	newSecs := []db.Section{
+		{Number: "5.1.1", Title: "Overview", Content: "## 5.1.1 Overview\nNew body.\nWith an extra line."},
+	}
+
+	d := diffStructure(oldSecs, newSecs)
+	if len(d.renumbered) != 1 || d.renumbered[0].oldNumber != "7" || d.renumbered[0].newNumber != "5.1.1" {
+		t.Fatalf("renumbered = %+v, want 7 → 5.1.1", d.renumbered)
+	}
+	if len(d.contentChanged) != 1 || d.contentChanged[0].number != "5.1.1" {
+		t.Fatalf("contentChanged = %+v, want the renumbered section listed under its new number", d.contentChanged)
+	}
+	if c := d.contentChanged[0]; c.oldLines != 2 || c.newLines != 3 {
+		t.Errorf("contentChanged line counts = %d → %d, want 2 → 3", c.oldLines, c.newLines)
+	}
+
+	// A renumbered section with an unchanged body stays out of contentChanged.
+	sameBody := []db.Section{
+		{Number: "5.1.1", Title: "Overview", Content: "## 5.1.1 Overview\nOld body."},
+	}
+	d = diffStructure(oldSecs, sameBody)
+	if len(d.renumbered) != 1 || len(d.contentChanged) != 0 {
+		t.Errorf("renumbered/contentChanged = %d/%d, want 1/0 for an unchanged body", len(d.renumbered), len(d.contentChanged))
+	}
+}
+
 func TestDiffStructureRenumberRequiresUniqueTitle(t *testing.T) {
 	oldSecs := []db.Section{
 		{Number: "6", Title: "Overview", Content: "# 6 Overview\nA."},

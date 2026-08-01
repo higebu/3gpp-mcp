@@ -333,6 +333,11 @@ func (d *structDiff) promoteRenumbered() {
 			n := addedByTitle[t]
 			d.renumbered = append(d.renumbered, renumbering{o.Number, n.Number, n.Title})
 			moved[n.Number] = true
+			// A renumbered section may have been edited too; that must not
+			// hide behind the move.
+			if stripHeadingLine(o.Content) != stripHeadingLine(n.Content) {
+				d.contentChanged = append(d.contentChanged, contentChange{n.Number, n.Title, lineCount(o.Content), lineCount(n.Content)})
+			}
 			continue
 		}
 		removed = append(removed, o)
