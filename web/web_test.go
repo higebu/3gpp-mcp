@@ -1214,3 +1214,125 @@ func TestHandleVersions_UnknownSpec(t *testing.T) {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
 	}
 }
+
+// TestHandleCompare_Form shows the version-picker form when no old version is
+// given.
+func TestHandleCompare_Form(t *testing.T) {
+	ts, _ := setupVersionedServer(t, cannedFetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare")
+	if err != nil {
+		t.Fatalf("GET compare form: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, `name="old"`) {
+		t.Errorf("expected the compare form, got:\n%s", body)
+	}
+}
+
+// TestHandleCompare_Structure renders the structural summary between an
+// archived version and the database version, linking changed sections to
+// their text diff.
+func TestHandleCompare_Structure(t *testing.T) {
+	ts, _ := setupVersionedServer(t, cannedFetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=19.5.0")
+	if err != nil {
+		t.Fatalf("GET compare: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "v19.5.0 (Rel-19, archived)") {
+		t.Errorf("expected the old-side label, got:\n%s", body)
+	}
+	if !strings.Contains(body, "Content changed") {
+		t.Errorf("expected a content-changed category, got:\n%s", body)
+	}
+	if !strings.Contains(body, "section=5.1") {
+		t.Errorf("expected changed sections to link to their diff, got:\n%s", body)
+	}
+	if !strings.Contains(body, "Added in") {
+		t.Errorf("expected database-only sections to be listed as added, got:\n%s", body)
+	}
+}
+
+// TestHandleCompare_SectionDiff renders a colored unified diff of one section.
+func TestHandleCompare_SectionDiff(t *testing.T) {
+	ts, _ := setupVersionedServer(t, cannedFetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=19.5.0&section=5.1")
+	if err != nil {
+		t.Fatalf("GET compare section: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "diff-del") || !strings.Contains(body, "diff-add") {
+		t.Errorf("expected added and removed diff lines, got:\n%s", body)
+	}
+	if !strings.Contains(body, "diff-hunk") {
+		t.Errorf("expected a hunk header line, got:\n%s", body)
+	}
+	if !strings.Contains(body, "Archived text") {
+		t.Errorf("expected the old side's text in the diff, got:\n%s", body)
+	}
+	if !strings.Contains(body, "Structural summary") {
+		t.Errorf("expected a back link to the structural summary, got:\n%s", body)
+	}
+}
+
+// TestHandleCompare_SameVersion answers with a notice, not an error page.
+func TestHandleCompare_SameVersion(t *testing.T) {
+	ts, _ := setupVersionedServer(t, cannedFetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=18.6.0")
+	if err != nil {
+		t.Fatalf("GET compare same version: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "nothing to compare") {
+		t.Errorf("expected a same-version notice, got:\n%s", body)
+	}
+}
+
+// TestHandleCompare_FetchInProgress answers 202 with the auto-refreshing page
+// while the old side downloads.
+func TestHandleCompare_FetchInProgress(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	ts, src := setupVersionedServer(t, func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		<-release
+		return cannedFetcher(ctx, sv)
+	}, nil)
+	src.Budget = 20 * time.Millisecond
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=19.5.0")
+	if err != nil {
+		t.Fatalf("GET compare: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	if body := readBody(t, resp); !strings.Contains(body, `http-equiv="refresh"`) {
+		t.Errorf("expected an auto-refreshing page, got:\n%s", body)
+	}
+}

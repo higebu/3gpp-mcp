@@ -8,7 +8,7 @@
             {{if .Spec.Version}}
             <p class="toc-version">v{{.Spec.Version}}{{with releaseLabel .Spec.Release}} ({{.}}){{end}}{{if .Archived}} <span class="badge badge-cached">archived</span>{{end}}</p>
             {{end}}
-            <p class="toc-links"><a href="{{specURL .Spec.ID}}/versions">Versions</a></p>
+            <p class="toc-links"><a href="{{specURL .Spec.ID}}/versions">Versions</a> &middot; <a href="{{specURL .Spec.ID}}/compare{{if .Version}}?old={{queryEscape .Version}}{{end}}">Compare</a></p>
         </div>
         <nav class="toc-nav">
             <ul class="toc-list">

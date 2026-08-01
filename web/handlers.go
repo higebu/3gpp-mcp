@@ -155,6 +155,16 @@ func (h *handler) initTemplates() {
 			return s
 		},
 		"queryEscape": url.QueryEscape,
+		"compareURL": func(specID, oldV, newV, section string) string {
+			u := "/specs/" + url.PathEscape(specID) + "/compare?old=" + url.QueryEscape(oldV)
+			if newV != "" {
+				u += "&new=" + url.QueryEscape(newV)
+			}
+			if section != "" {
+				u += "&section=" + url.QueryEscape(section)
+			}
+			return u
+		},
 		"isActive": func(current, number string) bool {
 			return current == number
 		},

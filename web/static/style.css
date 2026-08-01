@@ -753,6 +753,83 @@ mark {
     font-size: 0.85rem;
 }
 
+/* === Compare page === */
+.compare-page {
+    max-width: 1000px;
+    margin: 0 auto;
+}
+
+.compare-page h2 {
+    font-size: 1.05rem;
+    margin: 1.25rem 0 0.5rem;
+}
+
+.compare-header {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+
+.compare-back {
+    font-size: 0.9rem;
+    margin-bottom: 0.75rem;
+}
+
+.compare-counts {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+}
+
+.compare-notice {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+}
+
+.compare-list {
+    list-style: none;
+    padding-left: 0;
+}
+
+.compare-list li {
+    padding: 3px 0;
+}
+
+.compare-lines {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
+.diff {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow-x: auto;
+    margin-bottom: 1.5rem;
+}
+
+.diff-line {
+    white-space: pre-wrap;
+    padding: 0 0.5rem;
+}
+
+.diff-add {
+    background: rgba(46, 160, 67, 0.18);
+}
+
+.diff-del {
+    background: rgba(248, 81, 73, 0.18);
+}
+
+.diff-hunk {
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+}
+
 /* === Fetching (version download in progress) === */
 .fetching-page {
     max-width: 600px;

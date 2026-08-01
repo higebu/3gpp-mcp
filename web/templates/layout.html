@@ -37,6 +37,8 @@
             {{template "openapi_list.html" .Data}}
         {{else if eq .Page "openapi"}}
             {{template "openapi.html" .Data}}
+        {{else if eq .Page "compare"}}
+            {{template "compare.html" .Data}}
         {{else if eq .Page "versions"}}
             {{template "versions.html" .Data}}
         {{else if eq .Page "fetching"}}
