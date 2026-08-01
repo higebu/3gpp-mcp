@@ -53,7 +53,7 @@ func HandleSearch(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, 
 			specIDs = []string{input.SpecID}
 		}
 
-		results, err := d.Search(input.Query, specIDs, limit)
+		results, err := d.Search(input.Query, specIDs, limit, 0)
 		if err != nil {
 			return errorResult(fmt.Sprintf("search failed: %v", err)), nil, nil
 		}

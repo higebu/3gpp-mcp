@@ -172,6 +172,14 @@ type ListSpecsResult struct {
 	Offset     int    `json:"offset"`
 }
 
+// SearchResults holds one page of search hits plus the total match count.
+type SearchResults struct {
+	Results    []SearchResult `json:"results"`
+	TotalCount int            `json:"total_count"`
+	Limit      int            `json:"limit"`
+	Offset     int            `json:"offset"`
+}
+
 // SpecTablesSchema defines the tables that hold a specification's text, keyed
 // by (spec_id, version). The version cache reuses it verbatim; the main
 // database adds full-text search and the remaining tables on top.
@@ -1002,12 +1010,15 @@ func sanitizeFTS5Query(query string) string {
 	return strings.Join(result, " ")
 }
 
-func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, error) {
+func (d *DB) Search(query string, specIDs []string, limit, offset int) (*SearchResults, error) {
 	if limit <= 0 {
 		limit = DefaultSearchLimit
 	}
 	if limit > MaxSearchLimit {
 		limit = MaxSearchLimit
+	}
+	if offset < 0 {
+		offset = 0
 	}
 
 	query = sanitizeFTS5Query(query)
@@ -1015,9 +1026,8 @@ func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, 
 	// sections_fts has no version column, so the version comes from the backing
 	// sections row (sections_fts.rowid is sections.id). Joining specs on the
 	// pair keeps one row per hit even when a database holds several versions.
-	sqlQuery := "SELECT sections_fts.spec_id, sections_fts.number, sections_fts.title, snippet(sections_fts, 3, '<mark>', '</mark>', '...', 32), s.version, COALESCE(p.release, '') " +
-		"FROM sections_fts JOIN sections s ON s.id = sections_fts.rowid LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version WHERE sections_fts MATCH ?"
-	args := []any{query}
+	fromWhere := "FROM sections_fts JOIN sections s ON s.id = sections_fts.rowid LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version WHERE sections_fts MATCH ?"
+	filterArgs := []any{query}
 
 	if len(specIDs) > 0 {
 		// Each spec ID also matches its split multi-file parts (e.g. "TS 38.101"
@@ -1026,12 +1036,21 @@ func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, 
 		conds := make([]string, len(specIDs))
 		for i, id := range specIDs {
 			conds[i] = "sections_fts.spec_id = ? OR sections_fts.spec_id LIKE ? ESCAPE '\\'"
-			args = append(args, id, EscapeLikePattern(id)+"-%")
+			filterArgs = append(filterArgs, id, EscapeLikePattern(id)+"-%")
 		}
-		sqlQuery += " AND (" + strings.Join(conds, " OR ") + ")"
+		fromWhere += " AND (" + strings.Join(conds, " OR ") + ")"
 	}
-	sqlQuery += " ORDER BY sections_fts.rank LIMIT ?"
-	args = append(args, limit)
+
+	// A window count(*) OVER () cannot report the total when offset lands past
+	// the last row, so the total comes from its own query sharing the filter.
+	var totalCount int
+	if err := d.conn.QueryRow("SELECT count(*) "+fromWhere, filterArgs...).Scan(&totalCount); err != nil {
+		return nil, fmt.Errorf("invalid search query %q: %w", query, err)
+	}
+
+	sqlQuery := "SELECT sections_fts.spec_id, sections_fts.number, sections_fts.title, snippet(sections_fts, 3, '<mark>', '</mark>', '...', 32), s.version, COALESCE(p.release, '') " +
+		fromWhere + " ORDER BY sections_fts.rank LIMIT ? OFFSET ?"
+	args := append(append([]any{}, filterArgs...), limit, offset)
 
 	rows, err := d.conn.Query(sqlQuery, args...)
 	if err != nil {
@@ -1039,7 +1058,7 @@ func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, 
 	}
 	defer rows.Close()
 
-	var results []SearchResult
+	results := []SearchResult{}
 	for rows.Next() {
 		var r SearchResult
 		if err := rows.Scan(&r.SpecID, &r.Number, &r.Title, &r.Snippet, &r.Version, &r.Release); err != nil {
@@ -1050,7 +1069,7 @@ func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("search: iterate: %w", err)
 	}
-	return results, nil
+	return &SearchResults{Results: results, TotalCount: totalCount, Limit: limit, Offset: offset}, nil
 }
 
 // Direction constants for GetReferences.

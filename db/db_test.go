@@ -433,20 +433,27 @@ func TestSearch(t *testing.T) {
 	d := setupTestDB(t)
 
 	t.Run("basic search", func(t *testing.T) {
-		results, err := d.Search("architecture", nil, 10)
+		page, err := d.Search("architecture", nil, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(results) == 0 {
+		if len(page.Results) == 0 {
 			t.Fatal("expected at least 1 result")
+		}
+		if page.TotalCount != len(page.Results) {
+			t.Errorf("expected total_count %d, got %d", len(page.Results), page.TotalCount)
+		}
+		if page.Limit != 10 || page.Offset != 0 {
+			t.Errorf("expected limit 10 / offset 0, got %d / %d", page.Limit, page.Offset)
 		}
 	})
 
 	t.Run("search with single spec filter", func(t *testing.T) {
-		results, err := d.Search("Scope", []string{"TS 29.510"}, 10)
+		page, err := d.Search("Scope", []string{"TS 29.510"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		results := page.Results
 		if len(results) != 1 {
 			t.Fatalf("expected 1 result, got %d", len(results))
 		}
@@ -459,22 +466,82 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("search with multiple spec filter", func(t *testing.T) {
-		results, err := d.Search("Scope", []string{"TS 23.501", "TS 29.510"}, 10)
+		page, err := d.Search("Scope", []string{"TS 23.501", "TS 29.510"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(results) != 2 {
-			t.Fatalf("expected 2 results, got %d", len(results))
+		if len(page.Results) != 2 {
+			t.Fatalf("expected 2 results, got %d", len(page.Results))
 		}
 	})
 
 	t.Run("no results", func(t *testing.T) {
-		results, err := d.Search("xyznonexistent", nil, 10)
+		page, err := d.Search("xyznonexistent", nil, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(results) != 0 {
-			t.Fatalf("expected 0 results, got %d", len(results))
+		if len(page.Results) != 0 {
+			t.Fatalf("expected 0 results, got %d", len(page.Results))
+		}
+		if page.TotalCount != 0 {
+			t.Errorf("expected total_count 0, got %d", page.TotalCount)
+		}
+	})
+
+	t.Run("pagination", func(t *testing.T) {
+		full, err := d.Search("Scope", []string{"TS 23.501", "TS 29.510"}, 10, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if full.TotalCount != 2 {
+			t.Fatalf("expected total_count 2, got %d", full.TotalCount)
+		}
+
+		first, err := d.Search("Scope", []string{"TS 23.501", "TS 29.510"}, 1, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		second, err := d.Search("Scope", []string{"TS 23.501", "TS 29.510"}, 1, 1)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(first.Results) != 1 || len(second.Results) != 1 {
+			t.Fatalf("expected 1 result per page, got %d and %d", len(first.Results), len(second.Results))
+		}
+		if first.TotalCount != 2 || second.TotalCount != 2 {
+			t.Errorf("expected total_count 2 on both pages, got %d and %d", first.TotalCount, second.TotalCount)
+		}
+		if first.Results[0].SpecID == second.Results[0].SpecID {
+			t.Errorf("expected different specs on each page, got %q twice", first.Results[0].SpecID)
+		}
+		if second.Offset != 1 {
+			t.Errorf("expected offset 1 echoed back, got %d", second.Offset)
+		}
+	})
+
+	t.Run("offset beyond total", func(t *testing.T) {
+		page, err := d.Search("Scope", []string{"TS 29.510"}, 10, 100)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(page.Results) != 0 {
+			t.Fatalf("expected 0 results, got %d", len(page.Results))
+		}
+		if page.TotalCount != 1 {
+			t.Errorf("expected total_count 1, got %d", page.TotalCount)
+		}
+	})
+
+	t.Run("negative offset treated as zero", func(t *testing.T) {
+		page, err := d.Search("Scope", []string{"TS 29.510"}, 10, -5)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(page.Results) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(page.Results))
+		}
+		if page.Offset != 0 {
+			t.Errorf("expected offset normalized to 0, got %d", page.Offset)
 		}
 	})
 
@@ -487,10 +554,11 @@ This document covers IMS-AKA and sec-agree mechanisms.');`)
 		if err != nil {
 			t.Fatalf("failed to insert test data: %v", err)
 		}
-		results, err := d.Search("IMS-AKA", nil, 10)
+		page, err := d.Search("IMS-AKA", nil, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error for hyphenated search: %v", err)
 		}
+		results := page.Results
 		if len(results) == 0 {
 			t.Error("expected at least 1 result for IMS-AKA")
 		}
@@ -510,34 +578,34 @@ The guardband requirements are specified here.');`)
 			t.Fatalf("failed to insert test data: %v", err)
 		}
 
-		results, err := d.Search("guardband", []string{"TS 38.101"}, 10)
+		page, err := d.Search("guardband", []string{"TS 38.101"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(results) != 1 {
-			t.Fatalf("expected 1 result, got %d", len(results))
+		if len(page.Results) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(page.Results))
 		}
-		if results[0].SpecID != "TS 38.101-1" {
-			t.Errorf("expected spec_id 'TS 38.101-1', got %q", results[0].SpecID)
+		if page.Results[0].SpecID != "TS 38.101-1" {
+			t.Errorf("expected spec_id 'TS 38.101-1', got %q", page.Results[0].SpecID)
 		}
 
 		// An unrelated spec sharing the family's numeric prefix must not match.
-		results, err = d.Search("guardband", []string{"TS 38.10"}, 10)
+		page, err = d.Search("guardband", []string{"TS 38.10"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(results) != 0 {
-			t.Fatalf("expected 0 results for unrelated prefix, got %d", len(results))
+		if len(page.Results) != 0 {
+			t.Fatalf("expected 0 results for unrelated prefix, got %d", len(page.Results))
 		}
 
 		// "_" would otherwise act as a single-character LIKE wildcard and
 		// match "TS 38.101-1" via "TS 38_101".
-		results, err = d.Search("guardband", []string{"TS 38_101"}, 10)
+		page, err = d.Search("guardband", []string{"TS 38_101"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(results) != 0 {
-			t.Fatalf("expected 0 results for literal underscore query, got %d", len(results))
+		if len(page.Results) != 0 {
+			t.Fatalf("expected 0 results for literal underscore query, got %d", len(page.Results))
 		}
 	})
 }
@@ -1304,11 +1372,11 @@ func TestUpsertSection_ReplacesContent(t *testing.T) {
 	}
 
 	// FTS should pick up the new token.
-	results, err := d.Search("zucchini", []string{"TS 23.501"}, 10)
+	page, err := d.Search("zucchini", []string{"TS 23.501"}, 10, 0)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if len(results) == 0 {
+	if len(page.Results) == 0 {
 		t.Error("expected FTS hit for zucchini after upsert")
 	}
 }
@@ -1486,11 +1554,11 @@ func TestInsertSpec_DropsSupersededVersions(t *testing.T) {
 	}
 
 	// The superseded version's sections must be gone from search too.
-	results, err := d.Search("supersededprobe", nil, 10)
+	page, err := d.Search("supersededprobe", nil, 10, 0)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if len(results) != 1 {
-		t.Errorf("expected exactly 1 search hit after supersede, got %d", len(results))
+	if len(page.Results) != 1 {
+		t.Errorf("expected exactly 1 search hit after supersede, got %d", len(page.Results))
 	}
 }
