@@ -235,12 +235,18 @@ CREATE INDEX IF NOT EXISTS idx_images_spec ON images(spec_id, version);
 // A build imports one version per spec, so the FTS index covers exactly that
 // version. Versions fetched on demand are stored in a separate cache database
 // that has no FTS tables, keeping cross-release rows out of search results.
+//
+// Porter stemming folds inflected forms together (handover matches
+// handovers); spec_id and number tokenize to unstemmed digit runs, which
+// porter leaves untouched. The DDL is IF NOT EXISTS, so the tokenizer applies
+// to newly created databases only.
 const Schema = SpecTablesSchema + ImagesTableSchema + `
 
 CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
     spec_id, number, title, content,
     content=sections,
-    content_rowid=id
+    content_rowid=id,
+    tokenize='porter unicode61'
 );
 
 CREATE TRIGGER IF NOT EXISTS sections_ai AFTER INSERT ON sections BEGIN

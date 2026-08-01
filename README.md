@@ -248,7 +248,7 @@ database, so:
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `search` | Full-text search across all specs | `query` (required), `spec_ids` (optional), `limit` |
+| `search` | Full-text search across all specs | `query` (required), `spec_ids` (optional), `limit`, `offset` |
 
 The `search` tool supports [SQLite FTS5](https://www.sqlite.org/fts5.html) query syntax:
 
@@ -257,6 +257,14 @@ The `search` tool supports [SQLite FTS5](https://www.sqlite.org/fts5.html) query
 - Prefix matching: `handov*`
 - Column filter: `title:authentication`, `content:handover`
 - Proximity: `NEAR(AMF UE, 5)`
+
+Results come as `{results, total_count, limit, offset}`; use `limit` (default
+10, max 200) and `offset` to page through everything beyond the first page.
+Section-title matches rank above body matches, and the snippet is taken from
+whichever column matched best. The index uses porter stemming, so inflected
+English forms match each other (`handover` finds `handovers`). The tokenizer
+applies when the database is created, so a database built before this change
+keeps unstemmed search until rebuilt.
 
 ### Cross-references
 

@@ -661,6 +661,28 @@ Body text without the probe term.');`); err != nil {
 	}
 }
 
+func TestSearchStemming(t *testing.T) {
+	d := setupTestDB(t)
+
+	if err := d.ExecScript(`INSERT INTO specs (id, version, title) VALUES ('TS 90.003', '1.0.0', 'Stemming probe');
+INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES
+    ('TS 90.003', '1.0.0', '1', 'Mobility', 1, NULL, '# 1 Mobility
+Handovers between cells are described in this clause.');`); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+
+	// Porter stemming folds inflected forms both ways.
+	for _, q := range []string{"handover", "handovers"} {
+		page, err := d.Search(q, []string{"TS 90.003"}, 10, 0)
+		if err != nil {
+			t.Fatalf("unexpected error for %q: %v", q, err)
+		}
+		if len(page.Results) != 1 {
+			t.Errorf("expected 1 result for %q, got %d", q, len(page.Results))
+		}
+	}
+}
+
 func TestFindSpecIDsByFamily(t *testing.T) {
 	d := setupTestDB(t)
 

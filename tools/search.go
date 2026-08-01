@@ -31,6 +31,10 @@ Query syntax:
 - Hyphenated or dotted terms (e.g. IMS-AKA, sec-agree, 38.101) are auto-quoted to avoid FTS5 syntax errors.
 - After a positive term, "-term" excludes that term (e.g. AMF -SMF), same as NOT. An exclusion cannot begin a query or immediately follow AND/OR.
 
+Stemming:
+- The index uses porter stemming: inflected English forms match each other (handover finds handovers).
+- Prefix and phrase queries operate on stemmed forms, so they can match a bit more broadly than the exact surface text.
+
 Pagination:
 - Results come as {results, total_count, limit, offset}; total_count is the full match count.
 - Use limit (default 10, max 200) and offset to page through matches beyond the first page.
