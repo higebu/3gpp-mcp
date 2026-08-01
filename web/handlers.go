@@ -290,11 +290,11 @@ func (h *handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		if specID != "" {
 			specIDs = []string{specID}
 		}
-		results, err := h.db.Search(query, specIDs, 50)
+		page, err := h.db.Search(query, specIDs, 50, 0)
 		if err != nil {
 			log.Printf("Search error: %v", err)
 		} else {
-			data.Results = results
+			data.Results = page.Results
 		}
 	}
 

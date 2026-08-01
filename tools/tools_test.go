@@ -334,6 +334,36 @@ func TestHandleSearch(t *testing.T) {
 		if !strings.Contains(text, `"version": "18.6.0"`) || !strings.Contains(text, `"release": "18"`) {
 			t.Errorf("expected version/release in search results, got: %s", text)
 		}
+		if !strings.Contains(text, `"results"`) || !strings.Contains(text, `"total_count"`) {
+			t.Errorf("expected pagination envelope in search results, got: %s", text)
+		}
+	})
+
+	t.Run("offset pages through results", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, SearchInput{Query: "Scope", Limit: 1, Offset: 1})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("unexpected error result: %s", getTextContent(result))
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, `"offset": 1`) {
+			t.Errorf("expected offset echoed back, got: %s", text)
+		}
+	})
+
+	t.Run("negative offset treated as zero", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, SearchInput{Query: "Scope", Offset: -3})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("unexpected error result: %s", getTextContent(result))
+		}
+		if !strings.Contains(getTextContent(result), `"offset": 0`) {
+			t.Errorf("expected offset normalized to 0, got: %s", getTextContent(result))
+		}
 	})
 }
 
