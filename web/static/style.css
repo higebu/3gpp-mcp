@@ -16,6 +16,7 @@
     --sidebar-bg: #f6f8fa;
     --sidebar-active: #ddf4ff;
     --shadow: rgba(31, 35, 40, 0.12);
+    --danger: #b42318;
     --radius: 6px;
     --transition: 0.2s ease;
 }
@@ -37,6 +38,7 @@
     --sidebar-bg: #161b22;
     --sidebar-active: #1f3044;
     --shadow: rgba(0, 0, 0, 0.3);
+    --danger: #f85149;
 }
 
 /* === Reset & Base === */
@@ -670,10 +672,27 @@ mark {
     margin-left: 0.5rem;
 }
 
+.result-version {
+    color: var(--text-secondary);
+    font-weight: 400;
+    font-size: 0.8rem;
+    margin-left: 0.5rem;
+    white-space: nowrap;
+}
+
 .result-snippet {
     font-size: 0.9rem;
     color: var(--text-secondary);
     line-height: 1.5;
+}
+
+.search-error {
+    color: var(--danger);
+    background: rgba(248, 81, 73, 0.12);
+    border: 1px solid rgba(248, 81, 73, 0.4);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
 }
 
 .no-results {

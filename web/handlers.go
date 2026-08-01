@@ -61,9 +61,15 @@ type sectionRendered struct {
 }
 
 type searchData struct {
-	Query   string
-	Results []db.SearchResult
-	SpecID  string
+	Query      string
+	Results    []db.SearchResult
+	SpecID     string
+	TotalCount int
+	Page       int
+	TotalPages int
+	HasPrev    bool
+	HasNext    bool
+	Error      string
 }
 
 type openAPIListData struct {
@@ -117,6 +123,7 @@ func (h *handler) initTemplates() {
 			}
 			return s
 		},
+		"queryEscape": url.QueryEscape,
 		"isActive": func(current, number string) bool {
 			return current == number
 		},
@@ -279,10 +286,23 @@ func (h *handler) handleImage(w http.ResponseWriter, r *http.Request) {
 func (h *handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	specID := r.URL.Query().Get("spec_id")
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	// Same bound as handleIndex: keeps the offset multiplication from
+	// overflowing while staying far beyond any real page count.
+	const maxPage = 1_000_000
+	if page > maxPage {
+		page = maxPage
+	}
+	limit := 50
+	offset := (page - 1) * limit
 
 	data := searchData{
 		Query:  query,
 		SpecID: specID,
+		Page:   page,
 	}
 
 	if query != "" {
@@ -290,11 +310,20 @@ func (h *handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		if specID != "" {
 			specIDs = []string{specID}
 		}
-		page, err := h.db.Search(query, specIDs, 50, 0)
+		result, err := h.db.Search(query, specIDs, limit, offset)
 		if err != nil {
 			log.Printf("Search error: %v", err)
+			data.Error = "Search failed. Check the query syntax and try again."
 		} else {
-			data.Results = page.Results
+			totalPages := (result.TotalCount + limit - 1) / limit
+			if totalPages < 1 {
+				totalPages = 1
+			}
+			data.Results = result.Results
+			data.TotalCount = result.TotalCount
+			data.TotalPages = totalPages
+			data.HasPrev = page > 1
+			data.HasNext = page < totalPages
 		}
 	}
 

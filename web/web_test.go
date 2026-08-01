@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -466,6 +467,106 @@ func TestHandleSearch_SnippetEscaped(t *testing.T) {
 	}
 	if !strings.Contains(body, "<mark>xssprobe</mark>") {
 		t.Errorf("expected the match highlight to survive escaping, got:\n%s", body)
+	}
+}
+
+// TestHandleSearch_TotalCountAndVersion verifies the results header shows the
+// total match count (not the page size) and each hit names its version.
+func TestHandleSearch_TotalCountAndVersion(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	resp, err := http.Get(ts.URL + "/search?q=architecture")
+	if err != nil {
+		t.Fatalf("GET /search error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if !strings.Contains(body, `results-count`) {
+		t.Errorf("expected a results count line, got:\n%s", body)
+	}
+	if !strings.Contains(body, "v18.6.0") {
+		t.Errorf("expected hits to name their version, got:\n%s", body)
+	}
+	if !strings.Contains(body, "Rel-18") {
+		t.Errorf("expected hits to name their release, got:\n%s", body)
+	}
+}
+
+// TestHandleSearch_Pagination seeds more matches than one page holds and
+// walks to the second page.
+func TestHandleSearch_Pagination(t *testing.T) {
+	ts, d := setupTestServer(t)
+
+	for i := 0; i < 55; i++ {
+		if err := d.UpsertSection(db.Section{
+			SpecID:  "TS 23.501",
+			Version: "18.6.0",
+			Number:  fmt.Sprintf("9.%d", i),
+			Title:   fmt.Sprintf("Filler %d", i),
+			Level:   2,
+			Content: "pagitest content",
+		}); err != nil {
+			t.Fatalf("UpsertSection: %v", err)
+		}
+	}
+
+	resp, err := http.Get(ts.URL + "/search?q=pagitest")
+	if err != nil {
+		t.Fatalf("GET /search error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if !strings.Contains(body, "55 results") {
+		t.Errorf("expected the total count 55, got:\n%s", body)
+	}
+	if !strings.Contains(body, "Page 1 of 2") {
+		t.Errorf("expected pagination info, got:\n%s", body)
+	}
+	if !strings.Contains(body, "/search?q=pagitest&page=2") {
+		t.Errorf("expected a link to page 2, got:\n%s", body)
+	}
+
+	resp2, err := http.Get(ts.URL + "/search?q=pagitest&page=2")
+	if err != nil {
+		t.Fatalf("GET /search page 2 error: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	body2 := readBody(t, resp2)
+	if !strings.Contains(body2, "Page 2 of 2") {
+		t.Errorf("expected page 2 info, got:\n%s", body2)
+	}
+	if strings.Count(body2, `class="search-result"`) != 5 {
+		t.Errorf("expected the 5 remaining hits on page 2, got:\n%s", body2)
+	}
+}
+
+// TestHandleSearch_ErrorBanner verifies a failing search renders an error
+// banner instead of silently claiming zero results.
+func TestHandleSearch_ErrorBanner(t *testing.T) {
+	ts, d := setupTestServer(t)
+
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	resp, err := http.Get(ts.URL + "/search?q=architecture")
+	if err != nil {
+		t.Fatalf("GET /search error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "Search failed") {
+		t.Errorf("expected an error banner, got:\n%s", body)
+	}
+	if strings.Contains(body, "0 results") {
+		t.Errorf("a failed search must not claim zero results, got:\n%s", body)
 	}
 }
 
