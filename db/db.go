@@ -242,11 +242,16 @@ CREATE INDEX IF NOT EXISTS idx_images_spec ON images(spec_id, version);
 // to newly created databases only.
 const Schema = SpecTablesSchema + ImagesTableSchema + `
 
+-- Porter wraps unicode61 and passes the remaining arguments through to it.
+-- tokenchars '-' keeps hyphenated ASN.1 identifiers (RRCSetup-IEs) as single
+-- tokens so quoted and prefix queries match them exactly. '.' is deliberately
+-- not included: it would glue sentence-final periods to the preceding word,
+-- and dotted spec numbers already match via phrase quoting.
 CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
     spec_id, number, title, content,
     content=sections,
     content_rowid=id,
-    tokenize='porter unicode61'
+    tokenize="porter unicode61 tokenchars '-'"
 );
 
 CREATE TRIGGER IF NOT EXISTS sections_ai AFTER INSERT ON sections BEGIN

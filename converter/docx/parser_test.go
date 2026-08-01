@@ -512,14 +512,14 @@ func TestParseSections_CodeBlockGrouping(t *testing.T) {
 		}},
 	}
 	styleMap := map[string]string{"Heading1": "Heading 1"}
-	sections := parseSections(elements, styleMap, nil, nil)
+	sections := parseSections(elements, styleMap, nil, nil, nil)
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
 	sec := sections[0]
 	var found bool
 	for _, c := range sec.Content {
-		if strings.HasPrefix(c, "```yaml\n") && strings.HasSuffix(c, "\n```") &&
+		if strings.HasPrefix(c, "```\n") && strings.HasSuffix(c, "\n```") &&
 			strings.Contains(c, "openapi: 3.0.0") &&
 			strings.Contains(c, "info:") &&
 			strings.Contains(c, "  version: \"1.0.0\"") {
@@ -528,7 +528,7 @@ func TestParseSections_CodeBlockGrouping(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("expected consecutive code paragraphs to be wrapped in a single fenced yaml block; got content:\n%v", sec.Content)
+		t.Errorf("expected consecutive code paragraphs to be wrapped in a single fenced code block; got content:\n%v", sec.Content)
 	}
 	// Sanity: "After code." must appear as a regular paragraph after the code block.
 	lastIdx := len(sec.Content) - 1
@@ -551,7 +551,7 @@ func TestParseSections_CodeBlockAtEnd(t *testing.T) {
 		}},
 	}
 	styleMap := map[string]string{"Heading1": "Heading 1"}
-	sections := parseSections(elements, styleMap, nil, nil)
+	sections := parseSections(elements, styleMap, nil, nil, nil)
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -559,7 +559,7 @@ func TestParseSections_CodeBlockAtEnd(t *testing.T) {
 		t.Fatal("expected trailing code block to be flushed")
 	}
 	last := sections[0].Content[len(sections[0].Content)-1]
-	if !strings.HasPrefix(last, "```yaml\n") || !strings.Contains(last, "foo: bar") {
+	if !strings.HasPrefix(last, "```\n") || !strings.Contains(last, "foo: bar") {
 		t.Errorf("expected trailing fenced code block, got %q", last)
 	}
 }
@@ -593,7 +593,7 @@ func TestParseSections_LetteredSectionNumbers(t *testing.T) {
 		}},
 	}
 	styleMap := map[string]string{"Heading1": "Heading 1", "Heading2": "Heading 2"}
-	sections := parseSections(elements, styleMap, nil, nil)
+	sections := parseSections(elements, styleMap, nil, nil, nil)
 
 	want := map[string]string{
 		"4.2.1a":   "Some title",
@@ -649,7 +649,7 @@ func TestParseSections_UnnumberedDashHeadings(t *testing.T) {
 		}},
 	}
 	styleMap := map[string]string{"Heading1": "Heading 1", "Heading2": "Heading 2"}
-	sections := parseSections(elements, styleMap, nil, nil)
+	sections := parseSections(elements, styleMap, nil, nil, nil)
 
 	want := []string{"MRB-Identity", "MeasSequence"}
 	sectionMap := make(map[string]*Section)
@@ -798,5 +798,184 @@ func TestParseBody_TruncatedXML(t *testing.T) {
 	malformed := `<w:document><w:body><w:p></w:tbl></w:body></w:document>`
 	if _, err := parseBody([]byte(malformed)); err == nil {
 		t.Error("expected an error for mismatched tags")
+	}
+}
+
+func TestASN1MarkerRegex(t *testing.T) {
+	tests := []struct {
+		text  string
+		start bool
+		stop  bool
+	}{
+		{"-- ASN1START", true, false},
+		{"--ASN1START", true, false},
+		{"-- /example/ ASN1START", true, false},
+		{"-- /bad example/ ASN1STOP", false, true},
+		{"\t-- ASN1START", true, false},
+		{" -- ASN1START", true, false},
+		{"-- ASN1STOP", false, true},
+		{"-- ASN1START -- TAG-FOO-START", true, false},
+		// Prose that mentions the markers (TS 38.331 A.1) must not match.
+		{"tags 'ASN1START' and 'ASN1STOP'", false, false},
+		{"see ASN1START above", false, false},
+		{"-- ASN1STARTED", false, false},
+		{"plain text", false, false},
+	}
+	for _, tt := range tests {
+		info := paragraphInfo{Text: tt.text, Runs: []runInfo{{Text: tt.text}}}
+		if got := matchASN1Marker(asn1StartRE, info); got != tt.start {
+			t.Errorf("start match for %q = %v, want %v", tt.text, got, tt.start)
+		}
+		if got := matchASN1Marker(asn1StopRE, info); got != tt.stop {
+			t.Errorf("stop match for %q = %v, want %v", tt.text, got, tt.stop)
+		}
+	}
+}
+
+func TestParseSections_ASN1MarkerBlock(t *testing.T) {
+	para := func(text string) bodyElement {
+		return bodyElement{Tag: "p", Paragraph: paragraphInfo{
+			Text: text, Runs: []runInfo{{Text: text}},
+		}}
+	}
+	elements := []bodyElement{
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading1", Text: "6.2.2\tMessage definitions",
+			Runs: []runInfo{{Text: "6.2.2\tMessage definitions"}},
+		}},
+		para("Intro prose."),
+		para("-- ASN1START"),
+		// Non-code-styled lines with leading tabs must be captured verbatim.
+		para("RRCSetup-IEs ::= SEQUENCE {"),
+		{Tag: "p", Paragraph: paragraphInfo{}}, // blank paragraph → blank line
+		para("\tradioBearerConfig\tRadioBearerConfig,"),
+		para("}"),
+		para("-- ASN1STOP"),
+		para("Trailing prose."),
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(sections))
+	}
+	content := sections[0].Content
+	want := "```asn1\n" +
+		"-- ASN1START\n" +
+		"RRCSetup-IEs ::= SEQUENCE {\n" +
+		"\n" +
+		"\tradioBearerConfig\tRadioBearerConfig,\n" +
+		"}\n" +
+		"-- ASN1STOP\n" +
+		"```"
+	var found bool
+	for _, c := range content {
+		if c == want {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected verbatim asn1 fence %q; got content:\n%v", want, content)
+	}
+	if content[len(content)-1] != "Trailing prose." {
+		t.Errorf("expected trailing prose after the fence, got %q", content[len(content)-1])
+	}
+}
+
+func TestParseSections_ASN1MultipleBlocksAcrossHeadings(t *testing.T) {
+	heading := func(text string) bodyElement {
+		return bodyElement{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading2", Text: text, Runs: []runInfo{{Text: text}},
+		}}
+	}
+	para := func(text string) bodyElement {
+		return bodyElement{Tag: "p", Paragraph: paragraphInfo{
+			Text: text, Runs: []runInfo{{Text: text}},
+		}}
+	}
+	elements := []bodyElement{
+		heading("-\tRRCSetup"),
+		para("-- ASN1START"),
+		para("RRCSetup ::= SEQUENCE {}"),
+		para("-- ASN1STOP"),
+		heading("-\tRRCReject"),
+		para("-- ASN1START"),
+		para("RRCReject ::= SEQUENCE {}"),
+		para("-- ASN1STOP"),
+	}
+	sections := parseSections(elements, map[string]string{"Heading2": "Heading 2"}, nil, nil, nil)
+	if len(sections) != 2 {
+		t.Fatalf("expected 2 sections, got %d", len(sections))
+	}
+	for i, wantBody := range []string{"RRCSetup ::= SEQUENCE {}", "RRCReject ::= SEQUENCE {}"} {
+		if len(sections[i].Content) != 1 {
+			t.Fatalf("section %d: expected exactly 1 content entry, got %v", i, sections[i].Content)
+		}
+		c := sections[i].Content[0]
+		if !strings.HasPrefix(c, "```asn1\n") || !strings.Contains(c, wantBody) {
+			t.Errorf("section %d: expected asn1 fence containing %q, got %q", i, wantBody, c)
+		}
+	}
+}
+
+func TestParseSections_ASN1UnterminatedFlushedByHeading(t *testing.T) {
+	para := func(text string) bodyElement {
+		return bodyElement{Tag: "p", Paragraph: paragraphInfo{
+			Text: text, Runs: []runInfo{{Text: text}},
+		}}
+	}
+	elements := []bodyElement{
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading1", Text: "1\tFirst",
+			Runs: []runInfo{{Text: "1\tFirst"}},
+		}},
+		para("-- ASN1START"),
+		para("Unterminated ::= SEQUENCE {"),
+		// Missing -- ASN1STOP: the next heading must flush the partial block.
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading1", Text: "2\tSecond",
+			Runs: []runInfo{{Text: "2\tSecond"}},
+		}},
+		para("Second section prose."),
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	if len(sections) != 2 {
+		t.Fatalf("expected 2 sections, got %d", len(sections))
+	}
+	if len(sections[0].Content) != 1 || !strings.HasPrefix(sections[0].Content[0], "```asn1\n") {
+		t.Errorf("expected partial asn1 fence in first section, got %v", sections[0].Content)
+	}
+	if len(sections[1].Content) != 1 || sections[1].Content[0] != "Second section prose." {
+		t.Errorf("expected plain prose in second section, got %v", sections[1].Content)
+	}
+}
+
+func TestParseSections_ASN1UnterminatedFlushedByTable(t *testing.T) {
+	para := func(text string) bodyElement {
+		return bodyElement{Tag: "p", Paragraph: paragraphInfo{
+			Text: text, Runs: []runInfo{{Text: text}},
+		}}
+	}
+	elements := []bodyElement{
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading1", Text: "1\tFirst",
+			Runs: []runInfo{{Text: "1\tFirst"}},
+		}},
+		para("-- ASN1START"),
+		para("Unterminated ::= SEQUENCE {"),
+		{Tag: "tbl", Table: tableInfo{Rows: []tableRow{{Cells: []tableCell{{Paras: []paragraphInfo{{Text: "cell", Runs: []runInfo{{Text: "cell"}}}}}}}}}},
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(sections))
+	}
+	content := strings.Join(sections[0].Content, "\n")
+	if !strings.Contains(content, "```asn1\n") {
+		t.Errorf("expected partial asn1 fence flushed before the table, got %v", sections[0].Content)
+	}
+	if !strings.Contains(content, "cell") {
+		t.Errorf("expected table content preserved after the fence, got %v", sections[0].Content)
+	}
+	if strings.Index(content, "```asn1") > strings.Index(content, "cell") {
+		t.Errorf("expected fence before table content, got %v", sections[0].Content)
 	}
 }

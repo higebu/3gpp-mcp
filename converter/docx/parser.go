@@ -19,7 +19,24 @@ var (
 	headingNumRE        = regexp.MustCompile(`(?i)^[Hh]eading\s+(\d+)`)
 	annexSubRE          = regexp.MustCompile(`^[A-Z]\.`)
 	unnumberedHeadingRE = regexp.MustCompile(`^\p{Pd}[\t ]+(.+)$`)
+
+	// 3GPP ASN.1 extraction markers on their own paragraph:
+	//   "-- ASN1START", "--ASN1STOP", "-- /example/ ASN1START",
+	//   "-- /bad example/ ASN1STOP", optionally with trailing text.
+	// Anchored at start (after NBSP normalization + TrimSpace) so prose that
+	// merely mentions ASN1START (e.g. TS 38.331 A.1 explains the tagging
+	// convention) never matches.
+	asn1StartRE = regexp.MustCompile(`^--\s*(?:/[^/]*/\s*)?ASN1START\b`)
+	asn1StopRE  = regexp.MustCompile(`^--\s*(?:/[^/]*/\s*)?ASN1STOP\b`)
 )
+
+// matchASN1Marker reports whether the paragraph is an ASN.1 extraction marker.
+// NBSP is normalized to a space first: Go's \s does not match U+00A0, which
+// 3GPP documents use liberally.
+func matchASN1Marker(re *regexp.Regexp, info paragraphInfo) bool {
+	text := strings.ReplaceAll(codeLineText(info), "\u00a0", " ")
+	return re.MatchString(strings.TrimSpace(text))
+}
 
 // bodyElement represents a top-level element in the document body.
 type bodyElement struct {
@@ -56,7 +73,7 @@ func parseFromZipReader(r *zip.Reader, filename string) (*ParseResult, error) {
 		// styles.xml might not exist; use empty map
 		stylesData = nil
 	}
-	styleMap, err := parseStyles(stylesData)
+	styleMap, codeStyles, err := parseStyles(stylesData)
 	if err != nil {
 		log.Printf("warning: failed to parse styles.xml in %s: %v", filename, err)
 	}
@@ -100,7 +117,7 @@ func parseFromZipReader(r *zip.Reader, filename string) (*ParseResult, error) {
 	metadata := extractMetadata(filename, props, bodyElements, styleMap)
 
 	// Parse sections (with image placeholder insertion)
-	sections := parseSections(bodyElements, styleMap, relMap, images)
+	sections := parseSections(bodyElements, styleMap, codeStyles, relMap, images)
 
 	// Collect images into a list
 	var imageList []*EmbeddedImage
@@ -212,7 +229,7 @@ func diagramPlaceholder(labels []string) string {
 }
 
 // parseSections walks the body elements and creates a section hierarchy.
-func parseSections(elements []bodyElement, styleMap map[string]string, relMap map[string]string, images map[string]*EmbeddedImage) []*Section {
+func parseSections(elements []bodyElement, styleMap map[string]string, codeStyles map[string]bool, relMap map[string]string, images map[string]*EmbeddedImage) []*Section {
 	var sections []*Section
 	var currentSection *Section
 	var sectionStack []*Section
@@ -233,14 +250,40 @@ func parseSections(elements []bodyElement, styleMap map[string]string, relMap ma
 		}
 		if len(codeBuffer) > 0 {
 			currentSection.Content = append(currentSection.Content,
-				"```yaml\n"+strings.Join(codeBuffer, "\n")+"\n```")
+				"```\n"+strings.Join(codeBuffer, "\n")+"\n```")
 		}
 		codeBuffer = nil
+	}
+
+	// Accumulates paragraphs between "-- ASN1START" and "-- ASN1STOP" markers
+	// (the normative 3GPP ASN.1 extraction convention) into one ```asn1 fence.
+	// While capturing, paragraphs are taken verbatim regardless of style — the
+	// markers are authoritative. Markers inside table cells are not detected;
+	// 3GPP specs do not put ASN.1 modules in tables.
+	var asn1Buffer []string
+	inASN1 := false
+	flushASN1 := func() {
+		inASN1 = false
+		if len(asn1Buffer) == 0 || currentSection == nil {
+			asn1Buffer = nil
+			return
+		}
+		for len(asn1Buffer) > 0 && strings.TrimSpace(asn1Buffer[len(asn1Buffer)-1]) == "" {
+			asn1Buffer = asn1Buffer[:len(asn1Buffer)-1]
+		}
+		if len(asn1Buffer) > 0 {
+			currentSection.Content = append(currentSection.Content,
+				"```asn1\n"+strings.Join(asn1Buffer, "\n")+"\n```")
+		}
+		asn1Buffer = nil
 	}
 
 	for _, elem := range elements {
 		switch elem.Tag {
 		case "tbl":
+			// A table while capturing ASN.1 means a missing ASN1STOP; flush
+			// what was collected rather than swallowing the table.
+			flushASN1()
 			flushCodeBlock()
 			html := tableToHTML(elem.Table, imageContext{relMap: relMap, images: images})
 			if html != "" && currentSection != nil {
@@ -262,6 +305,9 @@ func parseSections(elements []bodyElement, styleMap map[string]string, relMap ma
 			}
 
 			if headingLevel > 0 {
+				// A heading while capturing ASN.1 means a missing ASN1STOP;
+				// flush so headings are never swallowed into a code block.
+				flushASN1()
 				flushCodeBlock()
 				// Normalize text
 				text := strings.ReplaceAll(info.Text, "\u00a0", " ")
@@ -334,7 +380,23 @@ func parseSections(elements []bodyElement, styleMap map[string]string, relMap ma
 				sections = append(sections, section)
 				currentSection = section
 			} else {
-				isCodePara := (info.IsCode || isCodeStyleName(styleName)) && len(info.Images) == 0
+				if inASN1 {
+					// Capture verbatim (tabs and indentation kept, blank
+					// paragraphs become blank lines, the STOP marker line
+					// included) until the closing marker.
+					asn1Buffer = append(asn1Buffer, codeLineText(info))
+					if matchASN1Marker(asn1StopRE, info) {
+						flushASN1()
+					}
+					continue
+				}
+				if matchASN1Marker(asn1StartRE, info) {
+					flushCodeBlock()
+					inASN1 = true
+					asn1Buffer = append(asn1Buffer, codeLineText(info))
+					continue
+				}
+				isCodePara := (info.IsCode || isCodeStyleName(styleName) || codeStyles[info.StyleID]) && len(info.Images) == 0
 				switch {
 				case isCodePara && currentSection != nil:
 					// Append to the pending code block, preserving whitespace.
@@ -364,6 +426,7 @@ func parseSections(elements []bodyElement, styleMap map[string]string, relMap ma
 		}
 	}
 
+	flushASN1()
 	flushCodeBlock()
 
 	return sections

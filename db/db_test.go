@@ -1692,3 +1692,52 @@ func TestInsertSpec_DropsSupersededVersions(t *testing.T) {
 		t.Errorf("expected exactly 1 search hit after supersede, got %d", len(page.Results))
 	}
 }
+
+func TestSearch_HyphenatedIdentifierTokenization(t *testing.T) {
+	// tokenchars '-' in the FTS tokenizer keeps hyphenated ASN.1 identifiers
+	// as single tokens, so quoted and prefix queries match them exactly.
+	d := setupTestDB(t)
+
+	err := d.ExecScript(`INSERT INTO specs (id, version, title, release, series) VALUES
+    ('TS 38.331', '19.3.0', 'NR RRC protocol', '19', '38');
+INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES
+    ('TS 38.331', '19.3.0', '6.2.2', 'Message definitions', 2, '6.2', '### 6.2.2 Message definitions
+
+RRCSetup-IEs ::= SEQUENCE {');`)
+	if err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+
+	t.Run("exact hyphenated identifier matches", func(t *testing.T) {
+		page, err := d.Search("RRCSetup-IEs", nil, 10, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(page.Results) == 0 {
+			t.Fatal("expected a hit for RRCSetup-IEs")
+		}
+		if !strings.Contains(page.Results[0].Snippet, "RRCSetup-IEs") {
+			t.Errorf("expected intact identifier in snippet, got %q", page.Results[0].Snippet)
+		}
+	})
+
+	t.Run("prefix query matches hyphenated identifier", func(t *testing.T) {
+		page, err := d.Search("RRCSetup*", nil, 10, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(page.Results) == 0 {
+			t.Fatal("expected a prefix hit for RRCSetup*")
+		}
+	})
+
+	t.Run("unrelated hyphenated term misses", func(t *testing.T) {
+		page, err := d.Search("xyznope-IEs", nil, 10, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(page.Results) != 0 {
+			t.Fatalf("expected 0 results, got %d", len(page.Results))
+		}
+	})
+}

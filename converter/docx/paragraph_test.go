@@ -640,3 +640,19 @@ func TestScanDrawingSubtree_DepthCap(t *testing.T) {
 		t.Error("expected the decoder to be fully consumed")
 	}
 }
+
+func TestParseParagraph_BreakAndNoBreakHyphen(t *testing.T) {
+	// w:br is a visible line break; dropping it would merge two lines into
+	// one word. w:noBreakHyphen renders as "-" and ASN.1 identifiers depend
+	// on it. Layout-only breaks (page/column) carry no text.
+	xml := `<w:p ` + wXMLNS + `>` +
+		`<w:r><w:t>line1</w:t><w:br/><w:t>line2</w:t></w:r>` +
+		`<w:r><w:t>page</w:t><w:br w:type="page"/><w:t>break</w:t></w:r>` +
+		`<w:r><w:t>RRCSetup</w:t><w:noBreakHyphen/><w:t>IEs</w:t></w:r>` +
+		`</w:p>`
+	info := parseParagraph([]byte(xml))
+	want := "line1\nline2" + "pagebreak" + "RRCSetup-IEs"
+	if info.Text != want {
+		t.Errorf("Text = %q, want %q", info.Text, want)
+	}
+}
