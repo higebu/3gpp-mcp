@@ -174,6 +174,21 @@ func (s *Source) GetSection(ctx context.Context, specID, version, number string,
 	return sections, res, err
 }
 
+// AllSections returns every section of a version, content included, from
+// whichever source holds it.
+func (s *Source) AllSections(ctx context.Context, specID, version string) ([]db.Section, resolution, error) {
+	res, err := s.resolve(ctx, specID, version)
+	if err != nil {
+		return nil, res, err
+	}
+	if res.archived {
+		sections, err := s.Store.AllSections(specID, res.version)
+		return sections, res, err
+	}
+	sections, err := s.DB.AllSections(specID, res.version)
+	return sections, res, err
+}
+
 // GetTOC returns the section structure from whichever source holds the version.
 func (s *Source) GetTOC(ctx context.Context, specID, version string) ([]db.Section, resolution, error) {
 	res, err := s.resolve(ctx, specID, version)

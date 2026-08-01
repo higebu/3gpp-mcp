@@ -22,9 +22,10 @@ converter/
   pipeline/          # Streaming download + conversion pipeline with worker pool
 db/                  # SQLite schema, queries, FTS5 full-text search
 versionstore/        # On-demand cache of spec versions not in the prebuilt database
-tools/               # MCP tool handlers (list_specs, list_versions, get_toc, get_section, search, openapi, references, images)
+tools/               # MCP tool handlers (list_specs, list_versions, get_toc, get_section, compare_versions, search, openapi, references, images)
 web/                 # Web viewer UI (HTTP handlers, HTML templates, static assets)
 internal/specver/    # Version notation conversion (base-36 archive token <-> dotted)
+internal/textdiff/   # Line-based Myers diff for compare_versions unified output
 internal/testutil/   # Shared test helpers (SetupTestDB, DownloadTestZip)
 data/                # Database files (gitignored except .gitkeep)
 examples/systemd/    # Deployment examples (service + timer)
@@ -113,7 +114,7 @@ cross-references remain prebuilt-only.
 
 ### MCP Tools
 
-Ten tools are exposed via MCP:
+Eleven tools are exposed via MCP:
 
 | Tool | Description |
 |------|-------------|
@@ -121,6 +122,7 @@ Ten tools are exposed via MCP:
 | `list_versions` | List a spec's versions and where each can be read from |
 | `get_toc` | Get table of contents for a spec (optionally a past version) |
 | `get_section` | Get section content (paginated, optionally a past version) |
+| `compare_versions` | Compare two versions: structural summary, or a unified diff of one section |
 | `search` | Full-text search across all specs |
 | `list_openapi` | List OpenAPI definitions |
 | `get_openapi` | Get OpenAPI definition (paginated) |

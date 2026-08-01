@@ -693,6 +693,40 @@ func (d *DB) GetTOC(specID, version string) ([]Section, error) {
 	return sections, nil
 }
 
+// AllSections returns every section of a spec version, content included, in
+// document order. An empty version resolves to the version this database
+// holds; a version it does not hold yields no rows.
+func (d *DB) AllSections(specID, version string) ([]Section, error) {
+	version, err := d.ResolveVersion(specID, version)
+	if errors.Is(err, ErrNoVersion) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("all sections: %w", err)
+	}
+	rows, err := d.conn.Query(
+		"SELECT s.spec_id, s.version, s.number, s.title, s.level, COALESCE(s.parent_number, ''), s.content, COALESCE(p.release, '') FROM sections s LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version WHERE s.spec_id = ? AND s.version = ? ORDER BY s.id",
+		specID, version,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("all sections: %w", err)
+	}
+	defer rows.Close()
+
+	var sections []Section
+	for rows.Next() {
+		var s Section
+		if err := rows.Scan(&s.SpecID, &s.Version, &s.Number, &s.Title, &s.Level, &s.ParentNumber, &s.Content, &s.Release); err != nil {
+			return nil, fmt.Errorf("scan section: %w", err)
+		}
+		sections = append(sections, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("all sections: iterate: %w", err)
+	}
+	return sections, nil
+}
+
 // EscapeLikePattern escapes SQLite LIKE wildcards (% and _) in a
 // user-supplied string so it can be used as a literal prefix with an
 // ESCAPE '\' clause.
