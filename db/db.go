@@ -229,10 +229,15 @@ CREATE INDEX IF NOT EXISTS idx_images_spec ON images(spec_id, version);
 // that has no FTS tables, keeping cross-release rows out of search results.
 const Schema = SpecTablesSchema + ImagesTableSchema + `
 
+-- tokenchars '-' keeps hyphenated ASN.1 identifiers (RRCSetup-IEs) as single
+-- tokens so quoted and prefix queries match them exactly. '.' is deliberately
+-- not included: it would glue sentence-final periods to the preceding word,
+-- and dotted spec numbers already match via phrase quoting.
 CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
     spec_id, number, title, content,
     content=sections,
-    content_rowid=id
+    content_rowid=id,
+    tokenize="unicode61 tokenchars '-'"
 );
 
 CREATE TRIGGER IF NOT EXISTS sections_ai AFTER INSERT ON sections BEGIN
