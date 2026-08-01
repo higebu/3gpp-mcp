@@ -46,6 +46,21 @@ type indexData struct {
 	HasNext    bool
 }
 
+// specHeader drives the header bar shared by every spec-scoped page: the
+// spec's identity plus the Document / Versions / Compare tabs.
+type specHeader struct {
+	SpecID string
+	Active string // "document" | "versions" | "compare"
+	// Version is carried on the Document and Compare tabs when browsing an
+	// archived version, so the tabs stay on that version.
+	Version string
+	// DisplayVersion/Release/Archived describe the version being read; an
+	// empty DisplayVersion hides the version line.
+	DisplayVersion string
+	Release        string
+	Archived       bool
+}
+
 type specData struct {
 	Spec       *db.Spec
 	TOC        []db.Section
@@ -59,6 +74,7 @@ type specData struct {
 	// database version so canonical URLs stay stable.
 	Version  string
 	Archived bool
+	Header   specHeader
 }
 
 // fetchingData drives the "download in progress" page shown while an archived
@@ -71,6 +87,7 @@ type fetchingData struct {
 
 type versionsData struct {
 	SpecID   string
+	Header   specHeader
 	Versions []tools.VersionInfo
 	// ArchiveErr warns that the archive listing failed, so the table may
 	// only cover the cache and the database.
@@ -342,6 +359,14 @@ func (h *handler) renderSpecPage(w http.ResponseWriter, r *http.Request, specID,
 		Next:       next,
 		Version:    urlVersion,
 		Archived:   res.Archived,
+		Header: specHeader{
+			SpecID:         specID,
+			Active:         "document",
+			Version:        urlVersion,
+			DisplayVersion: toc[0].Version,
+			Release:        toc[0].Release,
+			Archived:       res.Archived,
+		},
 	}
 
 	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "spec", Data: data, NavSpecID: specID}); err != nil {
@@ -392,6 +417,7 @@ func (h *handler) handleVersions(w http.ResponseWriter, r *http.Request) {
 
 	data := versionsData{
 		SpecID:   specID,
+		Header:   specHeader{SpecID: specID, Active: "versions"},
 		Versions: versions,
 	}
 	if archiveErr != nil {

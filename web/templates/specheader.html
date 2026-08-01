@@ -1,0 +1,16 @@
+{{define "spec-header"}}
+<header class="spec-header">
+    <div class="spec-header-id">
+        <h1 class="spec-header-title">{{.SpecID}}</h1>
+        {{if .DisplayVersion}}
+        <span class="spec-header-version">v{{.DisplayVersion}}{{with releaseLabel .Release}} ({{.}}){{end}}</span>
+        {{if .Archived}}<span class="badge badge-cached">archived</span>{{end}}
+        {{end}}
+    </div>
+    <nav class="spec-tabs" aria-label="Specification pages">
+        <a class="spec-tab{{if eq .Active "document"}} active{{end}}"{{if eq .Active "document"}} aria-current="page"{{end}} href="{{specURL .SpecID}}{{if .Version}}?version={{queryEscape .Version}}{{end}}">Document</a>
+        <a class="spec-tab{{if eq .Active "versions"}} active{{end}}"{{if eq .Active "versions"}} aria-current="page"{{end}} href="{{specURL .SpecID}}/versions">Versions</a>
+        <a class="spec-tab{{if eq .Active "compare"}} active{{end}}"{{if eq .Active "compare"}} aria-current="page"{{end}} href="{{specURL .SpecID}}/compare{{if .Version}}?old={{queryEscape .Version}}{{end}}">Compare</a>
+    </nav>
+</header>
+{{end}}

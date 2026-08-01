@@ -28,6 +28,13 @@
             tocSidebar.classList.toggle('open');
         });
 
+        const tocClose = document.getElementById('toc-close');
+        if (tocClose) {
+            tocClose.addEventListener('click', function () {
+                tocSidebar.classList.remove('open');
+            });
+        }
+
         // Close TOC when clicking a link (mobile)
         tocSidebar.querySelectorAll('a').forEach(function (link) {
             link.addEventListener('click', function () {

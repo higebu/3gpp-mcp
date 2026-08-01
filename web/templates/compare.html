@@ -1,10 +1,6 @@
 {{define "compare.html"}}
+{{template "spec-header" .Header}}
 <div class="compare-page">
-    <div class="page-header">
-        <h1>Compare {{.SpecID}}</h1>
-        <p class="subtitle"><a href="{{specURL .SpecID}}/versions">Versions</a> &middot; <a href="{{specURL .SpecID}}">Back to the specification</a></p>
-    </div>
-
     <form class="filter-form" method="get" action="{{specURL .SpecID}}/compare">
         <label for="old">Old version:</label>
         <input type="text" name="old" id="old" value="{{.OldParam}}" placeholder="e.g. 17.9.0">
