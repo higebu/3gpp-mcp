@@ -172,6 +172,14 @@ type ListSpecsResult struct {
 	Offset     int    `json:"offset"`
 }
 
+// SearchResults holds one page of search hits plus the total match count.
+type SearchResults struct {
+	Results    []SearchResult `json:"results"`
+	TotalCount int            `json:"total_count"`
+	Limit      int            `json:"limit"`
+	Offset     int            `json:"offset"`
+}
+
 // SpecTablesSchema defines the tables that hold a specification's text, keyed
 // by (spec_id, version). The version cache reuses it verbatim; the main
 // database adds full-text search and the remaining tables on top.
@@ -227,8 +235,14 @@ CREATE INDEX IF NOT EXISTS idx_images_spec ON images(spec_id, version);
 // A build imports one version per spec, so the FTS index covers exactly that
 // version. Versions fetched on demand are stored in a separate cache database
 // that has no FTS tables, keeping cross-release rows out of search results.
+//
+// Porter stemming folds inflected forms together (handover matches
+// handovers); spec_id and number tokenize to unstemmed digit runs, which
+// porter leaves untouched. The DDL is IF NOT EXISTS, so the tokenizer applies
+// to newly created databases only.
 const Schema = SpecTablesSchema + ImagesTableSchema + `
 
+-- Porter wraps unicode61 and passes the remaining arguments through to it.
 -- tokenchars '-' keeps hyphenated ASN.1 identifiers (RRCSetup-IEs) as single
 -- tokens so quoted and prefix queries match them exactly. '.' is deliberately
 -- not included: it would glue sentence-final periods to the preceding word,
@@ -237,7 +251,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
     spec_id, number, title, content,
     content=sections,
     content_rowid=id,
-    tokenize="unicode61 tokenchars '-'"
+    tokenize="porter unicode61 tokenchars '-'"
 );
 
 CREATE TRIGGER IF NOT EXISTS sections_ai AFTER INSERT ON sections BEGIN
@@ -684,6 +698,40 @@ func (d *DB) GetTOC(specID, version string) ([]Section, error) {
 	return sections, nil
 }
 
+// AllSections returns every section of a spec version, content included, in
+// document order. An empty version resolves to the version this database
+// holds; a version it does not hold yields no rows.
+func (d *DB) AllSections(specID, version string) ([]Section, error) {
+	version, err := d.ResolveVersion(specID, version)
+	if errors.Is(err, ErrNoVersion) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("all sections: %w", err)
+	}
+	rows, err := d.conn.Query(
+		"SELECT s.spec_id, s.version, s.number, s.title, s.level, COALESCE(s.parent_number, ''), s.content, COALESCE(p.release, '') FROM sections s LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version WHERE s.spec_id = ? AND s.version = ? ORDER BY s.id",
+		specID, version,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("all sections: %w", err)
+	}
+	defer rows.Close()
+
+	var sections []Section
+	for rows.Next() {
+		var s Section
+		if err := rows.Scan(&s.SpecID, &s.Version, &s.Number, &s.Title, &s.Level, &s.ParentNumber, &s.Content, &s.Release); err != nil {
+			return nil, fmt.Errorf("scan section: %w", err)
+		}
+		sections = append(sections, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("all sections: iterate: %w", err)
+	}
+	return sections, nil
+}
+
 // EscapeLikePattern escapes SQLite LIKE wildcards (% and _) in a
 // user-supplied string so it can be used as a literal prefix with an
 // ESCAPE '\' clause.
@@ -1007,12 +1055,23 @@ func sanitizeFTS5Query(query string) string {
 	return strings.Join(result, " ")
 }
 
-func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, error) {
+// bm25Weights orders search hits: title matches dominate, spec_id barely
+// counts (a spec-number query matches the spec_id column of every section of
+// that spec, which would otherwise flood the ranking). Column order is
+// spec_id, number, title, content. bm25() returns negative scores, smaller =
+// better, so ORDER BY stays ascending. Weighting must happen in the query:
+// setting the table's rank option needs a write, and serve opens read-only.
+const bm25Weights = "bm25(sections_fts, 0.5, 1.0, 5.0, 1.0)"
+
+func (d *DB) Search(query string, specIDs []string, limit, offset int) (*SearchResults, error) {
 	if limit <= 0 {
 		limit = DefaultSearchLimit
 	}
 	if limit > MaxSearchLimit {
 		limit = MaxSearchLimit
+	}
+	if offset < 0 {
+		offset = 0
 	}
 
 	query = sanitizeFTS5Query(query)
@@ -1020,9 +1079,8 @@ func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, 
 	// sections_fts has no version column, so the version comes from the backing
 	// sections row (sections_fts.rowid is sections.id). Joining specs on the
 	// pair keeps one row per hit even when a database holds several versions.
-	sqlQuery := "SELECT sections_fts.spec_id, sections_fts.number, sections_fts.title, snippet(sections_fts, 3, '<mark>', '</mark>', '...', 32), s.version, COALESCE(p.release, '') " +
-		"FROM sections_fts JOIN sections s ON s.id = sections_fts.rowid LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version WHERE sections_fts MATCH ?"
-	args := []any{query}
+	fromWhere := "FROM sections_fts JOIN sections s ON s.id = sections_fts.rowid LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version WHERE sections_fts MATCH ?"
+	filterArgs := []any{query}
 
 	if len(specIDs) > 0 {
 		// Each spec ID also matches its split multi-file parts (e.g. "TS 38.101"
@@ -1031,12 +1089,25 @@ func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, 
 		conds := make([]string, len(specIDs))
 		for i, id := range specIDs {
 			conds[i] = "sections_fts.spec_id = ? OR sections_fts.spec_id LIKE ? ESCAPE '\\'"
-			args = append(args, id, EscapeLikePattern(id)+"-%")
+			filterArgs = append(filterArgs, id, EscapeLikePattern(id)+"-%")
 		}
-		sqlQuery += " AND (" + strings.Join(conds, " OR ") + ")"
+		fromWhere += " AND (" + strings.Join(conds, " OR ") + ")"
 	}
-	sqlQuery += " ORDER BY sections_fts.rank LIMIT ?"
-	args = append(args, limit)
+
+	// A window count(*) OVER () cannot report the total when offset lands past
+	// the last row, so the total comes from its own query sharing the filter.
+	var totalCount int
+	if err := d.conn.QueryRow("SELECT count(*) "+fromWhere, filterArgs...).Scan(&totalCount); err != nil {
+		return nil, fmt.Errorf("invalid search query %q: %w", query, err)
+	}
+
+	// Column -1 lets FTS5 pick the best-matching column for the snippet, so a
+	// title-only hit shows the marked title instead of an unmarked content head.
+	// The rowid tie-breaker keeps equal-scoring rows in a stable order, so
+	// paging with OFFSET never duplicates or drops a hit.
+	sqlQuery := "SELECT sections_fts.spec_id, sections_fts.number, sections_fts.title, snippet(sections_fts, -1, '<mark>', '</mark>', '...', 32), s.version, COALESCE(p.release, '') " +
+		fromWhere + " ORDER BY " + bm25Weights + ", sections_fts.rowid LIMIT ? OFFSET ?"
+	args := append(append([]any{}, filterArgs...), limit, offset)
 
 	rows, err := d.conn.Query(sqlQuery, args...)
 	if err != nil {
@@ -1044,7 +1115,7 @@ func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, 
 	}
 	defer rows.Close()
 
-	var results []SearchResult
+	results := []SearchResult{}
 	for rows.Next() {
 		var r SearchResult
 		if err := rows.Scan(&r.SpecID, &r.Number, &r.Title, &r.Snippet, &r.Version, &r.Release); err != nil {
@@ -1055,7 +1126,7 @@ func (d *DB) Search(query string, specIDs []string, limit int) ([]SearchResult, 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("search: iterate: %w", err)
 	}
-	return results, nil
+	return &SearchResults{Results: results, TotalCount: totalCount, Limit: limit, Offset: offset}, nil
 }
 
 // Direction constants for GetReferences.

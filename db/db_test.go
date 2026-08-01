@@ -256,6 +256,32 @@ func TestGetTOC(t *testing.T) {
 	})
 }
 
+func TestAllSections(t *testing.T) {
+	d := setupTestDB(t)
+
+	sections, err := d.AllSections("TS 23.501", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(sections) != 4 {
+		t.Fatalf("expected 4 sections, got %d", len(sections))
+	}
+	if sections[0].Number != "1" || sections[0].Content == "" {
+		t.Errorf("expected section 1 with content in document order, got %+v", sections[0])
+	}
+	if sections[0].Version != "18.6.0" || sections[0].Release != "18" {
+		t.Errorf("expected version 18.6.0 / release 18, got %+v", sections[0])
+	}
+
+	missing, err := d.AllSections("TS 99.999", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("expected 0 sections for a missing spec, got %d", len(missing))
+	}
+}
+
 func TestGetSection(t *testing.T) {
 	d := setupTestDB(t)
 
@@ -433,20 +459,27 @@ func TestSearch(t *testing.T) {
 	d := setupTestDB(t)
 
 	t.Run("basic search", func(t *testing.T) {
-		results, err := d.Search("architecture", nil, 10)
+		page, err := d.Search("architecture", nil, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(results) == 0 {
+		if len(page.Results) == 0 {
 			t.Fatal("expected at least 1 result")
+		}
+		if page.TotalCount != len(page.Results) {
+			t.Errorf("expected total_count %d, got %d", len(page.Results), page.TotalCount)
+		}
+		if page.Limit != 10 || page.Offset != 0 {
+			t.Errorf("expected limit 10 / offset 0, got %d / %d", page.Limit, page.Offset)
 		}
 	})
 
 	t.Run("search with single spec filter", func(t *testing.T) {
-		results, err := d.Search("Scope", []string{"TS 29.510"}, 10)
+		page, err := d.Search("Scope", []string{"TS 29.510"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		results := page.Results
 		if len(results) != 1 {
 			t.Fatalf("expected 1 result, got %d", len(results))
 		}
@@ -459,22 +492,102 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("search with multiple spec filter", func(t *testing.T) {
-		results, err := d.Search("Scope", []string{"TS 23.501", "TS 29.510"}, 10)
+		page, err := d.Search("Scope", []string{"TS 23.501", "TS 29.510"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(results) != 2 {
-			t.Fatalf("expected 2 results, got %d", len(results))
+		if len(page.Results) != 2 {
+			t.Fatalf("expected 2 results, got %d", len(page.Results))
 		}
 	})
 
 	t.Run("no results", func(t *testing.T) {
-		results, err := d.Search("xyznonexistent", nil, 10)
+		page, err := d.Search("xyznonexistent", nil, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(results) != 0 {
-			t.Fatalf("expected 0 results, got %d", len(results))
+		if len(page.Results) != 0 {
+			t.Fatalf("expected 0 results, got %d", len(page.Results))
+		}
+		if page.TotalCount != 0 {
+			t.Errorf("expected total_count 0, got %d", page.TotalCount)
+		}
+	})
+
+	t.Run("pagination", func(t *testing.T) {
+		full, err := d.Search("Scope", []string{"TS 23.501", "TS 29.510"}, 10, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if full.TotalCount != 2 {
+			t.Fatalf("expected total_count 2, got %d", full.TotalCount)
+		}
+
+		first, err := d.Search("Scope", []string{"TS 23.501", "TS 29.510"}, 1, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		second, err := d.Search("Scope", []string{"TS 23.501", "TS 29.510"}, 1, 1)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(first.Results) != 1 || len(second.Results) != 1 {
+			t.Fatalf("expected 1 result per page, got %d and %d", len(first.Results), len(second.Results))
+		}
+		if first.TotalCount != 2 || second.TotalCount != 2 {
+			t.Errorf("expected total_count 2 on both pages, got %d and %d", first.TotalCount, second.TotalCount)
+		}
+		if first.Results[0].SpecID == second.Results[0].SpecID {
+			t.Errorf("expected different specs on each page, got %q twice", first.Results[0].SpecID)
+		}
+		if second.Offset != 1 {
+			t.Errorf("expected offset 1 echoed back, got %d", second.Offset)
+		}
+	})
+
+	t.Run("offset beyond total", func(t *testing.T) {
+		page, err := d.Search("Scope", []string{"TS 29.510"}, 10, 100)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(page.Results) != 0 {
+			t.Fatalf("expected 0 results, got %d", len(page.Results))
+		}
+		if page.TotalCount != 1 {
+			t.Errorf("expected total_count 1, got %d", page.TotalCount)
+		}
+	})
+
+	t.Run("limit zero uses default", func(t *testing.T) {
+		page, err := d.Search("Scope", nil, 0, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if page.Limit != DefaultSearchLimit {
+			t.Errorf("expected limit %d, got %d", DefaultSearchLimit, page.Limit)
+		}
+	})
+
+	t.Run("limit above max is clamped", func(t *testing.T) {
+		page, err := d.Search("Scope", nil, MaxSearchLimit+1, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if page.Limit != MaxSearchLimit {
+			t.Errorf("expected limit clamped to %d, got %d", MaxSearchLimit, page.Limit)
+		}
+	})
+
+	t.Run("negative offset treated as zero", func(t *testing.T) {
+		page, err := d.Search("Scope", []string{"TS 29.510"}, 10, -5)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(page.Results) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(page.Results))
+		}
+		if page.Offset != 0 {
+			t.Errorf("expected offset normalized to 0, got %d", page.Offset)
 		}
 	})
 
@@ -487,10 +600,11 @@ This document covers IMS-AKA and sec-agree mechanisms.');`)
 		if err != nil {
 			t.Fatalf("failed to insert test data: %v", err)
 		}
-		results, err := d.Search("IMS-AKA", nil, 10)
+		page, err := d.Search("IMS-AKA", nil, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error for hyphenated search: %v", err)
 		}
+		results := page.Results
 		if len(results) == 0 {
 			t.Error("expected at least 1 result for IMS-AKA")
 		}
@@ -510,36 +624,120 @@ The guardband requirements are specified here.');`)
 			t.Fatalf("failed to insert test data: %v", err)
 		}
 
-		results, err := d.Search("guardband", []string{"TS 38.101"}, 10)
+		page, err := d.Search("guardband", []string{"TS 38.101"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(results) != 1 {
-			t.Fatalf("expected 1 result, got %d", len(results))
+		if len(page.Results) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(page.Results))
 		}
-		if results[0].SpecID != "TS 38.101-1" {
-			t.Errorf("expected spec_id 'TS 38.101-1', got %q", results[0].SpecID)
+		if page.Results[0].SpecID != "TS 38.101-1" {
+			t.Errorf("expected spec_id 'TS 38.101-1', got %q", page.Results[0].SpecID)
 		}
 
 		// An unrelated spec sharing the family's numeric prefix must not match.
-		results, err = d.Search("guardband", []string{"TS 38.10"}, 10)
+		page, err = d.Search("guardband", []string{"TS 38.10"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(results) != 0 {
-			t.Fatalf("expected 0 results for unrelated prefix, got %d", len(results))
+		if len(page.Results) != 0 {
+			t.Fatalf("expected 0 results for unrelated prefix, got %d", len(page.Results))
 		}
 
 		// "_" would otherwise act as a single-character LIKE wildcard and
 		// match "TS 38.101-1" via "TS 38_101".
-		results, err = d.Search("guardband", []string{"TS 38_101"}, 10)
+		page, err = d.Search("guardband", []string{"TS 38_101"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(results) != 0 {
-			t.Fatalf("expected 0 results for literal underscore query, got %d", len(results))
+		if len(page.Results) != 0 {
+			t.Fatalf("expected 0 results for literal underscore query, got %d", len(page.Results))
 		}
 	})
+}
+
+func TestSearchClosedDB(t *testing.T) {
+	d := setupTestDB(t)
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if _, err := d.Search("architecture", nil, 10, 0); err == nil {
+		t.Error("expected error searching a closed database")
+	}
+}
+
+func TestSearchRanking(t *testing.T) {
+	d := setupTestDB(t)
+
+	// Same term in one section's title and another section's body: the title
+	// hit must rank first under the weighted bm25 ordering.
+	if err := d.ExecScript(`INSERT INTO specs (id, version, title) VALUES ('TS 90.001', '1.0.0', 'Ranking probe');
+INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES
+    ('TS 90.001', '1.0.0', '1', 'Miscellaneous', 1, NULL, '# 1 Miscellaneous
+The rankprobe term appears in this body text only, nowhere else.'),
+    ('TS 90.001', '1.0.0', '2', 'Rankprobe overview', 1, NULL, '# 2 Overview
+This body says nothing relevant at all.');`); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+
+	page, err := d.Search("rankprobe", nil, 10, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(page.Results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(page.Results))
+	}
+	if page.Results[0].Number != "2" {
+		t.Errorf("expected title hit (section 2) ranked first, got section %q", page.Results[0].Number)
+	}
+}
+
+func TestSearchSnippetColumn(t *testing.T) {
+	d := setupTestDB(t)
+
+	// A term that only appears in the title: the snippet must come from the
+	// title column and carry the match markers.
+	if err := d.ExecScript(`INSERT INTO specs (id, version, title) VALUES ('TS 90.002', '1.0.0', 'Snippet probe');
+INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES
+    ('TS 90.002', '1.0.0', '1', 'Snippetprobe requirements', 1, NULL, '# 1 Requirements
+Body text without the probe term.');`); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+
+	page, err := d.Search("snippetprobe", nil, 10, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(page.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(page.Results))
+	}
+	snippet := page.Results[0].Snippet
+	if !strings.Contains(snippet, "<mark>") || !strings.Contains(snippet, "Snippetprobe") {
+		t.Errorf("expected marked title snippet, got %q", snippet)
+	}
+}
+
+func TestSearchStemming(t *testing.T) {
+	d := setupTestDB(t)
+
+	if err := d.ExecScript(`INSERT INTO specs (id, version, title) VALUES ('TS 90.003', '1.0.0', 'Stemming probe');
+INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES
+    ('TS 90.003', '1.0.0', '1', 'Mobility', 1, NULL, '# 1 Mobility
+Handovers between cells are described in this clause.');`); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+
+	// Porter stemming folds inflected forms both ways.
+	for _, q := range []string{"handover", "handovers"} {
+		page, err := d.Search(q, []string{"TS 90.003"}, 10, 0)
+		if err != nil {
+			t.Fatalf("unexpected error for %q: %v", q, err)
+		}
+		if len(page.Results) != 1 {
+			t.Errorf("expected 1 result for %q, got %d", q, len(page.Results))
+		}
+	}
 }
 
 func TestFindSpecIDsByFamily(t *testing.T) {
@@ -1304,11 +1502,11 @@ func TestUpsertSection_ReplacesContent(t *testing.T) {
 	}
 
 	// FTS should pick up the new token.
-	results, err := d.Search("zucchini", []string{"TS 23.501"}, 10)
+	page, err := d.Search("zucchini", []string{"TS 23.501"}, 10, 0)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if len(results) == 0 {
+	if len(page.Results) == 0 {
 		t.Error("expected FTS hit for zucchini after upsert")
 	}
 }
@@ -1486,12 +1684,12 @@ func TestInsertSpec_DropsSupersededVersions(t *testing.T) {
 	}
 
 	// The superseded version's sections must be gone from search too.
-	results, err := d.Search("supersededprobe", nil, 10)
+	page, err := d.Search("supersededprobe", nil, 10, 0)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if len(results) != 1 {
-		t.Errorf("expected exactly 1 search hit after supersede, got %d", len(results))
+	if len(page.Results) != 1 {
+		t.Errorf("expected exactly 1 search hit after supersede, got %d", len(page.Results))
 	}
 }
 
@@ -1511,35 +1709,35 @@ RRCSetup-IEs ::= SEQUENCE {');`)
 	}
 
 	t.Run("exact hyphenated identifier matches", func(t *testing.T) {
-		results, err := d.Search("RRCSetup-IEs", nil, 10)
+		page, err := d.Search("RRCSetup-IEs", nil, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(results) == 0 {
+		if len(page.Results) == 0 {
 			t.Fatal("expected a hit for RRCSetup-IEs")
 		}
-		if !strings.Contains(results[0].Snippet, "RRCSetup-IEs") {
-			t.Errorf("expected intact identifier in snippet, got %q", results[0].Snippet)
+		if !strings.Contains(page.Results[0].Snippet, "RRCSetup-IEs") {
+			t.Errorf("expected intact identifier in snippet, got %q", page.Results[0].Snippet)
 		}
 	})
 
 	t.Run("prefix query matches hyphenated identifier", func(t *testing.T) {
-		results, err := d.Search("RRCSetup*", nil, 10)
+		page, err := d.Search("RRCSetup*", nil, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(results) == 0 {
+		if len(page.Results) == 0 {
 			t.Fatal("expected a prefix hit for RRCSetup*")
 		}
 	})
 
 	t.Run("unrelated hyphenated term misses", func(t *testing.T) {
-		results, err := d.Search("xyznope-IEs", nil, 10)
+		page, err := d.Search("xyznope-IEs", nil, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(results) != 0 {
-			t.Fatalf("expected 0 results, got %d", len(results))
+		if len(page.Results) != 0 {
+			t.Fatalf("expected 0 results, got %d", len(page.Results))
 		}
 	})
 }

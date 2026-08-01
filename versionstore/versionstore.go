@@ -282,6 +282,18 @@ func (s *Store) GetTOC(specID, version string) ([]db.Section, error) {
 	)
 }
 
+// AllSections returns every section of a cached version, content included, in
+// document order.
+func (s *Store) AllSections(specID, version string) ([]db.Section, error) {
+	s.touch(specID, version)
+	return s.querySections(
+		"SELECT s.spec_id, s.version, s.number, s.title, s.level, COALESCE(s.parent_number, ''), s.content, COALESCE(p.release, '') "+
+			"FROM sections s LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version "+
+			"WHERE s.spec_id = ? AND s.version = ? ORDER BY s.id",
+		specID, version,
+	)
+}
+
 // GetSection returns a cached section, optionally with its subsections.
 func (s *Store) GetSection(specID, version, number string, includeSubsections bool) ([]db.Section, error) {
 	s.touch(specID, version)
