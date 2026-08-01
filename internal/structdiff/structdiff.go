@@ -21,9 +21,11 @@ type Retitle struct {
 }
 
 // ContentChange records a section whose body text differs between versions.
+// OldNumber names the section on the old side; it differs from Number only
+// when the change rode along with a renumbering.
 type ContentChange struct {
-	Number, Title      string
-	OldLines, NewLines int
+	Number, OldNumber, Title string
+	OldLines, NewLines       int
 }
 
 // Result classifies every difference between two versions' section lists.
@@ -68,7 +70,13 @@ func Diff(oldSecs, newSecs []db.Section) Result {
 		}
 		switch {
 		case bodyChanged:
-			d.ContentChanged = append(d.ContentChanged, ContentChange{n.Number, n.Title, lineCount(o.Content), lineCount(n.Content)})
+			d.ContentChanged = append(d.ContentChanged, ContentChange{
+				Number:    n.Number,
+				OldNumber: n.Number,
+				Title:     n.Title,
+				OldLines:  lineCount(o.Content),
+				NewLines:  lineCount(n.Content),
+			})
 		case o.Title == n.Title:
 			d.Unchanged++
 		}
@@ -127,7 +135,13 @@ func (d *Result) promoteRenumbered() {
 			// A renumbered section may have been edited too; that must not
 			// hide behind the move.
 			if stripHeadingLine(o.Content) != stripHeadingLine(n.Content) {
-				d.ContentChanged = append(d.ContentChanged, ContentChange{n.Number, n.Title, lineCount(o.Content), lineCount(n.Content)})
+				d.ContentChanged = append(d.ContentChanged, ContentChange{
+					Number:    n.Number,
+					OldNumber: o.Number,
+					Title:     n.Title,
+					OldLines:  lineCount(o.Content),
+					NewLines:  lineCount(n.Content),
+				})
 			}
 			continue
 		}

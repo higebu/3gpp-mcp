@@ -24,6 +24,9 @@ func TestDiffRenumberedWithContentChange(t *testing.T) {
 	if len(d.ContentChanged) != 1 || d.ContentChanged[0].Number != "5.1.1" {
 		t.Fatalf("ContentChanged = %+v, want the renumbered section listed under its new number", d.ContentChanged)
 	}
+	if d.ContentChanged[0].OldNumber != "7" {
+		t.Errorf("ContentChanged OldNumber = %q, want the old number 7", d.ContentChanged[0].OldNumber)
+	}
 	if c := d.ContentChanged[0]; c.OldLines != 2 || c.NewLines != 3 {
 		t.Errorf("ContentChanged line counts = %d → %d, want 2 → 3", c.OldLines, c.NewLines)
 	}

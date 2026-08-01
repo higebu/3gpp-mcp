@@ -155,13 +155,17 @@ func (h *handler) initTemplates() {
 			return s
 		},
 		"queryEscape": url.QueryEscape,
-		"compareURL": func(specID, oldV, newV, section string) string {
+		"compareURL": func(specID, oldV, newV, section, oldSection string) string {
 			u := "/specs/" + url.PathEscape(specID) + "/compare?old=" + url.QueryEscape(oldV)
 			if newV != "" {
 				u += "&new=" + url.QueryEscape(newV)
 			}
 			if section != "" {
 				u += "&section=" + url.QueryEscape(section)
+			}
+			// A renumbered section needs its old number for the old-side read.
+			if oldSection != "" && oldSection != section {
+				u += "&old_section=" + url.QueryEscape(oldSection)
 			}
 			return u
 		},

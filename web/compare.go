@@ -28,6 +28,9 @@ type compareData struct {
 	SpecID             string
 	OldParam, NewParam string // request values, carried into generated links
 	Section            string
+	// OldSection is the section's number on the old side when it differs from
+	// Section — a section that was renumbered and edited.
+	OldSection         string
 	OldLabel, NewLabel string
 	// OldURLVersion/NewURLVersion are the versions section links must carry;
 	// empty for the database version.
@@ -43,10 +46,11 @@ func (h *handler) handleCompare(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
 	data := compareData{
-		SpecID:   specID,
-		OldParam: q.Get("old"),
-		NewParam: q.Get("new"),
-		Section:  q.Get("section"),
+		SpecID:     specID,
+		OldParam:   q.Get("old"),
+		NewParam:   q.Get("new"),
+		Section:    q.Get("section"),
+		OldSection: q.Get("old_section"),
 	}
 
 	// Without an old version there is nothing to compare yet; show the form.
@@ -111,7 +115,12 @@ func (h *handler) compareStructurePage(w http.ResponseWriter, r *http.Request, d
 }
 
 func (h *handler) compareSectionPage(w http.ResponseWriter, r *http.Request, data compareData) {
-	oldSecs, oldRes, oldErr := h.src.GetSection(r.Context(), data.SpecID, data.OldParam, data.Section, false)
+	// A renumbered section lives under a different number on the old side.
+	oldSection := data.OldSection
+	if oldSection == "" {
+		oldSection = data.Section
+	}
+	oldSecs, oldRes, oldErr := h.src.GetSection(r.Context(), data.SpecID, data.OldParam, oldSection, false)
 	newSecs, newRes, newErr := h.src.GetSection(r.Context(), data.SpecID, data.NewParam, data.Section, false)
 	if h.renderCompareErrors(w, oldErr, newErr) {
 		return

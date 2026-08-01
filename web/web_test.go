@@ -1336,3 +1336,63 @@ func TestHandleCompare_FetchInProgress(t *testing.T) {
 		t.Errorf("expected an auto-refreshing page, got:\n%s", body)
 	}
 }
+
+// TestHandleCompare_RenumberedSectionDiff checks that a section that was both
+// renumbered and edited links to a diff that reads each side under its own
+// number (old_section), instead of failing the old-side lookup.
+func TestHandleCompare_RenumberedSectionDiff(t *testing.T) {
+	// Two archived versions whose only section moved from 7 to 5.1.1 and was
+	// edited on the way.
+	fetcher := func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		spec := db.Spec{Title: "System architecture", Series: "23"}
+		if sv.Version == "j50" { // 19.5.0
+			spec.Release = "19"
+			return spec, []db.Section{{
+				Number:  "7",
+				Title:   "Overview",
+				Level:   1,
+				Content: "# 7 Overview\nOld body.",
+			}}, nil
+		}
+		spec.Release = "20"
+		return spec, []db.Section{{
+			Number:  "5.1.1",
+			Title:   "Overview",
+			Level:   3,
+			Content: "## 5.1.1 Overview\nNew body.",
+		}}, nil
+	}
+	ts, _ := setupVersionedServer(t, fetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=19.5.0&new=20.2.0")
+	if err != nil {
+		t.Fatalf("GET compare: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	wantLink := "section=5.1.1&amp;old_section=7"
+	if !strings.Contains(body, wantLink) {
+		t.Fatalf("expected the diff link to carry the old number (%s), got:\n%s", wantLink, body)
+	}
+
+	resp2, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=19.5.0&new=20.2.0&section=5.1.1&old_section=7")
+	if err != nil {
+		t.Fatalf("GET renumbered diff: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp2.StatusCode)
+	}
+	body2 := readBody(t, resp2)
+	if strings.Contains(body2, "does not exist") {
+		t.Fatalf("the old side must resolve under its old number, got:\n%s", body2)
+	}
+	if !strings.Contains(body2, "Old body.") || !strings.Contains(body2, "New body.") {
+		t.Errorf("expected both sides in the diff, got:\n%s", body2)
+	}
+	if !strings.Contains(body2, "7 &rarr; 5.1.1") {
+		t.Errorf("expected the header to show the renumbering, got:\n%s", body2)
+	}
+}
