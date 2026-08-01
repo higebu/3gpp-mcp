@@ -1,0 +1,48 @@
+{{define "versions.html"}}
+<div class="versions-page">
+    <div class="page-header">
+        <h1>{{.SpecID}} — Versions</h1>
+        <p class="subtitle"><a href="{{specURL .SpecID}}">Back to the specification</a></p>
+    </div>
+
+    {{if .ArchiveErr}}
+    <p class="search-error">{{.ArchiveErr}}</p>
+    {{end}}
+
+    <div class="table-responsive">
+        <table class="specs-table">
+            <thead>
+                <tr>
+                    <th>Version</th>
+                    <th>Release</th>
+                    <th>Availability</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{$specID := .SpecID}}
+                {{$dbVersion := .DBVersion}}
+                {{range .Versions}}
+                <tr>
+                    <td>{{.Version}}</td>
+                    <td>{{releaseLabel .Release}}</td>
+                    <td><span class="badge badge-{{.Availability}}">{{.Availability}}</span></td>
+                    <td class="version-actions">
+                        {{if eq .Availability "database"}}
+                        <a href="{{specURL $specID}}">Browse</a>
+                        {{else}}
+                        <a href="{{specURL $specID}}?version={{queryEscape .Version}}">Browse</a>
+                        {{if $dbVersion}}
+                        <a href="{{specURL $specID}}/compare?old={{queryEscape .Version}}">Compare</a>
+                        {{end}}
+                        {{end}}
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+
+    <p class="versions-note">Reading an <span class="badge badge-archive">archive</span> version downloads and converts it first, which takes up to a few minutes for a large specification. Cross-references, search and OpenAPI definitions only cover the <span class="badge badge-database">database</span> version.</p>
+</div>
+{{end}}

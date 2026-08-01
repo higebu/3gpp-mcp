@@ -31,6 +31,7 @@ func NewServer(src *tools.Source) http.Handler {
 	// Pages
 	mux.HandleFunc("GET /{$}", h.handleIndex)
 	mux.HandleFunc("GET /specs/{specID}", h.handleSpec)
+	mux.HandleFunc("GET /specs/{specID}/versions", h.handleVersions)
 	mux.HandleFunc("GET /specs/{specID}/sections/{number...}", h.handleSection)
 	mux.HandleFunc("GET /specs/{specID}/images/{name...}", h.handleImage)
 	mux.HandleFunc("GET /specs/{specID}/openapi", h.handleOpenAPIList)

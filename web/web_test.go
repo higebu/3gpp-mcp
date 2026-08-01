@@ -1142,3 +1142,75 @@ func TestHandleImage_FetchInProgress(t *testing.T) {
 		t.Error("expected a Retry-After header on the in-progress answer")
 	}
 }
+
+// TestHandleVersions lists all three availability classes with their badges
+// and action links.
+func TestHandleVersions(t *testing.T) {
+	ts, src := setupVersionedServer(t, cannedFetcher, nil)
+
+	// Cache one version so all three availability values appear.
+	if _, _, err := src.GetSection(context.Background(), "TS 23.501", "19.5.0", "5.1", false); err != nil {
+		t.Fatalf("prime cache: %v", err)
+	}
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/versions")
+	if err != nil {
+		t.Fatalf("GET versions: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	for _, want := range []string{
+		"20.2.0", "19.5.0", "18.6.0",
+		"badge-archive", "badge-cached", "badge-database",
+		"?version=20.2.0",
+		"/compare?old=20.2.0",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("versions page should contain %q, got:\n%s", want, body)
+		}
+	}
+}
+
+// TestHandleVersions_ArchiveUnreachable still lists the database version and
+// warns that the archive listing failed.
+func TestHandleVersions_ArchiveUnreachable(t *testing.T) {
+	// archiveClient only serves the TS 23.501 listing, so any other spec's
+	// archive lookup fails while its database row remains.
+	ts, _ := setupVersionedServer(t, cannedFetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 24.229/versions")
+	if err != nil {
+		t.Fatalf("GET versions: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "archive listing could not be loaded") {
+		t.Errorf("expected an archive warning, got:\n%s", body)
+	}
+	if !strings.Contains(body, "badge-database") {
+		t.Errorf("expected the database version row to survive, got:\n%s", body)
+	}
+}
+
+// TestHandleVersions_UnknownSpec answers 404 for a spec that exists nowhere.
+func TestHandleVersions_UnknownSpec(t *testing.T) {
+	ts, _ := setupVersionedServer(t, cannedFetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 99.999/versions")
+	if err != nil {
+		t.Fatalf("GET versions: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}

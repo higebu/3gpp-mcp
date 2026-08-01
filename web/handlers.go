@@ -69,6 +69,17 @@ type fetchingData struct {
 	Images  bool
 }
 
+type versionsData struct {
+	SpecID   string
+	Versions []tools.VersionInfo
+	// ArchiveErr warns that the archive listing failed, so the table may
+	// only cover the cache and the database.
+	ArchiveErr string
+	// DBVersion is the version the database holds, the default "new" side of
+	// a comparison.
+	DBVersion string
+}
+
 type sectionRendered struct {
 	Number  string
 	Title   string
@@ -342,6 +353,46 @@ func adjacentSections(toc []db.Section, number string) (prev, next *db.Section) 
 		return prev, next
 	}
 	return nil, nil
+}
+
+// handleVersions lists every known version of a spec with where it can be
+// read from. The archive listing is scraped from the 3GPP FTP server, which
+// is why this is a dedicated page rather than part of every spec page.
+func (h *handler) handleVersions(w http.ResponseWriter, r *http.Request) {
+	specID := r.PathValue("specID")
+
+	versions, archiveErr, err := h.src.ListVersions(r.Context(), specID)
+	if err != nil {
+		log.Printf("ListVersions error: %v", err)
+		h.renderError(w, http.StatusInternalServerError, "Failed to list versions")
+		return
+	}
+	if len(versions) == 0 {
+		msg := fmt.Sprintf("No versions found for %q", specID)
+		if archiveErr != nil {
+			msg += fmt.Sprintf(" (archive listing failed: %v)", archiveErr)
+		}
+		h.renderError(w, http.StatusNotFound, msg)
+		return
+	}
+
+	data := versionsData{
+		SpecID:   specID,
+		Versions: versions,
+	}
+	if archiveErr != nil {
+		data.ArchiveErr = "The archive listing could not be loaded; this list may be missing archive-only versions."
+	}
+	for _, v := range versions {
+		if v.Availability == tools.AvailabilityDatabase {
+			data.DBVersion = v.Version
+			break
+		}
+	}
+
+	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "versions", Data: data, NavSpecID: specID}); err != nil {
+		log.Printf("template error: %v", err)
+	}
 }
 
 func (h *handler) handleImage(w http.ResponseWriter, r *http.Request) {

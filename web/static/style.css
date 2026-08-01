@@ -737,6 +737,22 @@ mark {
     color: var(--text-secondary);
 }
 
+/* === Versions page === */
+.version-actions a {
+    margin-right: 0.75rem;
+}
+
+.versions-note {
+    margin-top: 1rem;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.toc-links {
+    margin-top: 0.35rem;
+    font-size: 0.85rem;
+}
+
 /* === Fetching (version download in progress) === */
 .fetching-page {
     max-width: 600px;
