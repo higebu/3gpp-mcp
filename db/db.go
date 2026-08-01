@@ -1010,6 +1010,14 @@ func sanitizeFTS5Query(query string) string {
 	return strings.Join(result, " ")
 }
 
+// bm25Weights orders search hits: title matches dominate, spec_id barely
+// counts (a spec-number query matches the spec_id column of every section of
+// that spec, which would otherwise flood the ranking). Column order is
+// spec_id, number, title, content. bm25() returns negative scores, smaller =
+// better, so ORDER BY stays ascending. Weighting must happen in the query:
+// setting the table's rank option needs a write, and serve opens read-only.
+const bm25Weights = "bm25(sections_fts, 0.5, 1.0, 5.0, 1.0)"
+
 func (d *DB) Search(query string, specIDs []string, limit, offset int) (*SearchResults, error) {
 	if limit <= 0 {
 		limit = DefaultSearchLimit
@@ -1048,8 +1056,10 @@ func (d *DB) Search(query string, specIDs []string, limit, offset int) (*SearchR
 		return nil, fmt.Errorf("invalid search query %q: %w", query, err)
 	}
 
-	sqlQuery := "SELECT sections_fts.spec_id, sections_fts.number, sections_fts.title, snippet(sections_fts, 3, '<mark>', '</mark>', '...', 32), s.version, COALESCE(p.release, '') " +
-		fromWhere + " ORDER BY sections_fts.rank LIMIT ? OFFSET ?"
+	// Column -1 lets FTS5 pick the best-matching column for the snippet, so a
+	// title-only hit shows the marked title instead of an unmarked content head.
+	sqlQuery := "SELECT sections_fts.spec_id, sections_fts.number, sections_fts.title, snippet(sections_fts, -1, '<mark>', '</mark>', '...', 32), s.version, COALESCE(p.release, '') " +
+		fromWhere + " ORDER BY " + bm25Weights + " LIMIT ? OFFSET ?"
 	args := append(append([]any{}, filterArgs...), limit, offset)
 
 	rows, err := d.conn.Query(sqlQuery, args...)

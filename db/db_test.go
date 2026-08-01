@@ -610,6 +610,57 @@ The guardband requirements are specified here.');`)
 	})
 }
 
+func TestSearchRanking(t *testing.T) {
+	d := setupTestDB(t)
+
+	// Same term in one section's title and another section's body: the title
+	// hit must rank first under the weighted bm25 ordering.
+	if err := d.ExecScript(`INSERT INTO specs (id, version, title) VALUES ('TS 90.001', '1.0.0', 'Ranking probe');
+INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES
+    ('TS 90.001', '1.0.0', '1', 'Miscellaneous', 1, NULL, '# 1 Miscellaneous
+The rankprobe term appears in this body text only, nowhere else.'),
+    ('TS 90.001', '1.0.0', '2', 'Rankprobe overview', 1, NULL, '# 2 Overview
+This body says nothing relevant at all.');`); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+
+	page, err := d.Search("rankprobe", nil, 10, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(page.Results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(page.Results))
+	}
+	if page.Results[0].Number != "2" {
+		t.Errorf("expected title hit (section 2) ranked first, got section %q", page.Results[0].Number)
+	}
+}
+
+func TestSearchSnippetColumn(t *testing.T) {
+	d := setupTestDB(t)
+
+	// A term that only appears in the title: the snippet must come from the
+	// title column and carry the match markers.
+	if err := d.ExecScript(`INSERT INTO specs (id, version, title) VALUES ('TS 90.002', '1.0.0', 'Snippet probe');
+INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES
+    ('TS 90.002', '1.0.0', '1', 'Snippetprobe requirements', 1, NULL, '# 1 Requirements
+Body text without the probe term.');`); err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+
+	page, err := d.Search("snippetprobe", nil, 10, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(page.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(page.Results))
+	}
+	snippet := page.Results[0].Snippet
+	if !strings.Contains(snippet, "<mark>") || !strings.Contains(snippet, "Snippetprobe") {
+		t.Errorf("expected marked title snippet, got %q", snippet)
+	}
+}
+
 func TestFindSpecIDsByFamily(t *testing.T) {
 	d := setupTestDB(t)
 
