@@ -96,7 +96,7 @@ func TestGetSectionUsesDatabaseVersion(t *testing.T) {
 		if len(sections) != 1 {
 			t.Fatalf("GetSection(%q) = %d sections, want 1", request, len(sections))
 		}
-		if res.archived {
+		if res.Archived {
 			t.Errorf("GetSection(%q) reported archived, want database", request)
 		}
 	}
@@ -111,8 +111,8 @@ func TestGetSectionFetchesArchivedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSection: %v", err)
 	}
-	if !res.archived || res.version != "19.5.0" {
-		t.Fatalf("resolution = %+v, want archived v19.5.0", res)
+	if !res.Archived || res.Version != "19.5.0" {
+		t.Fatalf("Resolution = %+v, want archived v19.5.0", res)
 	}
 	if len(sections) != 1 || !strings.Contains(sections[0].Content, "Archived text") {
 		t.Fatalf("GetSection = %+v, want the fetched content", sections)
@@ -127,7 +127,7 @@ func TestGetSectionFetchesArchivedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTOC: %v", err)
 	}
-	if !res.archived || len(toc) != 1 {
+	if !res.Archived || len(toc) != 1 {
 		t.Errorf("GetTOC = %+v, %+v; want one archived section", toc, res)
 	}
 }

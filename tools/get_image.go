@@ -37,7 +37,7 @@ func HandleGetImage(src *Source) func(ctx context.Context, req *mcp.CallToolRequ
 
 		if !img.LLMReadable {
 			hint := "Re-run the pipeline with --convert-image flag to convert EMF/WMF images to PNG."
-			if res.archived {
+			if res.Archived {
 				hint = "Converting it needs LibreOffice (soffice), which was missing or failed to convert this image when this version's images were fetched."
 			}
 			return errorResult(fmt.Sprintf(

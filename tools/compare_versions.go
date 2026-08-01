@@ -150,11 +150,11 @@ func compareSection(ctx context.Context, src *Source, input CompareVersionsInput
 // twoVersionErrorResult reports version-resolution errors for a two-version
 // read, folding a double in-progress fetch into one retry hint.
 func twoVersionErrorResult(oldErr, newErr error) *mcp.CallToolResult {
-	var oldIP, newIP *errFetchInProgress
+	var oldIP, newIP *FetchInProgressError
 	if errors.As(oldErr, &oldIP) && errors.As(newErr, &newIP) {
 		return textResult(fmt.Sprintf(
 			"%s v%s and v%s are being downloaded and converted. This takes up to a few minutes for a large specification. Call the same tool again to get the comparison.",
-			oldIP.specID, oldIP.version, newIP.version))
+			oldIP.SpecID, oldIP.Version, newIP.Version))
 	}
 	if oldErr != nil {
 		return versionErrorResult(oldErr, "failed to read old version")
@@ -167,7 +167,7 @@ func twoVersionErrorResult(oldErr, newErr error) *mcp.CallToolResult {
 
 // checkComparable rejects a comparison with nothing on either side or with
 // both requests landing on the same version.
-func checkComparable(src *Source, specID string, oldSecs, newSecs []db.Section, oldRes, newRes resolution) *mcp.CallToolResult {
+func checkComparable(src *Source, specID string, oldSecs, newSecs []db.Section, oldRes, newRes Resolution) *mcp.CallToolResult {
 	if len(oldSecs) == 0 && len(newSecs) == 0 {
 		if parts, err := src.DB.FindSpecIDsByFamily(specID); err == nil && len(parts) > 0 {
 			return errorResult(fmt.Sprintf("%s has multiple parts: %s — specify one", specID, strings.Join(parts, ", ")))
@@ -181,11 +181,11 @@ func checkComparable(src *Source, specID string, oldSecs, newSecs []db.Section, 
 	return nil
 }
 
-// resolvedVersion names the version a request landed on. The resolution knows
+// resolvedVersion names the version a request landed on. The Resolution knows
 // it except on the database default path, where the rows do.
-func resolvedVersion(secs []db.Section, res resolution) string {
-	if res.version != "" {
-		return res.version
+func resolvedVersion(secs []db.Section, res Resolution) string {
+	if res.Version != "" {
+		return res.Version
 	}
 	if len(secs) > 0 {
 		return secs[0].Version
@@ -194,7 +194,7 @@ func resolvedVersion(secs []db.Section, res resolution) string {
 }
 
 // versionLabel renders one side of a comparison, e.g. "v17.9.0 (Rel-17, archived)".
-func versionLabel(secs []db.Section, res resolution) string {
+func versionLabel(secs []db.Section, res Resolution) string {
 	name := resolvedVersion(secs, res)
 	if name == "" {
 		return "the database version"
@@ -206,7 +206,7 @@ func versionLabel(secs []db.Section, res resolution) string {
 			notes = append(notes, rel)
 		}
 	}
-	if res.archived {
+	if res.Archived {
 		notes = append(notes, "archived")
 	}
 	if len(notes) > 0 {

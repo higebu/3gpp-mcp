@@ -29,11 +29,11 @@ func errorResult(text string) *mcp.CallToolResult {
 // still running is not a failure — the caller just has to come back — so it is
 // reported as ordinary text rather than as a tool error.
 func versionErrorResult(err error, prefix string) *mcp.CallToolResult {
-	var inProgress *errFetchInProgress
+	var inProgress *FetchInProgressError
 	if errors.As(err, &inProgress) {
 		return textResult(inProgress.Error())
 	}
-	var unavailable *errVersionUnavailable
+	var unavailable *VersionUnavailableError
 	if errors.As(err, &unavailable) {
 		return errorResult(unavailable.Error())
 	}

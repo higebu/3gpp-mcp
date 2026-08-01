@@ -53,7 +53,7 @@ func HandleGetSection(src *Source) func(ctx context.Context, req *mcp.CallToolRe
 		}
 
 		result := paginateText(full.String(), input.Offset, input.MaxLines, input.MaxChars)
-		header := sourceHeader(sections[0], input.IncludeSubsections && len(sections) > 1, res.archived)
+		header := sourceHeader(sections[0], input.IncludeSubsections && len(sections) > 1, res.Archived)
 		return prependLine(header, result), nil, nil
 	}
 }
@@ -76,9 +76,9 @@ func sourceHeader(s db.Section, withSubsections, archived bool) string {
 }
 
 // versionSuffix names the version in a not-found message when one was resolved.
-func versionSuffix(res resolution) string {
-	if res.version == "" {
+func versionSuffix(res Resolution) string {
+	if res.Version == "" {
 		return ""
 	}
-	return " v" + res.version
+	return " v" + res.Version
 }
