@@ -10,6 +10,7 @@ import (
 
 	"github.com/higebu/3gpp-mcp/db"
 	"github.com/higebu/3gpp-mcp/internal/testutil"
+	"github.com/higebu/3gpp-mcp/tools"
 )
 
 func TestRenderMarkdown(t *testing.T) {
@@ -148,7 +149,7 @@ func TestRefURL(t *testing.T) {
 func setupTestServer(t *testing.T) (*httptest.Server, *db.DB) {
 	t.Helper()
 	d := testutil.SetupTestDB(t)
-	srv := NewServer(d)
+	srv := NewServer(tools.NewSource(d))
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
 	return ts, d

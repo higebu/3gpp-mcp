@@ -841,7 +841,7 @@ func TestBuildHTTPHandler_WebViewerAuth(t *testing.T) {
 	s := newMCPServer(d, tools.NewSource(d))
 
 	t.Run("token set", func(t *testing.T) {
-		handler := buildHTTPHandler(d, s, "secret-token", true)
+		handler := buildHTTPHandler(tools.NewSource(d), s, "secret-token", true)
 		ts := httptest.NewServer(handler)
 		defer ts.Close()
 
@@ -880,7 +880,7 @@ func TestBuildHTTPHandler_WebViewerAuth(t *testing.T) {
 	})
 
 	t.Run("no token keeps viewer open", func(t *testing.T) {
-		handler := buildHTTPHandler(d, s, "", true)
+		handler := buildHTTPHandler(tools.NewSource(d), s, "", true)
 		ts := httptest.NewServer(handler)
 		defer ts.Close()
 

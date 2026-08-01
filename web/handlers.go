@@ -12,9 +12,11 @@ import (
 
 	"github.com/higebu/3gpp-mcp/db"
 	"github.com/higebu/3gpp-mcp/internal/specver"
+	"github.com/higebu/3gpp-mcp/tools"
 )
 
 type handler struct {
+	src   *tools.Source
 	db    *db.DB
 	tmpls *template.Template
 }
