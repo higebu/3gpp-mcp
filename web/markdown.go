@@ -51,8 +51,9 @@ func init() {
 }
 
 // renderMarkdown converts Markdown content to HTML, rewriting image:// URLs
-// and linkifying inline spec/RFC references.
-func renderMarkdown(content, specID string, bracketMap map[string]string) string {
+// and linkifying inline spec/RFC references. A non-empty version is carried
+// on every image URL so an archived version serves its own images.
+func renderMarkdown(content, specID, version string, bracketMap map[string]string) string {
 	// Linkify spec references before image/figure rewrites to avoid processing HTML attributes.
 	content = db.LinkifyRefs(content, bracketMap, func(spec, section string) string {
 		if strings.HasPrefix(spec, "RFC ") {
@@ -69,10 +70,17 @@ func renderMarkdown(content, specID string, bracketMap map[string]string) string
 		return u
 	})
 	escapedSpec := url.PathEscape(specID)
+	imageURL := func(name string) string {
+		src := "/specs/" + escapedSpec + "/images/" + url.PathEscape(name)
+		if version != "" {
+			src += "?version=" + url.QueryEscape(version)
+		}
+		return src
+	}
 	content = imageRE.ReplaceAllStringFunc(content, func(match string) string {
 		sub := imageRE.FindStringSubmatch(match)
 		alt, name := sub[1], sub[2]
-		src := "/specs/" + escapedSpec + "/images/" + url.PathEscape(name)
+		src := imageURL(name)
 		if sub[3] != "" && sub[4] != "" {
 			return fmt.Sprintf(`<img src="%s" alt="%s" width="%s" height="%s">`,
 				src, htmlpkg.EscapeString(alt), sub[3], sub[4])
@@ -82,13 +90,12 @@ func renderMarkdown(content, specID string, bracketMap map[string]string) string
 	content = htmlImageRE.ReplaceAllStringFunc(content, func(match string) string {
 		sub := htmlImageRE.FindStringSubmatch(match)
 		prefix, name, suffix := sub[1], sub[2], sub[3]
-		src := "/specs/" + escapedSpec + "/images/" + url.PathEscape(name)
-		return prefix + src + suffix
+		return prefix + imageURL(name) + suffix
 	})
 	content = figureRE.ReplaceAllStringFunc(content, func(match string) string {
 		sub := figureRE.FindStringSubmatch(match)
 		alt, name := sub[1], sub[2]
-		src := "/specs/" + escapedSpec + "/images/" + url.PathEscape(name)
+		src := imageURL(name)
 		escapedAlt := htmlpkg.EscapeString(alt)
 		dimAttrs := ""
 		if len(sub) >= 5 && sub[3] != "" && sub[4] != "" {

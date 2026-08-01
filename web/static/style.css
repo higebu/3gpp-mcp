@@ -707,6 +707,67 @@ mark {
     text-align: center;
 }
 
+/* === Availability badges === */
+.badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1;
+    padding: 3px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    vertical-align: middle;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.badge-database {
+    background: var(--sidebar-active);
+    color: var(--link);
+    border-color: transparent;
+}
+
+.badge-cached {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+
+.badge-archive {
+    background: transparent;
+    color: var(--text-secondary);
+}
+
+/* === Fetching (version download in progress) === */
+.fetching-page {
+    max-width: 600px;
+    margin: 4rem auto;
+    text-align: center;
+}
+
+.fetching-page h1 {
+    font-size: 1.4rem;
+    margin-bottom: 1rem;
+}
+
+.fetching-page p {
+    color: var(--text-secondary);
+    margin-bottom: 0.75rem;
+}
+
+.fetching-spinner {
+    width: 28px;
+    height: 28px;
+    margin: 1.5rem auto 0;
+    border: 3px solid var(--border);
+    border-top-color: var(--link);
+    border-radius: 50%;
+    animation: fetching-spin 0.9s linear infinite;
+}
+
+@keyframes fetching-spin {
+    to { transform: rotate(360deg); }
+}
+
 /* === OpenAPI === */
 .openapi-page {
     max-width: 1000px;

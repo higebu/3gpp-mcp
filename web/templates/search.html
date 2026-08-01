@@ -11,7 +11,7 @@
         {{range .Results}}
         <div class="search-result">
             <h3>
-                <a href="{{sectionURL .SpecID .Number}}">{{.SpecID}}{{if ne .Number .Title}} &sect;{{.Number}}{{end}}</a>
+                <a href="{{sectionURL .SpecID .Number ""}}">{{.SpecID}}{{if ne .Number .Title}} &sect;{{.Number}}{{end}}</a>
                 <span class="result-title">{{.Title}}</span>
                 <span class="result-version">v{{.Version}}{{with .Release}} ({{releaseLabel .}}){{end}}</span>
             </h3>

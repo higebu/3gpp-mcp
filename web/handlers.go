@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	htmlpkg "html"
 	"html/template"
@@ -30,6 +31,7 @@ type layoutData struct {
 	Data      any
 	NavQuery  string // pre-fills the navbar search query input (only set on /search)
 	NavSpecID string // pre-fills the navbar spec ID input with the current spec scope
+	Refresh   int    // auto-refresh interval in seconds; 0 disables the meta tag
 }
 
 type indexData struct {
@@ -53,6 +55,18 @@ type specData struct {
 	OpenAPIs   []db.OpenAPISpec
 	Prev       *db.Section
 	Next       *db.Section
+	// Version is the version to carry in generated URLs. It is empty for the
+	// database version so canonical URLs stay stable.
+	Version  string
+	Archived bool
+}
+
+// fetchingData drives the "download in progress" page shown while an archived
+// version is being fetched and converted.
+type fetchingData struct {
+	SpecID  string
+	Version string
+	Images  bool
 }
 
 type sectionRendered struct {
@@ -105,8 +119,12 @@ func (h *handler) initTemplates() {
 		"specURL": func(specID string) string {
 			return "/specs/" + url.PathEscape(specID)
 		},
-		"sectionURL": func(specID, number string) string {
-			return "/specs/" + url.PathEscape(specID) + "/sections/" + number
+		"sectionURL": func(specID, number, version string) string {
+			u := "/specs/" + url.PathEscape(specID) + "/sections/" + number
+			if version != "" {
+				u += "?version=" + url.QueryEscape(version)
+			}
+			return u
 		},
 		"refURL": refURL,
 		// releaseLabel renders a bare release number as "Rel-18"; anything else
@@ -199,18 +217,52 @@ func (h *handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) handleSpec(w http.ResponseWriter, r *http.Request) {
 	specID := r.PathValue("specID")
-	h.renderSpecPage(w, specID, "")
+	h.renderSpecPage(w, r, specID, "")
 }
 
 func (h *handler) handleSection(w http.ResponseWriter, r *http.Request) {
 	specID := r.PathValue("specID")
 	number := r.PathValue("number")
-	h.renderSpecPage(w, specID, number)
+	h.renderSpecPage(w, r, specID, number)
 }
 
-func (h *handler) renderSpecPage(w http.ResponseWriter, specID, number string) {
-	toc, err := h.db.GetTOC(specID, "")
-	if err != nil || len(toc) == 0 {
+// renderVersionError renders the failure of a version-aware read: a fetch
+// still running becomes an auto-refreshing "in progress" page, an unknown
+// version a 404 naming the versions that do exist.
+func (h *handler) renderVersionError(w http.ResponseWriter, err error) {
+	var inProgress *tools.FetchInProgressError
+	if errors.As(err, &inProgress) {
+		h.renderFetching(w, inProgress)
+		return
+	}
+	var unavailable *tools.VersionUnavailableError
+	if errors.As(err, &unavailable) {
+		h.renderError(w, http.StatusNotFound, unavailable.Error())
+		return
+	}
+	h.renderError(w, http.StatusInternalServerError, "Failed to load version")
+}
+
+// renderFetching answers 202 with a page that reloads itself: every reload
+// joins the running fetch and waits up to the fetch budget, so the page
+// resolves as soon as the download finishes.
+func (h *handler) renderFetching(w http.ResponseWriter, inProgress *tools.FetchInProgressError) {
+	w.WriteHeader(http.StatusAccepted)
+	data := fetchingData{SpecID: inProgress.SpecID, Version: inProgress.Version, Images: inProgress.Images}
+	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "fetching", Data: data, Refresh: 10}); err != nil {
+		log.Printf("template error: %v", err)
+	}
+}
+
+func (h *handler) renderSpecPage(w http.ResponseWriter, r *http.Request, specID, number string) {
+	version := r.URL.Query().Get("version")
+
+	toc, res, err := h.src.GetTOC(r.Context(), specID, version)
+	if err != nil {
+		h.renderVersionError(w, err)
+		return
+	}
+	if len(toc) == 0 {
 		h.renderError(w, http.StatusNotFound, fmt.Sprintf("Specification %q not found", specID))
 		return
 	}
@@ -220,16 +272,36 @@ func (h *handler) renderSpecPage(w http.ResponseWriter, specID, number string) {
 		number = toc[0].Number
 	}
 
-	sections, err := h.db.GetSection(specID, "", number, false)
-	if err != nil || len(sections) == 0 {
+	sections, _, err := h.src.GetSection(r.Context(), specID, version, number, false)
+	if err != nil {
+		h.renderVersionError(w, err)
+		return
+	}
+	if len(sections) == 0 {
 		h.renderError(w, http.StatusNotFound, fmt.Sprintf("Section %q not found in %s", number, specID))
 		return
 	}
 
-	bracketMap, _ := h.db.GetBracketMap(specID, "")
-	rendered := renderSections(sections, specID, bracketMap)
-	openAPIs, _ := h.db.ListOpenAPI(specID)
-	refs, _ := h.db.GetReferences(specID, "", number, db.DirectionOutgoing, false)
+	// The database version keeps canonical URLs; an archived version has to
+	// carry itself in every generated link.
+	urlVersion := ""
+	if res.Archived {
+		urlVersion = res.Version
+	}
+
+	// Cross-references, OpenAPI definitions and the bracketed-reference map
+	// only exist for the database version. The database version's bracket map
+	// would mislink an archived version — reference numbering moves between
+	// versions — so archived pages linkify without one.
+	var bracketMap map[string]string
+	var openAPIs []db.OpenAPISpec
+	var refs []db.Reference
+	if !res.Archived {
+		bracketMap, _ = h.db.GetBracketMap(specID, "")
+		openAPIs, _ = h.db.ListOpenAPI(specID)
+		refs, _ = h.db.GetReferences(specID, "", number, db.DirectionOutgoing, false)
+	}
+	rendered := renderSections(sections, specID, urlVersion, bracketMap)
 	prev, next := adjacentSections(toc, number)
 
 	data := specData{
@@ -243,6 +315,8 @@ func (h *handler) renderSpecPage(w http.ResponseWriter, specID, number string) {
 		OpenAPIs:   openAPIs,
 		Prev:       prev,
 		Next:       next,
+		Version:    urlVersion,
+		Archived:   res.Archived,
 	}
 
 	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "spec", Data: data, NavSpecID: specID}); err != nil {
@@ -273,9 +347,22 @@ func adjacentSections(toc []db.Section, number string) (prev, next *db.Section) 
 func (h *handler) handleImage(w http.ResponseWriter, r *http.Request) {
 	specID := r.PathValue("specID")
 	name := r.PathValue("name")
+	version := r.URL.Query().Get("version")
 
-	img, err := h.db.GetImage(specID, "", name)
+	img, _, err := h.src.GetImage(r.Context(), specID, version, name)
 	if err != nil {
+		// An archived version's images download on first use; tell the
+		// browser to come back rather than caching a 404.
+		var inProgress *tools.FetchInProgressError
+		if errors.As(err, &inProgress) {
+			w.Header().Set("Retry-After", "10")
+			http.Error(w, "images are being downloaded; reload shortly", http.StatusAccepted)
+			return
+		}
+		http.NotFound(w, r)
+		return
+	}
+	if img == nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -376,14 +463,14 @@ func (h *handler) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 
 // Helper functions
 
-func renderSections(sections []db.Section, specID string, bracketMap map[string]string) []sectionRendered {
+func renderSections(sections []db.Section, specID, version string, bracketMap map[string]string) []sectionRendered {
 	rendered := make([]sectionRendered, len(sections))
 	for i, s := range sections {
 		rendered[i] = sectionRendered{
 			Number:  s.Number,
 			Title:   s.Title,
 			Level:   s.Level,
-			Content: template.HTML(renderMarkdown(s.Content, specID, bracketMap)), //nolint:gosec
+			Content: template.HTML(renderMarkdown(s.Content, specID, version, bracketMap)), //nolint:gosec
 		}
 	}
 	return rendered

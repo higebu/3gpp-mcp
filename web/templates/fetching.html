@@ -1,0 +1,12 @@
+{{define "fetching.html"}}
+<div class="fetching-page">
+    <h1>Preparing {{.SpecID}} v{{.Version}}</h1>
+    {{if .Images}}
+    <p>The images of this version are being downloaded and converted.</p>
+    {{else}}
+    <p>This version is being downloaded and converted. This takes up to a few minutes for a large specification.</p>
+    {{end}}
+    <p class="fetching-hint">This page refreshes automatically. You can also <a href="">reload it</a> yourself.</p>
+    <div class="fetching-spinner" aria-hidden="true"></div>
+</div>
+{{end}}

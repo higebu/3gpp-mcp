@@ -1,16 +1,22 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/higebu/3gpp-mcp/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/db"
 	"github.com/higebu/3gpp-mcp/internal/testutil"
 	"github.com/higebu/3gpp-mcp/tools"
+	"github.com/higebu/3gpp-mcp/versionstore"
 )
 
 func TestRenderMarkdown(t *testing.T) {
@@ -72,7 +78,7 @@ func TestRenderMarkdown(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := renderMarkdown(tt.content, tt.specID, nil)
+			result := renderMarkdown(tt.content, tt.specID, "", nil)
 			if !strings.Contains(result, tt.want) {
 				t.Errorf("renderMarkdown() = %q, want to contain %q", result, tt.want)
 			}
@@ -86,7 +92,7 @@ func TestRenderMarkdown(t *testing.T) {
 func TestRenderMarkdown_MathProtected(t *testing.T) {
 	t.Run("paragraph matrix keeps backslashes", func(t *testing.T) {
 		content := `$\begin{matrix} 1 & j \\ -1 & j \end{matrix}$`
-		got := renderMarkdown(content, "TS 38.211", nil)
+		got := renderMarkdown(content, "TS 38.211", "", nil)
 		want := `<span class="math-inline">\begin{matrix} 1 &amp; j \\ -1 &amp; j \end{matrix}</span>`
 		if !strings.Contains(got, want) {
 			t.Errorf("math not protected, got:\n%s", got)
@@ -96,7 +102,7 @@ func TestRenderMarkdown_MathProtected(t *testing.T) {
 	t.Run("pre-escaped table-cell math normalizes ampersand", func(t *testing.T) {
 		// Table HTML from the docx converter has already HTML-escaped & → &amp;.
 		content := `<table><tbody><tr><td>$1 &amp; 2$</td></tr></tbody></table>`
-		got := renderMarkdown(content, "TS 38.211", nil)
+		got := renderMarkdown(content, "TS 38.211", "", nil)
 		// The span's inner HTML must be single-escaped so textContent is "1 & 2".
 		want := `<span class="math-inline">1 &amp; 2</span>`
 		if !strings.Contains(got, want) {
@@ -727,7 +733,7 @@ func TestIsExternalRef(t *testing.T) {
 // text flows through htmlpkg.EscapeString before reaching the template.
 func TestRenderMarkdown_ImageAltEscaped(t *testing.T) {
 	content := `![alt"onload=x("y")](image://fig.png?w=600&h=400)`
-	got := renderMarkdown(content, "TS 23.501", nil)
+	got := renderMarkdown(content, "TS 23.501", "", nil)
 	if strings.Contains(got, `alt"onload`) {
 		t.Errorf("alt text should be HTML-escaped, got:\n%s", got)
 	}
@@ -739,7 +745,7 @@ func TestRenderMarkdown_ImageAltEscaped(t *testing.T) {
 // TestRenderMarkdown_FigureAltEscaped exercises the figure-syntax alt escaping.
 func TestRenderMarkdown_FigureAltEscaped(t *testing.T) {
 	content := `[Figure: <script>x</script> Network (fig.png, use get_image to retrieve, 100x100)]`
-	got := renderMarkdown(content, "TS 23.501", nil)
+	got := renderMarkdown(content, "TS 23.501", "", nil)
 	if strings.Contains(got, "<script>x</script> Network") {
 		t.Errorf("figure alt text should be escaped, got:\n%s", got)
 	}
@@ -757,7 +763,7 @@ func TestRenderMarkdown_FigureAltEscaped(t *testing.T) {
 // This test fails if that trust assumption silently changes.
 func TestRenderMarkdown_RawHTMLPassthrough(t *testing.T) {
 	content := "Inline <b>bold</b> and <script>alert(1)</script> here."
-	got := renderMarkdown(content, "TS 23.501", nil)
+	got := renderMarkdown(content, "TS 23.501", "", nil)
 	// Pins the current unsafe behaviour. If this ever starts escaping, it
 	// almost certainly means goldmark's WithUnsafe() was removed — verify the
 	// change is intentional before updating this expectation.
@@ -775,7 +781,7 @@ func TestRenderMarkdown_RawHTMLPassthrough(t *testing.T) {
 // correctly in the web viewer.
 func TestRenderMarkdown_SubSupPassthrough(t *testing.T) {
 	content := "n_78<sup>1</sup> and H<sub>2</sub>O"
-	got := renderMarkdown(content, "TS 23.501", nil)
+	got := renderMarkdown(content, "TS 23.501", "", nil)
 	if !strings.Contains(got, "<sup>1</sup>") {
 		t.Errorf("expected <sup> to pass through, got:\n%s", got)
 	}
@@ -789,7 +795,7 @@ func TestRenderMarkdown_SubSupPassthrough(t *testing.T) {
 // converter) are rewritten to a real /specs/<id>/images/<name> URL.
 func TestRenderMarkdown_HTMLImageRewrite(t *testing.T) {
 	content := `<table><tbody><tr><td><img src="image://fig.png?w=200&h=100" alt="diag" width="200" height="100"></td></tr></tbody></table>`
-	got := renderMarkdown(content, "TS 23.501", nil)
+	got := renderMarkdown(content, "TS 23.501", "", nil)
 	if !strings.Contains(got, `src="/specs/TS%2023.501/images/fig.png"`) {
 		t.Errorf("expected image:// to be rewritten to spec-relative URL, got:\n%s", got)
 	}
@@ -887,5 +893,252 @@ func TestHandleIndex_HugePage(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// --- Versioned-server scaffolding, mirroring tools/source_test.go. Promote to
+// internal/testutil if a third consumer appears. ---
+
+// redirectTransport rewrites all request URLs to point at the test server,
+// allowing tests to exercise code that uses the hardcoded pipeline baseURL.
+type redirectTransport struct {
+	base    http.RoundTripper
+	testURL string
+}
+
+func (rt *redirectTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	target, err := url.Parse(rt.testURL + req.URL.Path)
+	if err != nil {
+		return nil, err
+	}
+	req.URL = target
+	return rt.base.RoundTrip(req)
+}
+
+// archiveClient serves a listing for TS 23.501 covering the seeded v18.6.0
+// plus two versions the database does not have.
+func archiveClient(t *testing.T) *http.Client {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/", func(w http.ResponseWriter, _ *http.Request) {
+		for _, name := range []string{"23501-i60.zip", "23501-j50.zip", "23501-k20.zip"} {
+			fmt.Fprintf(w, `<a href="%s">%s</a>`+"\n", name, name)
+		}
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	return &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+}
+
+// setupVersionedServer builds a web server whose Source can fetch archived
+// versions through canned fetchers instead of the real archive.
+func setupVersionedServer(t *testing.T, fetcher versionstore.Fetcher, imageFetcher versionstore.ImageFetcher) (*httptest.Server, *tools.Source) {
+	t.Helper()
+	d := testutil.SetupTestDB(t)
+	store, err := versionstore.Open(versionstore.Options{
+		Path:         filepath.Join(t.TempDir(), "versions.db"),
+		Fetcher:      fetcher,
+		ImageFetcher: imageFetcher,
+	})
+	if err != nil {
+		t.Fatalf("versionstore.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	src := tools.NewSource(d)
+	src.Store = store
+	src.Client = archiveClient(t)
+	src.UseCache = false
+	src.Budget = 5 * time.Second
+
+	ts := httptest.NewServer(NewServer(src))
+	t.Cleanup(ts.Close)
+	return ts, src
+}
+
+func cannedFetcher(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+	return db.Spec{Title: "System architecture", Release: "19", Series: "23"},
+		[]db.Section{{
+			Number:  "5.1",
+			Title:   "General",
+			Level:   2,
+			Content: "## 5.1 General\nArchived text.\n![diagram](image://arch.png?w=100&h=80)",
+		}}, nil
+}
+
+func cannedImageFetcher(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+	return []db.Image{{
+		Name:        "arch.png",
+		MIMEType:    "image/png",
+		Data:        []byte("png-bytes"),
+		LLMReadable: true,
+	}}, nil
+}
+
+// TestHandleSection_ArchivedVersion covers browsing a version the database
+// does not hold: the content is fetched on demand, every generated link
+// carries the version, and database-only features degrade gracefully.
+func TestHandleSection_ArchivedVersion(t *testing.T) {
+	ts, _ := setupVersionedServer(t, cannedFetcher, cannedImageFetcher)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/sections/5.1?version=19.5.0")
+	if err != nil {
+		t.Fatalf("GET archived section: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "Archived text") {
+		t.Errorf("expected the fetched content, got:\n%s", body)
+	}
+	if !strings.Contains(body, "archived version; cross-references unavailable") {
+		t.Errorf("expected the archived note, got:\n%s", body)
+	}
+	if !strings.Contains(body, "?version=19.5.0") {
+		t.Errorf("expected TOC links to carry the version, got:\n%s", body)
+	}
+	if !strings.Contains(body, "/images/arch.png?version=19.5.0") {
+		t.Errorf("expected image URLs to carry the version, got:\n%s", body)
+	}
+	if strings.Contains(body, "References from this section") {
+		t.Errorf("an archived page must not show database-version references, got:\n%s", body)
+	}
+	if strings.Contains(body, "OpenAPI Definitions") {
+		t.Errorf("an archived page must not show database-version OpenAPI links, got:\n%s", body)
+	}
+}
+
+// TestHandleSection_FetchInProgress checks that a fetch outliving the budget
+// answers 202 with a page that refreshes itself.
+func TestHandleSection_FetchInProgress(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	ts, src := setupVersionedServer(t, func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		<-release
+		return cannedFetcher(ctx, sv)
+	}, nil)
+	src.Budget = 20 * time.Millisecond
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/sections/5.1?version=19.5.0")
+	if err != nil {
+		t.Fatalf("GET archived section: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, `http-equiv="refresh"`) {
+		t.Errorf("expected an auto-refreshing page, got:\n%s", body)
+	}
+	if !strings.Contains(body, "TS 23.501 v19.5.0") {
+		t.Errorf("expected the page to name the version being fetched, got:\n%s", body)
+	}
+}
+
+// TestHandleSection_UnknownVersion checks that a version that exists nowhere
+// yields 404 naming the versions that do exist.
+func TestHandleSection_UnknownVersion(t *testing.T) {
+	ts, _ := setupVersionedServer(t, cannedFetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/sections/5.1?version=12.0.0")
+	if err != nil {
+		t.Fatalf("GET unknown version: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	for _, want := range []string{"20.2.0", "19.5.0", "18.6.0"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected the error page to list version %s, got:\n%s", want, body)
+		}
+	}
+}
+
+// TestHandleSection_DatabaseVersionParam checks that naming the database
+// version explicitly renders the canonical page.
+func TestHandleSection_DatabaseVersionParam(t *testing.T) {
+	ts, _ := setupVersionedServer(t, func(context.Context, *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		t.Error("fetcher must not run for a version already in the database")
+		return db.Spec{}, nil, nil
+	}, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/sections/5.1?version=18.6.0")
+	if err != nil {
+		t.Fatalf("GET database version: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if strings.Contains(body, "?version=") {
+		t.Errorf("database-version links must stay canonical, got:\n%s", body)
+	}
+	if strings.Contains(body, "archived version") {
+		t.Errorf("the database version must not be labeled archived, got:\n%s", body)
+	}
+}
+
+// TestHandleImage_ArchivedVersion covers the lazy image fetch: the first read
+// downloads the version's images, later reads serve them.
+func TestHandleImage_ArchivedVersion(t *testing.T) {
+	ts, _ := setupVersionedServer(t, cannedFetcher, cannedImageFetcher)
+
+	// Prime the text cache so the image read resolves an archived version.
+	if resp, err := http.Get(ts.URL + "/specs/TS 23.501/sections/5.1?version=19.5.0"); err == nil {
+		resp.Body.Close()
+	}
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/images/arch.png?version=19.5.0")
+	if err != nil {
+		t.Fatalf("GET archived image: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := readBody(t, resp); got != "png-bytes" {
+		t.Errorf("image bytes = %q, want the fetched image", got)
+	}
+}
+
+// TestHandleImage_FetchInProgress checks that a still-running image download
+// answers 202 with a retry hint instead of a cacheable 404.
+func TestHandleImage_FetchInProgress(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	ts, src := setupVersionedServer(t, cannedFetcher, func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+		<-release
+		return cannedImageFetcher(ctx, sv)
+	})
+
+	// Prime the text cache with the normal budget, then shrink it so the
+	// blocked image download exceeds it.
+	if resp, err := http.Get(ts.URL + "/specs/TS 23.501/sections/5.1?version=19.5.0"); err == nil {
+		resp.Body.Close()
+	}
+	src.Budget = 20 * time.Millisecond
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/images/arch.png?version=19.5.0")
+	if err != nil {
+		t.Fatalf("GET archived image: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Error("expected a Retry-After header on the in-progress answer")
 	}
 }
