@@ -196,7 +196,7 @@ Browse specifications in your browser by adding `--web` to the HTTP transport:
 # Web viewer:   http://localhost:8080/
 ```
 
-Features: spec list with filtering, section viewer with TOC sidebar, full-text search, embedded images, cross-reference links, OpenAPI definitions with syntax highlighting, dark mode, responsive design.
+Features: spec list with filtering, section viewer with TOC sidebar, full-text search with pagination, past-version browsing (versions are listed per spec and downloaded on demand, like the MCP tools), version comparison (structural summary and per-section diffs), embedded images, cross-reference links, OpenAPI definitions with syntax highlighting, dark mode, responsive design.
 
 ## MCP Tools
 
