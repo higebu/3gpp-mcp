@@ -187,6 +187,19 @@ func parseParagraphFromDecoder(d *xml.Decoder, _ xml.StartElement) paragraphInfo
 				if inR {
 					runTexts = append(runTexts, "\t")
 				}
+			case "br":
+				// w:br is a visible line break within a run; type="page" and
+				// type="column" are layout-only and carry no text.
+				if inR && isWordNS(t.Name.Space) {
+					if typ := getAttrVal(t, "type"); typ != "page" && typ != "column" {
+						runTexts = append(runTexts, "\n")
+					}
+				}
+			case "noBreakHyphen":
+				// Renders as "-" in Word; ASN.1 identifiers depend on it.
+				if inR && isWordNS(t.Name.Space) {
+					runTexts = append(runTexts, "-")
+				}
 			case "extent":
 				// DrawingML: <wp:extent cx="5486400" cy="3200400"/> (EMU units)
 				if cx := getAttrVal(t, "cx"); cx != "" {
