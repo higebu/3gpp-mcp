@@ -270,9 +270,9 @@ func TestHandleListVersions(t *testing.T) {
 		t.Fatalf("got %d versions, want 3: %+v", len(out.Versions), out.Versions)
 	}
 	want := []VersionInfo{
-		{Version: "20.2.0", Release: "20", Token: "k20", Availability: availabilityArchive},
-		{Version: "19.5.0", Release: "19", Token: "j50", Availability: availabilityCached},
-		{Version: "18.6.0", Release: "18", Token: "i60", Availability: availabilityDatabase},
+		{Version: "20.2.0", Release: "20", Token: "k20", Availability: AvailabilityArchive},
+		{Version: "19.5.0", Release: "19", Token: "j50", Availability: AvailabilityCached},
+		{Version: "18.6.0", Release: "18", Token: "i60", Availability: AvailabilityDatabase},
 	}
 	for i, w := range want {
 		if out.Versions[i] != w {

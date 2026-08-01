@@ -14,15 +14,15 @@ import (
 
 // Availability values reported by list_versions.
 const (
-	// availabilityDatabase means the version is in the prebuilt database, with
+	// AvailabilityDatabase means the version is in the prebuilt database, with
 	// full-text search, images and cross-references.
-	availabilityDatabase = "database"
-	// availabilityCached means the version was fetched on demand earlier and is
+	AvailabilityDatabase = "database"
+	// AvailabilityCached means the version was fetched on demand earlier and is
 	// served from the local cache.
-	availabilityCached = "cached"
-	// availabilityArchive means the version exists upstream and will be
+	AvailabilityCached = "cached"
+	// AvailabilityArchive means the version exists upstream and will be
 	// downloaded and converted the first time it is read.
-	availabilityArchive = "archive"
+	AvailabilityArchive = "archive"
 )
 
 type ListVersionsInput struct {
@@ -55,53 +55,81 @@ Each entry reports where the version can be read from:
 Pass a version from this list to get_section or get_toc to read a past version.`,
 }
 
+// ListVersions merges the archive listing, the on-demand cache and the
+// prebuilt database into one list of a spec's versions, newest first.
+// archiveErr reports a failed archive listing; the merge still covers the
+// cache and the database when it is set.
+func (s *Source) ListVersions(ctx context.Context, specID string) (versions []VersionInfo, archiveErr, err error) {
+	// The strongest availability wins, so collect from weakest to strongest.
+	availability := map[string]string{}
+	releases := map[string]string{}
+	tokens := map[string]string{}
+
+	archived, archiveErr := pipeline.ListVersions(ctx, s.Client, specID, s.UseCache)
+	for _, sv := range archived {
+		dotted, ok := specver.TokenToDotted(sv.Version)
+		if !ok {
+			dotted = sv.Version
+		}
+		availability[dotted] = AvailabilityArchive
+		tokens[dotted] = sv.Version
+		releases[dotted] = fmt.Sprintf("%d", sv.Release)
+	}
+
+	if s.Store != nil {
+		cached, err := s.Store.CachedVersions(specID)
+		if err != nil {
+			return nil, archiveErr, fmt.Errorf("failed to list cached versions: %w", err)
+		}
+		for _, v := range cached {
+			availability[v] = AvailabilityCached
+		}
+	}
+
+	specs, err := s.DB.ListSpecVersions(specID)
+	if err != nil {
+		return nil, archiveErr, fmt.Errorf("failed to list versions: %w", err)
+	}
+	for _, spec := range specs {
+		availability[spec.Version] = AvailabilityDatabase
+		if spec.Release != "" {
+			releases[spec.Version] = spec.Release
+		}
+		if spec.VersionToken != "" {
+			tokens[spec.Version] = spec.VersionToken
+		}
+	}
+
+	for version, avail := range availability {
+		release := releases[version]
+		if release == "" {
+			release = specver.ReleaseOf(version)
+		}
+		versions = append(versions, VersionInfo{
+			Version:      version,
+			Release:      release,
+			Token:        tokens[version],
+			Availability: avail,
+		})
+	}
+	sort.Slice(versions, func(i, j int) bool {
+		return specver.Compare(versions[i].Version, versions[j].Version) > 0
+	})
+	return versions, archiveErr, nil
+}
+
 func HandleListVersions(src *Source) func(ctx context.Context, req *mcp.CallToolRequest, input ListVersionsInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input ListVersionsInput) (*mcp.CallToolResult, any, error) {
 		if input.SpecID == "" {
 			return errorResult("spec_id is required"), nil, nil
 		}
 
-		// The strongest availability wins, so collect from weakest to strongest.
-		availability := map[string]string{}
-		releases := map[string]string{}
-		tokens := map[string]string{}
-
-		archived, archiveErr := pipeline.ListVersions(ctx, src.Client, input.SpecID, src.UseCache)
-		for _, sv := range archived {
-			dotted, ok := specver.TokenToDotted(sv.Version)
-			if !ok {
-				dotted = sv.Version
-			}
-			availability[dotted] = availabilityArchive
-			tokens[dotted] = sv.Version
-			releases[dotted] = fmt.Sprintf("%d", sv.Release)
-		}
-
-		if src.Store != nil {
-			cached, err := src.Store.CachedVersions(input.SpecID)
-			if err != nil {
-				return errorResult(fmt.Sprintf("failed to list cached versions: %v", err)), nil, nil
-			}
-			for _, v := range cached {
-				availability[v] = availabilityCached
-			}
-		}
-
-		specs, err := src.DB.ListSpecVersions(input.SpecID)
+		versions, archiveErr, err := src.ListVersions(ctx, input.SpecID)
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to list versions: %v", err)), nil, nil
-		}
-		for _, s := range specs {
-			availability[s.Version] = availabilityDatabase
-			if s.Release != "" {
-				releases[s.Version] = s.Release
-			}
-			if s.VersionToken != "" {
-				tokens[s.Version] = s.VersionToken
-			}
+			return errorResult(err.Error()), nil, nil
 		}
 
-		if len(availability) == 0 {
+		if len(versions) == 0 {
 			if archiveErr != nil {
 				return errorResult(fmt.Sprintf("no versions found for %s: %v", input.SpecID, archiveErr)), nil, nil
 			}
@@ -111,23 +139,7 @@ func HandleListVersions(src *Source) func(ctx context.Context, req *mcp.CallTool
 			return errorResult(fmt.Sprintf("no versions found for %s", input.SpecID)), nil, nil
 		}
 
-		out := ListVersionsOutput{SpecID: input.SpecID}
-		for version, avail := range availability {
-			release := releases[version]
-			if release == "" {
-				release = specver.ReleaseOf(version)
-			}
-			out.Versions = append(out.Versions, VersionInfo{
-				Version:      version,
-				Release:      release,
-				Token:        tokens[version],
-				Availability: avail,
-			})
-		}
-		sort.Slice(out.Versions, func(i, j int) bool {
-			return specver.Compare(out.Versions[i].Version, out.Versions[j].Version) > 0
-		})
-
+		out := ListVersionsOutput{SpecID: input.SpecID, Versions: versions}
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to marshal: %v", err)), nil, nil
