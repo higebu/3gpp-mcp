@@ -208,6 +208,7 @@ Features: spec list with filtering, section viewer with TOC sidebar, full-text s
 | `list_versions` | List the versions of a spec and where each can be read from | `spec_id` (required): e.g. `"TS 23.501"` |
 | `get_toc` | Get table of contents of a spec | `spec_id` (required), `version` |
 | `get_section` | Get section content (paginated) | `spec_id`, `section_number` (required), `version`, `include_subsections`, `offset`, `max_lines`, `max_chars` |
+| `compare_versions` | Compare two versions of a spec: structural summary, or a section text diff | `spec_id`, `old_version` (required), `new_version`, `section_number`, `include_subsections`, `context_lines`, `offset`, `max_lines`, `max_chars` |
 
 Every `get_toc`, `get_section` and `search` result names the specification and
 version it came from, on every page of a paginated response.
@@ -225,6 +226,20 @@ get_section    spec_id="TS 24.301" section_number="5.5.1" version="15.8.0"
 `version` accepts the dotted form (`15.8.0`), the archive token (`f80`), a
 release selector (`Rel-15` or `15`, picking the newest version in that release),
 or `latest`.
+
+To see what changed between two versions, use `compare_versions`. Without
+`section_number` it summarizes which sections were added, removed, renumbered,
+retitled or changed; with `section_number` it returns a line-level unified diff
+of that section's text:
+
+```
+compare_versions  spec_id="TS 23.501" old_version="Rel-17"
+compare_versions  spec_id="TS 23.501" old_version="17.9.0" section_number="5.15.2"
+```
+
+`old_version` and `new_version` accept the same forms as `version` above;
+`new_version` defaults to the version in the database. Comparing two archived
+versions downloads both on first use.
 
 A version that is not in the database is downloaded from the 3GPP archive and
 converted on first use. This takes up to a few minutes for a large

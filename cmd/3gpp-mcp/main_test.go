@@ -768,8 +768,8 @@ func TestStreamableHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
-	if len(toolsRes.Tools) != 10 {
-		t.Errorf("got %d tools, want 10", len(toolsRes.Tools))
+	if len(toolsRes.Tools) != 11 {
+		t.Errorf("got %d tools, want 11", len(toolsRes.Tools))
 	}
 
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{

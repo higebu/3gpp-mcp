@@ -256,6 +256,32 @@ func TestGetTOC(t *testing.T) {
 	})
 }
 
+func TestAllSections(t *testing.T) {
+	d := setupTestDB(t)
+
+	sections, err := d.AllSections("TS 23.501", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(sections) != 4 {
+		t.Fatalf("expected 4 sections, got %d", len(sections))
+	}
+	if sections[0].Number != "1" || sections[0].Content == "" {
+		t.Errorf("expected section 1 with content in document order, got %+v", sections[0])
+	}
+	if sections[0].Version != "18.6.0" || sections[0].Release != "18" {
+		t.Errorf("expected version 18.6.0 / release 18, got %+v", sections[0])
+	}
+
+	missing, err := d.AllSections("TS 99.999", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("expected 0 sections for a missing spec, got %d", len(missing))
+	}
+}
+
 func TestGetSection(t *testing.T) {
 	d := setupTestDB(t)
 

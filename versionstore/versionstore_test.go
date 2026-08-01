@@ -118,6 +118,31 @@ func TestEnsureAndRead(t *testing.T) {
 	}
 }
 
+func TestAllSections(t *testing.T) {
+	s := openStore(t, DefaultLimitBytes, func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		spec, sections := fakeSpec("ignored", "ignored", 16)
+		return spec, sections, nil
+	})
+
+	if err := s.Ensure(context.Background(), "TS 23.501", "18.6.0", entry("23.501"), time.Minute); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	sections, err := s.AllSections("TS 23.501", "18.6.0")
+	if err != nil {
+		t.Fatalf("AllSections: %v", err)
+	}
+	if len(sections) != 2 || sections[0].Number != "1" || sections[1].Number != "1.1" {
+		t.Fatalf("AllSections = %+v, want sections 1 and 1.1 in document order", sections)
+	}
+	if sections[0].Content == "" || sections[1].Content != "general text" {
+		t.Errorf("AllSections must include content, got %+v", sections)
+	}
+	if sections[0].Release != "18" {
+		t.Errorf("Release = %q, want 18", sections[0].Release)
+	}
+}
+
 func TestEnsureIsCachedOnSecondCall(t *testing.T) {
 	var calls atomic.Int32
 	s := openStore(t, DefaultLimitBytes, func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
