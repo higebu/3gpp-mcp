@@ -939,6 +939,9 @@ func setupVersionedServer(t *testing.T, fetcher versionstore.Fetcher, imageFetch
 		Path:         filepath.Join(t.TempDir(), "versions.db"),
 		Fetcher:      fetcher,
 		ImageFetcher: imageFetcher,
+		// Tests read two versions side by side; the default zero limit keeps
+		// only the newest fetch, making concurrent fetches evict each other.
+		LimitBytes: -1,
 	})
 	if err != nil {
 		t.Fatalf("versionstore.Open: %v", err)
@@ -1394,5 +1397,131 @@ func TestHandleCompare_RenumberedSectionDiff(t *testing.T) {
 	}
 	if !strings.Contains(body2, "7 &rarr; 5.1.1") {
 		t.Errorf("expected the header to show the renumbering, got:\n%s", body2)
+	}
+}
+
+// TestHandleCompare_IdenticalSection reports identity instead of an empty diff.
+func TestHandleCompare_IdenticalSection(t *testing.T) {
+	fetcher := func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		return db.Spec{Title: "System architecture", Release: "19", Series: "23"},
+			[]db.Section{{
+				Number:  "5.1",
+				Title:   "General",
+				Level:   2,
+				Content: "## 5.1 General\nSame body in both versions.",
+			}}, nil
+	}
+	ts, _ := setupVersionedServer(t, fetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=19.5.0&new=20.2.0&section=5.1")
+	if err != nil {
+		t.Fatalf("GET identical diff: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "is identical between") {
+		t.Errorf("expected an identical notice, got:\n%s", body)
+	}
+	if strings.Contains(body, "diff-line") {
+		t.Errorf("an identical section must not render a diff, got:\n%s", body)
+	}
+}
+
+// TestHandleCompare_SectionMissingOneSide points at the structural summary
+// instead of failing when the section exists in one version only.
+func TestHandleCompare_SectionMissingOneSide(t *testing.T) {
+	fetcher := func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		spec := db.Spec{Title: "System architecture", Series: "23"}
+		sections := []db.Section{{
+			Number:  "5.1",
+			Title:   "General",
+			Level:   2,
+			Content: "## 5.1 General\nShared.",
+		}}
+		if sv.Version == "k20" { // 20.2.0 grew a section 9
+			sections = append(sections, db.Section{
+				Number:  "9",
+				Title:   "Brand new",
+				Level:   1,
+				Content: "# 9 Brand new\nOnly here.",
+			})
+		}
+		return spec, sections, nil
+	}
+	ts, _ := setupVersionedServer(t, fetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=19.5.0&new=20.2.0&section=9")
+	if err != nil {
+		t.Fatalf("GET one-sided diff: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "does not exist in v19.5.0") {
+		t.Errorf("expected the missing-side notice, got:\n%s", body)
+	}
+	if !strings.Contains(body, "Structural summary") {
+		t.Errorf("expected a pointer to the structural summary, got:\n%s", body)
+	}
+}
+
+// TestHandleCompare_UnknownOldVersion surfaces a single-side resolution
+// failure as the usual version error page.
+func TestHandleCompare_UnknownOldVersion(t *testing.T) {
+	ts, _ := setupVersionedServer(t, cannedFetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=12.0.0")
+	if err != nil {
+		t.Fatalf("GET compare: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	if body := readBody(t, resp); !strings.Contains(body, "20.2.0") {
+		t.Errorf("expected the error page to list archive versions, got:\n%s", body)
+	}
+}
+
+// TestHandleSpec_VersionResolveError maps an unexpected resolution failure to
+// a plain 500, not a fetching or not-found page.
+func TestHandleSpec_VersionResolveError(t *testing.T) {
+	ts, src := setupVersionedServer(t, cannedFetcher, nil)
+	if err := src.DB.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501?version=19.5.0")
+	if err != nil {
+		t.Fatalf("GET spec: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", resp.StatusCode)
+	}
+}
+
+// TestHandleCompare_UnknownNewVersion surfaces a new-side resolution failure
+// the same way as an old-side one.
+func TestHandleCompare_UnknownNewVersion(t *testing.T) {
+	ts, _ := setupVersionedServer(t, cannedFetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=19.5.0&new=12.0.0")
+	if err != nil {
+		t.Fatalf("GET compare: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
 	}
 }

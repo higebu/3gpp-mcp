@@ -55,6 +55,9 @@ func sourceWithStore(t *testing.T, d *db.DB, fetcher versionstore.Fetcher) *Sour
 	store, err := versionstore.Open(versionstore.Options{
 		Path:    filepath.Join(t.TempDir(), "versions.db"),
 		Fetcher: fetcher,
+		// Tests read two versions side by side; the default zero limit keeps
+		// only the newest fetch, making concurrent fetches evict each other.
+		LimitBytes: -1,
 	})
 	if err != nil {
 		t.Fatalf("versionstore.Open: %v", err)

@@ -58,3 +58,64 @@ func TestDiffRenumberRequiresUniqueTitle(t *testing.T) {
 		t.Errorf("Removed/Added = %d/%d, want 2/1", len(d.Removed), len(d.Added))
 	}
 }
+
+// TestDiffClassifiesRetitleUnchangedAndContentChange covers the by-number
+// classification: unchanged, retitled (heading stripped so it is not a content
+// change), content changed, and unmatched added/removed sections whose titles
+// differ, which must not be promoted to renumberings.
+func TestDiffClassifiesRetitleUnchangedAndContentChange(t *testing.T) {
+	oldSecs := []db.Section{
+		{Number: "1", Title: "Scope", Content: "# 1 Scope\nSame."},
+		{Number: "2", Title: "Old title", Content: "# 2 Old title\nSame body."},
+		{Number: "3", Title: "Definitions", Content: "# 3 Definitions\nOld."},
+		{Number: "4", Title: "Gone", Content: "no heading here"},
+	}
+	newSecs := []db.Section{
+		{Number: "1", Title: "Scope", Content: "# 1 Scope\nSame."},
+		{Number: "2", Title: "New title", Content: "# 2 New title\nSame body."},
+		{Number: "3", Title: "Definitions", Content: "# 3 Definitions\nNew."},
+		{Number: "5", Title: "Fresh", Content: "#"},
+	}
+
+	d := Diff(oldSecs, newSecs)
+	if d.Unchanged != 1 {
+		t.Errorf("Unchanged = %d, want 1", d.Unchanged)
+	}
+	if len(d.Retitled) != 1 || d.Retitled[0].OldTitle != "Old title" || d.Retitled[0].NewTitle != "New title" {
+		t.Errorf("Retitled = %+v, want the section 2 retitle", d.Retitled)
+	}
+	if len(d.ContentChanged) != 1 || d.ContentChanged[0].Number != "3" {
+		t.Errorf("ContentChanged = %+v, want section 3 alone (a pure retitle is not a content change)", d.ContentChanged)
+	}
+	if len(d.Removed) != 1 || d.Removed[0].Number != "4" {
+		t.Errorf("Removed = %+v, want section 4", d.Removed)
+	}
+	if len(d.Added) != 1 || d.Added[0].Number != "5" {
+		t.Errorf("Added = %+v, want section 5", d.Added)
+	}
+	if len(d.Renumbered) != 0 {
+		t.Errorf("different titles must not pair as a renumbering: %+v", d.Renumbered)
+	}
+	if d.OldCount != 4 || d.NewCount != 4 {
+		t.Errorf("counts = %d/%d, want 4/4", d.OldCount, d.NewCount)
+	}
+}
+
+// TestSectionLines checks the join used for diffing: trailing blank lines are
+// trimmed and sections are separated by one empty line.
+func TestSectionLines(t *testing.T) {
+	secs := []db.Section{
+		{Content: "# A\nline1\n\n"},
+		{Content: "# B\nline2"},
+	}
+	got := SectionLines(secs)
+	want := []string{"# A", "line1", "", "# B", "line2"}
+	if len(got) != len(want) {
+		t.Fatalf("SectionLines = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("SectionLines[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
