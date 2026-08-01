@@ -352,6 +352,19 @@ func TestHandleSearch(t *testing.T) {
 			t.Errorf("expected offset echoed back, got: %s", text)
 		}
 	})
+
+	t.Run("negative offset treated as zero", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, SearchInput{Query: "Scope", Offset: -3})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("unexpected error result: %s", getTextContent(result))
+		}
+		if !strings.Contains(getTextContent(result), `"offset": 0`) {
+			t.Errorf("expected offset normalized to 0, got: %s", getTextContent(result))
+		}
+	})
 }
 
 func TestHandleListOpenAPI(t *testing.T) {

@@ -532,6 +532,26 @@ func TestSearch(t *testing.T) {
 		}
 	})
 
+	t.Run("limit zero uses default", func(t *testing.T) {
+		page, err := d.Search("Scope", nil, 0, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if page.Limit != DefaultSearchLimit {
+			t.Errorf("expected limit %d, got %d", DefaultSearchLimit, page.Limit)
+		}
+	})
+
+	t.Run("limit above max is clamped", func(t *testing.T) {
+		page, err := d.Search("Scope", nil, MaxSearchLimit+1, 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if page.Limit != MaxSearchLimit {
+			t.Errorf("expected limit clamped to %d, got %d", MaxSearchLimit, page.Limit)
+		}
+	})
+
 	t.Run("negative offset treated as zero", func(t *testing.T) {
 		page, err := d.Search("Scope", []string{"TS 29.510"}, 10, -5)
 		if err != nil {
@@ -608,6 +628,17 @@ The guardband requirements are specified here.');`)
 			t.Fatalf("expected 0 results for literal underscore query, got %d", len(page.Results))
 		}
 	})
+}
+
+func TestSearchClosedDB(t *testing.T) {
+	d := setupTestDB(t)
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if _, err := d.Search("architecture", nil, 10, 0); err == nil {
+		t.Error("expected error searching a closed database")
+	}
 }
 
 func TestSearchRanking(t *testing.T) {
