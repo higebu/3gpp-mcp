@@ -1,0 +1,91 @@
+{{define "compare.html"}}
+<div class="compare-page">
+    <div class="page-header">
+        <h1>Compare {{.SpecID}}</h1>
+        <p class="subtitle"><a href="{{specURL .SpecID}}/versions">Versions</a> &middot; <a href="{{specURL .SpecID}}">Back to the specification</a></p>
+    </div>
+
+    <form class="filter-form" method="get" action="{{specURL .SpecID}}/compare">
+        <label for="old">Old version:</label>
+        <input type="text" name="old" id="old" value="{{.OldParam}}" placeholder="e.g. 17.9.0">
+        <label for="new">New version:</label>
+        <input type="text" name="new" id="new" value="{{.NewParam}}" placeholder="database version">
+        <label for="section">Section:</label>
+        <input type="text" name="section" id="section" value="{{.Section}}" placeholder="whole spec">
+        <button type="submit" class="filter-btn">Compare</button>
+    </form>
+
+    {{if .OldLabel}}
+    <p class="compare-header">{{if .Section}}Section {{if and .OldSection (ne .OldSection .Section)}}{{.OldSection}} &rarr; {{end}}{{.Section}} &mdash; {{end}}{{.OldLabel}} &rarr; {{.NewLabel}}</p>
+    {{end}}
+
+    {{if and .Section .OldLabel}}
+    <p class="compare-back"><a href="{{compareURL .SpecID .OldParam .NewParam "" ""}}">&larr; Structural summary</a></p>
+    {{end}}
+
+    {{if .Notice}}
+    <p class="compare-notice">{{.Notice}}</p>
+    {{end}}
+
+    {{if .Identical}}
+    <p class="compare-notice">Section {{.Section}} is identical between {{.OldLabel}} and {{.NewLabel}}.</p>
+    {{end}}
+
+    {{with .Summary}}
+    <p class="compare-counts">{{.OldCount}} sections in {{$.OldLabel}}, {{.NewCount}} in {{$.NewLabel}} &mdash;
+        Added: {{len .Added}} | Removed: {{len .Removed}} | Renumbered: {{len .Renumbered}} | Title changed: {{len .Retitled}} | Content changed: {{len .ContentChanged}} | Unchanged: {{.Unchanged}}</p>
+
+    {{if .Added}}
+    <h2>Added in {{$.NewLabel}}</h2>
+    <ul class="compare-list">
+        {{range .Added}}
+        <li><a href="{{sectionURL $.SpecID .Number $.NewURLVersion}}">{{.Number}} {{.Title}}</a></li>
+        {{end}}
+    </ul>
+    {{end}}
+
+    {{if .Removed}}
+    <h2>Removed since {{$.OldLabel}}</h2>
+    <ul class="compare-list">
+        {{range .Removed}}
+        <li><a href="{{sectionURL $.SpecID .Number $.OldURLVersion}}">{{.Number}} {{.Title}}</a></li>
+        {{end}}
+    </ul>
+    {{end}}
+
+    {{if .Renumbered}}
+    <h2>Renumbered (same title)</h2>
+    <ul class="compare-list">
+        {{range .Renumbered}}
+        <li>{{.OldNumber}} &rarr; {{.NewNumber}} &mdash; {{.Title}}</li>
+        {{end}}
+    </ul>
+    {{end}}
+
+    {{if .Retitled}}
+    <h2>Title changed</h2>
+    <ul class="compare-list">
+        {{range .Retitled}}
+        <li>{{.Number}}: &ldquo;{{.OldTitle}}&rdquo; &rarr; &ldquo;{{.NewTitle}}&rdquo;</li>
+        {{end}}
+    </ul>
+    {{end}}
+
+    {{if .ContentChanged}}
+    <h2>Content changed</h2>
+    <ul class="compare-list">
+        {{range .ContentChanged}}
+        <li><a href="{{compareURL $.SpecID $.OldParam $.NewParam .Number .OldNumber}}">{{if ne .OldNumber .Number}}{{.OldNumber}} &rarr; {{end}}{{.Number}} {{.Title}}</a> <span class="compare-lines">({{.OldLines}} &rarr; {{.NewLines}} lines)</span></li>
+        {{end}}
+    </ul>
+    {{end}}
+    {{end}}
+
+    {{if .DiffLines}}
+    <div class="diff">
+        {{range .DiffLines}}<div class="diff-line {{.Class}}">{{.Text}}</div>
+        {{end}}
+    </div>
+    {{end}}
+</div>
+{{end}}

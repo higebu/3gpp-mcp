@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	htmlpkg "html"
 	"html/template"
@@ -12,9 +13,11 @@ import (
 
 	"github.com/higebu/3gpp-mcp/db"
 	"github.com/higebu/3gpp-mcp/internal/specver"
+	"github.com/higebu/3gpp-mcp/tools"
 )
 
 type handler struct {
+	src   *tools.Source
 	db    *db.DB
 	tmpls *template.Template
 }
@@ -28,6 +31,7 @@ type layoutData struct {
 	Data      any
 	NavQuery  string // pre-fills the navbar search query input (only set on /search)
 	NavSpecID string // pre-fills the navbar spec ID input with the current spec scope
+	Refresh   int    // auto-refresh interval in seconds; 0 disables the meta tag
 }
 
 type indexData struct {
@@ -51,6 +55,29 @@ type specData struct {
 	OpenAPIs   []db.OpenAPISpec
 	Prev       *db.Section
 	Next       *db.Section
+	// Version is the version to carry in generated URLs. It is empty for the
+	// database version so canonical URLs stay stable.
+	Version  string
+	Archived bool
+}
+
+// fetchingData drives the "download in progress" page shown while an archived
+// version is being fetched and converted.
+type fetchingData struct {
+	SpecID  string
+	Version string
+	Images  bool
+}
+
+type versionsData struct {
+	SpecID   string
+	Versions []tools.VersionInfo
+	// ArchiveErr warns that the archive listing failed, so the table may
+	// only cover the cache and the database.
+	ArchiveErr string
+	// DBVersion is the version the database holds, the default "new" side of
+	// a comparison.
+	DBVersion string
 }
 
 type sectionRendered struct {
@@ -61,9 +88,15 @@ type sectionRendered struct {
 }
 
 type searchData struct {
-	Query   string
-	Results []db.SearchResult
-	SpecID  string
+	Query      string
+	Results    []db.SearchResult
+	SpecID     string
+	TotalCount int
+	Page       int
+	TotalPages int
+	HasPrev    bool
+	HasNext    bool
+	Error      string
 }
 
 type openAPIListData struct {
@@ -97,8 +130,12 @@ func (h *handler) initTemplates() {
 		"specURL": func(specID string) string {
 			return "/specs/" + url.PathEscape(specID)
 		},
-		"sectionURL": func(specID, number string) string {
-			return "/specs/" + url.PathEscape(specID) + "/sections/" + number
+		"sectionURL": func(specID, number, version string) string {
+			u := "/specs/" + url.PathEscape(specID) + "/sections/" + number
+			if version != "" {
+				u += "?version=" + url.QueryEscape(version)
+			}
+			return u
 		},
 		"refURL": refURL,
 		// releaseLabel renders a bare release number as "Rel-18"; anything else
@@ -116,6 +153,21 @@ func (h *handler) initTemplates() {
 				s[i] = i + 1
 			}
 			return s
+		},
+		"queryEscape": url.QueryEscape,
+		"compareURL": func(specID, oldV, newV, section, oldSection string) string {
+			u := "/specs/" + url.PathEscape(specID) + "/compare?old=" + url.QueryEscape(oldV)
+			if newV != "" {
+				u += "&new=" + url.QueryEscape(newV)
+			}
+			if section != "" {
+				u += "&section=" + url.QueryEscape(section)
+			}
+			// A renumbered section needs its old number for the old-side read.
+			if oldSection != "" && oldSection != section {
+				u += "&old_section=" + url.QueryEscape(oldSection)
+			}
+			return u
 		},
 		"isActive": func(current, number string) bool {
 			return current == number
@@ -190,18 +242,52 @@ func (h *handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) handleSpec(w http.ResponseWriter, r *http.Request) {
 	specID := r.PathValue("specID")
-	h.renderSpecPage(w, specID, "")
+	h.renderSpecPage(w, r, specID, "")
 }
 
 func (h *handler) handleSection(w http.ResponseWriter, r *http.Request) {
 	specID := r.PathValue("specID")
 	number := r.PathValue("number")
-	h.renderSpecPage(w, specID, number)
+	h.renderSpecPage(w, r, specID, number)
 }
 
-func (h *handler) renderSpecPage(w http.ResponseWriter, specID, number string) {
-	toc, err := h.db.GetTOC(specID, "")
-	if err != nil || len(toc) == 0 {
+// renderVersionError renders the failure of a version-aware read: a fetch
+// still running becomes an auto-refreshing "in progress" page, an unknown
+// version a 404 naming the versions that do exist.
+func (h *handler) renderVersionError(w http.ResponseWriter, err error) {
+	var inProgress *tools.FetchInProgressError
+	if errors.As(err, &inProgress) {
+		h.renderFetching(w, inProgress)
+		return
+	}
+	var unavailable *tools.VersionUnavailableError
+	if errors.As(err, &unavailable) {
+		h.renderError(w, http.StatusNotFound, unavailable.Error())
+		return
+	}
+	h.renderError(w, http.StatusInternalServerError, "Failed to load version")
+}
+
+// renderFetching answers 202 with a page that reloads itself: every reload
+// joins the running fetch and waits up to the fetch budget, so the page
+// resolves as soon as the download finishes.
+func (h *handler) renderFetching(w http.ResponseWriter, inProgress *tools.FetchInProgressError) {
+	w.WriteHeader(http.StatusAccepted)
+	data := fetchingData{SpecID: inProgress.SpecID, Version: inProgress.Version, Images: inProgress.Images}
+	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "fetching", Data: data, Refresh: 10}); err != nil {
+		log.Printf("template error: %v", err)
+	}
+}
+
+func (h *handler) renderSpecPage(w http.ResponseWriter, r *http.Request, specID, number string) {
+	version := r.URL.Query().Get("version")
+
+	toc, res, err := h.src.GetTOC(r.Context(), specID, version)
+	if err != nil {
+		h.renderVersionError(w, err)
+		return
+	}
+	if len(toc) == 0 {
 		h.renderError(w, http.StatusNotFound, fmt.Sprintf("Specification %q not found", specID))
 		return
 	}
@@ -211,16 +297,36 @@ func (h *handler) renderSpecPage(w http.ResponseWriter, specID, number string) {
 		number = toc[0].Number
 	}
 
-	sections, err := h.db.GetSection(specID, "", number, false)
-	if err != nil || len(sections) == 0 {
+	sections, _, err := h.src.GetSection(r.Context(), specID, version, number, false)
+	if err != nil {
+		h.renderVersionError(w, err)
+		return
+	}
+	if len(sections) == 0 {
 		h.renderError(w, http.StatusNotFound, fmt.Sprintf("Section %q not found in %s", number, specID))
 		return
 	}
 
-	bracketMap, _ := h.db.GetBracketMap(specID, "")
-	rendered := renderSections(sections, specID, bracketMap)
-	openAPIs, _ := h.db.ListOpenAPI(specID)
-	refs, _ := h.db.GetReferences(specID, "", number, db.DirectionOutgoing, false)
+	// The database version keeps canonical URLs; an archived version has to
+	// carry itself in every generated link.
+	urlVersion := ""
+	if res.Archived {
+		urlVersion = res.Version
+	}
+
+	// Cross-references, OpenAPI definitions and the bracketed-reference map
+	// only exist for the database version. The database version's bracket map
+	// would mislink an archived version — reference numbering moves between
+	// versions — so archived pages linkify without one.
+	var bracketMap map[string]string
+	var openAPIs []db.OpenAPISpec
+	var refs []db.Reference
+	if !res.Archived {
+		bracketMap, _ = h.db.GetBracketMap(specID, "")
+		openAPIs, _ = h.db.ListOpenAPI(specID)
+		refs, _ = h.db.GetReferences(specID, "", number, db.DirectionOutgoing, false)
+	}
+	rendered := renderSections(sections, specID, urlVersion, bracketMap)
 	prev, next := adjacentSections(toc, number)
 
 	data := specData{
@@ -234,6 +340,8 @@ func (h *handler) renderSpecPage(w http.ResponseWriter, specID, number string) {
 		OpenAPIs:   openAPIs,
 		Prev:       prev,
 		Next:       next,
+		Version:    urlVersion,
+		Archived:   res.Archived,
 	}
 
 	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "spec", Data: data, NavSpecID: specID}); err != nil {
@@ -261,12 +369,65 @@ func adjacentSections(toc []db.Section, number string) (prev, next *db.Section) 
 	return nil, nil
 }
 
+// handleVersions lists every known version of a spec with where it can be
+// read from. The archive listing is scraped from the 3GPP FTP server, which
+// is why this is a dedicated page rather than part of every spec page.
+func (h *handler) handleVersions(w http.ResponseWriter, r *http.Request) {
+	specID := r.PathValue("specID")
+
+	versions, archiveErr, err := h.src.ListVersions(r.Context(), specID)
+	if err != nil {
+		log.Printf("ListVersions error: %v", err)
+		h.renderError(w, http.StatusInternalServerError, "Failed to list versions")
+		return
+	}
+	if len(versions) == 0 {
+		msg := fmt.Sprintf("No versions found for %q", specID)
+		if archiveErr != nil {
+			msg += fmt.Sprintf(" (archive listing failed: %v)", archiveErr)
+		}
+		h.renderError(w, http.StatusNotFound, msg)
+		return
+	}
+
+	data := versionsData{
+		SpecID:   specID,
+		Versions: versions,
+	}
+	if archiveErr != nil {
+		data.ArchiveErr = "The archive listing could not be loaded; this list may be missing archive-only versions."
+	}
+	for _, v := range versions {
+		if v.Availability == tools.AvailabilityDatabase {
+			data.DBVersion = v.Version
+			break
+		}
+	}
+
+	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "versions", Data: data, NavSpecID: specID}); err != nil {
+		log.Printf("template error: %v", err)
+	}
+}
+
 func (h *handler) handleImage(w http.ResponseWriter, r *http.Request) {
 	specID := r.PathValue("specID")
 	name := r.PathValue("name")
+	version := r.URL.Query().Get("version")
 
-	img, err := h.db.GetImage(specID, "", name)
+	img, _, err := h.src.GetImage(r.Context(), specID, version, name)
 	if err != nil {
+		// An archived version's images download on first use; tell the
+		// browser to come back rather than caching a 404.
+		var inProgress *tools.FetchInProgressError
+		if errors.As(err, &inProgress) {
+			w.Header().Set("Retry-After", "10")
+			http.Error(w, "images are being downloaded; reload shortly", http.StatusAccepted)
+			return
+		}
+		http.NotFound(w, r)
+		return
+	}
+	if img == nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -279,10 +440,23 @@ func (h *handler) handleImage(w http.ResponseWriter, r *http.Request) {
 func (h *handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	specID := r.URL.Query().Get("spec_id")
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	// Same bound as handleIndex: keeps the offset multiplication from
+	// overflowing while staying far beyond any real page count.
+	const maxPage = 1_000_000
+	if page > maxPage {
+		page = maxPage
+	}
+	limit := 50
+	offset := (page - 1) * limit
 
 	data := searchData{
 		Query:  query,
 		SpecID: specID,
+		Page:   page,
 	}
 
 	if query != "" {
@@ -290,11 +464,20 @@ func (h *handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		if specID != "" {
 			specIDs = []string{specID}
 		}
-		page, err := h.db.Search(query, specIDs, 50, 0)
+		result, err := h.db.Search(query, specIDs, limit, offset)
 		if err != nil {
 			log.Printf("Search error: %v", err)
+			data.Error = "Search failed. Check the query syntax and try again."
 		} else {
-			data.Results = page.Results
+			totalPages := (result.TotalCount + limit - 1) / limit
+			if totalPages < 1 {
+				totalPages = 1
+			}
+			data.Results = result.Results
+			data.TotalCount = result.TotalCount
+			data.TotalPages = totalPages
+			data.HasPrev = page > 1
+			data.HasNext = page < totalPages
 		}
 	}
 
@@ -345,14 +528,14 @@ func (h *handler) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 
 // Helper functions
 
-func renderSections(sections []db.Section, specID string, bracketMap map[string]string) []sectionRendered {
+func renderSections(sections []db.Section, specID, version string, bracketMap map[string]string) []sectionRendered {
 	rendered := make([]sectionRendered, len(sections))
 	for i, s := range sections {
 		rendered[i] = sectionRendered{
 			Number:  s.Number,
 			Title:   s.Title,
 			Level:   s.Level,
-			Content: template.HTML(renderMarkdown(s.Content, specID, bracketMap)), //nolint:gosec
+			Content: template.HTML(renderMarkdown(s.Content, specID, version, bracketMap)), //nolint:gosec
 		}
 	}
 	return rendered

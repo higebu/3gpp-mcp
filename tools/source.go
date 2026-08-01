@@ -34,47 +34,48 @@ func NewSource(d *db.DB) *Source {
 	return &Source{DB: d, UseCache: true}
 }
 
-// errFetchInProgress is returned when a fetch outlives the call's budget.
-type errFetchInProgress struct {
-	specID  string
-	version string
-	// images marks a fetch of a version's images rather than its text.
-	images bool
+// FetchInProgressError is returned when a fetch outlives the call's budget.
+type FetchInProgressError struct {
+	SpecID  string
+	Version string
+	// Images marks a fetch of a version's images rather than its text.
+	Images bool
 }
 
-func (e *errFetchInProgress) Error() string {
-	subject := fmt.Sprintf("%s v%s is", e.specID, e.version)
-	if e.images {
-		subject = fmt.Sprintf("Images for %s v%s are", e.specID, e.version)
+func (e *FetchInProgressError) Error() string {
+	subject := fmt.Sprintf("%s v%s is", e.SpecID, e.Version)
+	if e.Images {
+		subject = fmt.Sprintf("Images for %s v%s are", e.SpecID, e.Version)
 	}
 	return subject + " being downloaded and converted. This takes up to a few minutes for a large specification. Call the same tool again to get the content."
 }
 
-// errVersionUnavailable is returned when a requested version cannot be served,
+// VersionUnavailableError is returned when a requested version cannot be served,
 // carrying the versions that do exist so the caller can pick one.
-type errVersionUnavailable struct {
-	specID    string
-	version   string
-	reason    string
-	available []string
+type VersionUnavailableError struct {
+	SpecID    string
+	Version   string
+	Reason    string
+	Available []string
 }
 
-func (e *errVersionUnavailable) Error() string {
-	msg := fmt.Sprintf("%s v%s is not available: %s", e.specID, e.version, e.reason)
-	if len(e.available) > 0 {
-		msg += "\nVersions in the archive: " + strings.Join(e.available, ", ")
+func (e *VersionUnavailableError) Error() string {
+	msg := fmt.Sprintf("%s v%s is not available: %s", e.SpecID, e.Version, e.Reason)
+	if len(e.Available) > 0 {
+		msg += "\nVersions in the archive: " + strings.Join(e.Available, ", ")
 	}
 	return msg
 }
 
-// resolution says where a requested version was found.
-type resolution struct {
-	// version is the canonical dotted version that was resolved.
-	version string
-	// archived is true when the content comes from the on-demand cache rather
+// Resolution says where a requested version was found.
+type Resolution struct {
+	// Version is the canonical dotted version that was resolved. It is empty
+	// when the default database version was requested.
+	Version string
+	// Archived is true when the content comes from the on-demand cache rather
 	// than the prebuilt database. Images for such a version are fetched lazily
 	// on first use; cross-references were never imported.
-	archived bool
+	Archived bool
 	// sv is the archive entry the version resolved to. It is nil on the cached
 	// fast path, which skips the archive listing — callers that need the entry
 	// must re-resolve it themselves.
@@ -83,31 +84,31 @@ type resolution struct {
 
 // resolve locates a requested version, fetching it on demand when needed. An
 // empty request resolves to whatever the prebuilt database holds.
-func (s *Source) resolve(ctx context.Context, specID, request string) (resolution, error) {
+func (s *Source) resolve(ctx context.Context, specID, request string) (Resolution, error) {
 	if request == "" {
-		return resolution{}, nil
+		return Resolution{}, nil
 	}
 
 	dotted, _, err := specver.Normalize(request)
 	if err != nil {
-		return resolution{}, &errVersionUnavailable{specID: specID, version: request, reason: err.Error()}
+		return Resolution{}, &VersionUnavailableError{SpecID: specID, Version: request, Reason: err.Error()}
 	}
 
 	// A version the build already imported is served from the prebuilt
 	// database, which also has its images and cross-references.
 	if dotted != "" {
 		if v, err := s.DB.ResolveVersion(specID, dotted); err == nil {
-			return resolution{version: v}, nil
+			return Resolution{Version: v}, nil
 		} else if !errors.Is(err, db.ErrNoVersion) {
-			return resolution{}, err
+			return Resolution{}, err
 		}
 	}
 
 	if s.Store == nil {
-		return resolution{}, &errVersionUnavailable{
-			specID:  specID,
-			version: request,
-			reason:  "on-demand fetching is disabled, and this version is not in the database",
+		return Resolution{}, &VersionUnavailableError{
+			SpecID:  specID,
+			Version: request,
+			Reason:  "on-demand fetching is disabled, and this version is not in the database",
 		}
 	}
 
@@ -116,20 +117,20 @@ func (s *Source) resolve(ctx context.Context, specID, request string) (resolutio
 	if dotted != "" {
 		cached, err := s.Store.Has(specID, dotted)
 		if err != nil {
-			return resolution{}, err
+			return Resolution{}, err
 		}
 		if cached {
-			return resolution{version: dotted, archived: true}, nil
+			return Resolution{Version: dotted, Archived: true}, nil
 		}
 	}
 
 	sv, available, err := pipeline.ResolveVersion(ctx, s.Client, specID, request, s.UseCache)
 	if err != nil {
-		return resolution{}, &errVersionUnavailable{
-			specID:    specID,
-			version:   request,
-			reason:    err.Error(),
-			available: versionLabels(available),
+		return Resolution{}, &VersionUnavailableError{
+			SpecID:    specID,
+			Version:   request,
+			Reason:    err.Error(),
+			Available: versionLabels(available),
 		}
 	}
 
@@ -141,81 +142,81 @@ func (s *Source) resolve(ctx context.Context, specID, request string) (resolutio
 	// A release selector such as "Rel-18" may well land on the version the
 	// build imported, so check the database again now that it is resolved.
 	if v, err := s.DB.ResolveVersion(specID, canonical); err == nil {
-		return resolution{version: v}, nil
+		return Resolution{Version: v}, nil
 	} else if !errors.Is(err, db.ErrNoVersion) {
-		return resolution{}, err
+		return Resolution{}, err
 	}
 
 	switch err := s.Store.Ensure(ctx, specID, canonical, sv, s.Budget); {
 	case err == nil:
 	case errors.Is(err, versionstore.ErrInProgress):
-		return resolution{}, &errFetchInProgress{specID: specID, version: canonical}
+		return Resolution{}, &FetchInProgressError{SpecID: specID, Version: canonical}
 	default:
-		return resolution{}, &errVersionUnavailable{
-			specID:  specID,
-			version: canonical,
-			reason:  err.Error(),
+		return Resolution{}, &VersionUnavailableError{
+			SpecID:  specID,
+			Version: canonical,
+			Reason:  err.Error(),
 		}
 	}
-	return resolution{version: canonical, archived: true, sv: sv}, nil
+	return Resolution{Version: canonical, Archived: true, sv: sv}, nil
 }
 
 // GetSection returns a section from whichever source holds the version.
-func (s *Source) GetSection(ctx context.Context, specID, version, number string, includeSubsections bool) ([]db.Section, resolution, error) {
+func (s *Source) GetSection(ctx context.Context, specID, version, number string, includeSubsections bool) ([]db.Section, Resolution, error) {
 	res, err := s.resolve(ctx, specID, version)
 	if err != nil {
 		return nil, res, err
 	}
-	if res.archived {
-		sections, err := s.Store.GetSection(specID, res.version, number, includeSubsections)
+	if res.Archived {
+		sections, err := s.Store.GetSection(specID, res.Version, number, includeSubsections)
 		return sections, res, err
 	}
-	sections, err := s.DB.GetSection(specID, res.version, number, includeSubsections)
+	sections, err := s.DB.GetSection(specID, res.Version, number, includeSubsections)
 	return sections, res, err
 }
 
 // AllSections returns every section of a version, content included, from
 // whichever source holds it.
-func (s *Source) AllSections(ctx context.Context, specID, version string) ([]db.Section, resolution, error) {
+func (s *Source) AllSections(ctx context.Context, specID, version string) ([]db.Section, Resolution, error) {
 	res, err := s.resolve(ctx, specID, version)
 	if err != nil {
 		return nil, res, err
 	}
-	if res.archived {
-		sections, err := s.Store.AllSections(specID, res.version)
+	if res.Archived {
+		sections, err := s.Store.AllSections(specID, res.Version)
 		return sections, res, err
 	}
-	sections, err := s.DB.AllSections(specID, res.version)
+	sections, err := s.DB.AllSections(specID, res.Version)
 	return sections, res, err
 }
 
 // GetTOC returns the section structure from whichever source holds the version.
-func (s *Source) GetTOC(ctx context.Context, specID, version string) ([]db.Section, resolution, error) {
+func (s *Source) GetTOC(ctx context.Context, specID, version string) ([]db.Section, Resolution, error) {
 	res, err := s.resolve(ctx, specID, version)
 	if err != nil {
 		return nil, res, err
 	}
-	if res.archived {
-		sections, err := s.Store.GetTOC(specID, res.version)
+	if res.Archived {
+		sections, err := s.Store.GetTOC(specID, res.Version)
 		return sections, res, err
 	}
-	sections, err := s.DB.GetTOC(specID, res.version)
+	sections, err := s.DB.GetTOC(specID, res.Version)
 	return sections, res, err
 }
 
 // GetImage returns an image from whichever source holds the version. For an
 // archived version the version's images are downloaded on first use; a nil
 // image with a nil error means the version holds no image of that name.
-func (s *Source) GetImage(ctx context.Context, specID, version, name string) (*db.Image, resolution, error) {
+func (s *Source) GetImage(ctx context.Context, specID, version, name string) (*db.Image, Resolution, error) {
 	res, err := s.resolve(ctx, specID, version)
 	if err != nil {
 		return nil, res, err
 	}
-	if res.archived {
+	if res.Archived {
 		if err := s.ensureImages(ctx, specID, res); err != nil {
 			return nil, res, err
 		}
-		img, err := s.Store.GetImage(specID, res.version, name)
+		img, err := s.Store.GetImage(specID, res.Version, name)
 		if err == nil && img == nil {
 			if err := s.imagesStillCached(specID, res); err != nil {
 				return nil, res, err
@@ -223,22 +224,22 @@ func (s *Source) GetImage(ctx context.Context, specID, version, name string) (*d
 		}
 		return img, res, err
 	}
-	img, err := s.DB.GetImage(specID, res.version, name)
+	img, err := s.DB.GetImage(specID, res.Version, name)
 	return img, res, err
 }
 
 // ListImages returns image metadata from whichever source holds the version.
 // For an archived version the version's images are downloaded on first use.
-func (s *Source) ListImages(ctx context.Context, specID, version string) ([]db.ImageInfo, resolution, error) {
+func (s *Source) ListImages(ctx context.Context, specID, version string) ([]db.ImageInfo, Resolution, error) {
 	res, err := s.resolve(ctx, specID, version)
 	if err != nil {
 		return nil, res, err
 	}
-	if res.archived {
+	if res.Archived {
 		if err := s.ensureImages(ctx, specID, res); err != nil {
 			return nil, res, err
 		}
-		infos, err := s.Store.ListImages(specID, res.version)
+		infos, err := s.Store.ListImages(specID, res.Version)
 		if err == nil && len(infos) == 0 {
 			if err := s.imagesStillCached(specID, res); err != nil {
 				return nil, res, err
@@ -246,7 +247,7 @@ func (s *Source) ListImages(ctx context.Context, specID, version string) ([]db.I
 		}
 		return infos, res, err
 	}
-	infos, err := s.DB.ListImages(specID, res.version)
+	infos, err := s.DB.ListImages(specID, res.Version)
 	return infos, res, err
 }
 
@@ -254,22 +255,22 @@ func (s *Source) ListImages(ctx context.Context, specID, version string) ([]db.I
 // version was evicted between ensureImages and the read": a concurrent fetch's
 // eviction can drop it in that window, and answering a definitive not-found
 // then would hide content a retry recovers.
-func (s *Source) imagesStillCached(specID string, res resolution) error {
-	fetched, err := s.Store.HasImages(specID, res.version)
+func (s *Source) imagesStillCached(specID string, res Resolution) error {
+	fetched, err := s.Store.HasImages(specID, res.Version)
 	if err != nil {
 		return err
 	}
 	if !fetched {
-		return &errFetchInProgress{specID: specID, version: res.version, images: true}
+		return &FetchInProgressError{SpecID: specID, Version: res.Version, Images: true}
 	}
 	return nil
 }
 
 // ensureImages makes an archived version's images available in the cache. The
-// resolution's archive entry is nil when the version came from the cached fast
+// Resolution's archive entry is nil when the version came from the cached fast
 // path, so the entry may have to be resolved again before fetching.
-func (s *Source) ensureImages(ctx context.Context, specID string, res resolution) error {
-	fetched, err := s.Store.HasImages(specID, res.version)
+func (s *Source) ensureImages(ctx context.Context, specID string, res Resolution) error {
+	fetched, err := s.Store.HasImages(specID, res.Version)
 	if err != nil {
 		return err
 	}
@@ -279,28 +280,28 @@ func (s *Source) ensureImages(ctx context.Context, specID string, res resolution
 
 	sv := res.sv
 	if sv == nil {
-		resolved, available, err := pipeline.ResolveVersion(ctx, s.Client, specID, res.version, s.UseCache)
+		resolved, available, err := pipeline.ResolveVersion(ctx, s.Client, specID, res.Version, s.UseCache)
 		if err != nil {
-			return &errVersionUnavailable{
-				specID:    specID,
-				version:   res.version,
-				reason:    err.Error(),
-				available: versionLabels(available),
+			return &VersionUnavailableError{
+				SpecID:    specID,
+				Version:   res.Version,
+				Reason:    err.Error(),
+				Available: versionLabels(available),
 			}
 		}
 		sv = resolved
 	}
 
-	switch err := s.Store.EnsureImages(ctx, specID, res.version, sv, s.Budget); {
+	switch err := s.Store.EnsureImages(ctx, specID, res.Version, sv, s.Budget); {
 	case err == nil:
 		return nil
 	case errors.Is(err, versionstore.ErrInProgress):
-		return &errFetchInProgress{specID: specID, version: res.version, images: true}
+		return &FetchInProgressError{SpecID: specID, Version: res.Version, Images: true}
 	default:
-		return &errVersionUnavailable{
-			specID:  specID,
-			version: res.version,
-			reason:  err.Error(),
+		return &VersionUnavailableError{
+			SpecID:  specID,
+			Version: res.Version,
+			Reason:  err.Error(),
 		}
 	}
 }

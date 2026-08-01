@@ -8,6 +8,7 @@ import (
 
 	"github.com/higebu/3gpp-mcp/db"
 	"github.com/higebu/3gpp-mcp/internal/specver"
+	"github.com/higebu/3gpp-mcp/internal/structdiff"
 	"github.com/higebu/3gpp-mcp/internal/textdiff"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -60,45 +61,45 @@ func compareStructure(ctx context.Context, src *Source, input CompareVersionsInp
 		return r
 	}
 
-	d := diffStructure(oldSecs, newSecs)
+	d := structdiff.Diff(oldSecs, newSecs)
 	oldLabel, newLabel := versionLabel(oldSecs, oldRes), versionLabel(newSecs, newRes)
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# Structural changes: %d sections in %s, %d in %s\n", d.oldCount, oldLabel, d.newCount, newLabel)
+	fmt.Fprintf(&sb, "# Structural changes: %d sections in %s, %d in %s\n", d.OldCount, oldLabel, d.NewCount, newLabel)
 	fmt.Fprintf(&sb, "Added: %d | Removed: %d | Renumbered: %d | Title changed: %d | Content changed: %d | Unchanged: %d\n",
-		len(d.added), len(d.removed), len(d.renumbered), len(d.retitled), len(d.contentChanged), d.unchanged)
+		len(d.Added), len(d.Removed), len(d.Renumbered), len(d.Retitled), len(d.ContentChanged), d.Unchanged)
 
-	if len(d.added)+len(d.removed)+len(d.renumbered)+len(d.retitled)+len(d.contentChanged) == 0 {
+	if len(d.Added)+len(d.Removed)+len(d.Renumbered)+len(d.Retitled)+len(d.ContentChanged) == 0 {
 		sb.WriteString("\nNo structural differences between the two versions.")
 	}
-	if len(d.added) > 0 {
+	if len(d.Added) > 0 {
 		fmt.Fprintf(&sb, "\n## Added in %s\n", newLabel)
-		for _, s := range d.added {
+		for _, s := range d.Added {
 			fmt.Fprintf(&sb, "- %s %s\n", s.Number, s.Title)
 		}
 	}
-	if len(d.removed) > 0 {
+	if len(d.Removed) > 0 {
 		fmt.Fprintf(&sb, "\n## Removed since %s\n", oldLabel)
-		for _, s := range d.removed {
+		for _, s := range d.Removed {
 			fmt.Fprintf(&sb, "- %s %s\n", s.Number, s.Title)
 		}
 	}
-	if len(d.renumbered) > 0 {
+	if len(d.Renumbered) > 0 {
 		sb.WriteString("\n## Renumbered (same title)\n")
-		for _, r := range d.renumbered {
-			fmt.Fprintf(&sb, "- %s → %s  %s\n", r.oldNumber, r.newNumber, r.title)
+		for _, r := range d.Renumbered {
+			fmt.Fprintf(&sb, "- %s → %s  %s\n", r.OldNumber, r.NewNumber, r.Title)
 		}
 	}
-	if len(d.retitled) > 0 {
+	if len(d.Retitled) > 0 {
 		sb.WriteString("\n## Title changed\n")
-		for _, r := range d.retitled {
-			fmt.Fprintf(&sb, "- %s: %q → %q\n", r.number, r.oldTitle, r.newTitle)
+		for _, r := range d.Retitled {
+			fmt.Fprintf(&sb, "- %s: %q → %q\n", r.Number, r.OldTitle, r.NewTitle)
 		}
 	}
-	if len(d.contentChanged) > 0 {
+	if len(d.ContentChanged) > 0 {
 		sb.WriteString("\n## Content changed\n")
-		for _, c := range d.contentChanged {
-			fmt.Fprintf(&sb, "- %s %s  (%d → %d lines)\n", c.number, c.title, c.oldLines, c.newLines)
+		for _, c := range d.ContentChanged {
+			fmt.Fprintf(&sb, "- %s %s  (%d → %d lines)\n", c.Number, c.Title, c.OldLines, c.NewLines)
 		}
 		sb.WriteString("\nUse compare_versions with section_number to see the text diff of a changed section.")
 	}
@@ -139,7 +140,7 @@ func compareSection(ctx context.Context, src *Source, input CompareVersionsInput
 	}
 
 	header := compareHeader(input.SpecID, input.SectionNumber, oldLabel, newLabel)
-	diff := textdiff.Unified(sectionLines(oldSecs), sectionLines(newSecs), ctxLines)
+	diff := textdiff.Unified(structdiff.SectionLines(oldSecs), structdiff.SectionLines(newSecs), ctxLines)
 	if diff == "" {
 		msg := fmt.Sprintf("Section %s is identical between %s and %s.", input.SectionNumber, oldLabel, newLabel)
 		return prependLine(header, textResult(msg))
@@ -150,11 +151,11 @@ func compareSection(ctx context.Context, src *Source, input CompareVersionsInput
 // twoVersionErrorResult reports version-resolution errors for a two-version
 // read, folding a double in-progress fetch into one retry hint.
 func twoVersionErrorResult(oldErr, newErr error) *mcp.CallToolResult {
-	var oldIP, newIP *errFetchInProgress
+	var oldIP, newIP *FetchInProgressError
 	if errors.As(oldErr, &oldIP) && errors.As(newErr, &newIP) {
 		return textResult(fmt.Sprintf(
 			"%s v%s and v%s are being downloaded and converted. This takes up to a few minutes for a large specification. Call the same tool again to get the comparison.",
-			oldIP.specID, oldIP.version, newIP.version))
+			oldIP.SpecID, oldIP.Version, newIP.Version))
 	}
 	if oldErr != nil {
 		return versionErrorResult(oldErr, "failed to read old version")
@@ -167,7 +168,7 @@ func twoVersionErrorResult(oldErr, newErr error) *mcp.CallToolResult {
 
 // checkComparable rejects a comparison with nothing on either side or with
 // both requests landing on the same version.
-func checkComparable(src *Source, specID string, oldSecs, newSecs []db.Section, oldRes, newRes resolution) *mcp.CallToolResult {
+func checkComparable(src *Source, specID string, oldSecs, newSecs []db.Section, oldRes, newRes Resolution) *mcp.CallToolResult {
 	if len(oldSecs) == 0 && len(newSecs) == 0 {
 		if parts, err := src.DB.FindSpecIDsByFamily(specID); err == nil && len(parts) > 0 {
 			return errorResult(fmt.Sprintf("%s has multiple parts: %s — specify one", specID, strings.Join(parts, ", ")))
@@ -181,11 +182,11 @@ func checkComparable(src *Source, specID string, oldSecs, newSecs []db.Section, 
 	return nil
 }
 
-// resolvedVersion names the version a request landed on. The resolution knows
+// resolvedVersion names the version a request landed on. The Resolution knows
 // it except on the database default path, where the rows do.
-func resolvedVersion(secs []db.Section, res resolution) string {
-	if res.version != "" {
-		return res.version
+func resolvedVersion(secs []db.Section, res Resolution) string {
+	if res.Version != "" {
+		return res.Version
 	}
 	if len(secs) > 0 {
 		return secs[0].Version
@@ -194,7 +195,7 @@ func resolvedVersion(secs []db.Section, res resolution) string {
 }
 
 // versionLabel renders one side of a comparison, e.g. "v17.9.0 (Rel-17, archived)".
-func versionLabel(secs []db.Section, res resolution) string {
+func versionLabel(secs []db.Section, res Resolution) string {
 	name := resolvedVersion(secs, res)
 	if name == "" {
 		return "the database version"
@@ -206,7 +207,7 @@ func versionLabel(secs []db.Section, res resolution) string {
 			notes = append(notes, rel)
 		}
 	}
-	if res.archived {
+	if res.Archived {
 		notes = append(notes, "archived")
 	}
 	if len(notes) > 0 {
@@ -222,152 +223,4 @@ func compareHeader(specID, sectionNumber, oldLabel, newLabel string) string {
 		h += " — Section " + sectionNumber
 	}
 	return h + fmt.Sprintf(" — %s → %s]", oldLabel, newLabel)
-}
-
-// sectionLines joins section contents the way get_section renders them and
-// splits into diffable lines, without trailing blank-line noise.
-func sectionLines(secs []db.Section) []string {
-	var full strings.Builder
-	for i, s := range secs {
-		if i > 0 {
-			full.WriteString("\n\n")
-		}
-		full.WriteString(strings.TrimRight(s.Content, "\n"))
-	}
-	return strings.Split(full.String(), "\n")
-}
-
-type renumbering struct {
-	oldNumber, newNumber, title string
-}
-
-type retitle struct {
-	number, oldTitle, newTitle string
-}
-
-type contentChange struct {
-	number, title      string
-	oldLines, newLines int
-}
-
-type structDiff struct {
-	added, removed []db.Section
-	renumbered     []renumbering
-	retitled       []retitle
-	contentChanged []contentChange
-	unchanged      int
-	oldCount       int
-	newCount       int
-}
-
-// diffStructure matches two versions' sections by number and classifies every
-// difference. Slices keep document order.
-func diffStructure(oldSecs, newSecs []db.Section) structDiff {
-	d := structDiff{oldCount: len(oldSecs), newCount: len(newSecs)}
-
-	oldByNum := make(map[string]*db.Section, len(oldSecs))
-	for i := range oldSecs {
-		oldByNum[oldSecs[i].Number] = &oldSecs[i]
-	}
-	newByNum := make(map[string]*db.Section, len(newSecs))
-	for i := range newSecs {
-		newByNum[newSecs[i].Number] = &newSecs[i]
-	}
-
-	for i := range newSecs {
-		n := &newSecs[i]
-		o, ok := oldByNum[n.Number]
-		if !ok {
-			d.added = append(d.added, *n)
-			continue
-		}
-		// The leading markdown heading restates number and title, so it is
-		// stripped before comparing: a pure retitle must not also count as a
-		// content change.
-		bodyChanged := stripHeadingLine(o.Content) != stripHeadingLine(n.Content)
-		if o.Title != n.Title {
-			d.retitled = append(d.retitled, retitle{n.Number, o.Title, n.Title})
-		}
-		switch {
-		case bodyChanged:
-			d.contentChanged = append(d.contentChanged, contentChange{n.Number, n.Title, lineCount(o.Content), lineCount(n.Content)})
-		case o.Title == n.Title:
-			d.unchanged++
-		}
-	}
-	for i := range oldSecs {
-		if _, ok := newByNum[oldSecs[i].Number]; !ok {
-			d.removed = append(d.removed, oldSecs[i])
-		}
-	}
-
-	d.promoteRenumbered()
-	return d
-}
-
-// promoteRenumbered pairs removed and added sections whose title is unique on
-// both sides, the cheap and safe answer to clause numbers shifting between
-// releases. Similarity-based matching is deliberately out of scope.
-func (d *structDiff) promoteRenumbered() {
-	countTitles := func(secs []db.Section) map[string]int {
-		counts := make(map[string]int, len(secs))
-		for _, s := range secs {
-			if t := normalizeTitle(s.Title); t != "" {
-				counts[t]++
-			}
-		}
-		return counts
-	}
-	removedCounts, addedCounts := countTitles(d.removed), countTitles(d.added)
-
-	addedByTitle := make(map[string]db.Section, len(d.added))
-	for _, s := range d.added {
-		addedByTitle[normalizeTitle(s.Title)] = s
-	}
-
-	var removed []db.Section
-	moved := make(map[string]bool)
-	for _, o := range d.removed {
-		t := normalizeTitle(o.Title)
-		if t != "" && removedCounts[t] == 1 && addedCounts[t] == 1 {
-			n := addedByTitle[t]
-			d.renumbered = append(d.renumbered, renumbering{o.Number, n.Number, n.Title})
-			moved[n.Number] = true
-			// A renumbered section may have been edited too; that must not
-			// hide behind the move.
-			if stripHeadingLine(o.Content) != stripHeadingLine(n.Content) {
-				d.contentChanged = append(d.contentChanged, contentChange{n.Number, n.Title, lineCount(o.Content), lineCount(n.Content)})
-			}
-			continue
-		}
-		removed = append(removed, o)
-	}
-	d.removed = removed
-
-	var added []db.Section
-	for _, s := range d.added {
-		if !moved[s.Number] {
-			added = append(added, s)
-		}
-	}
-	d.added = added
-}
-
-// stripHeadingLine removes the leading markdown heading of a section body.
-func stripHeadingLine(content string) string {
-	if !strings.HasPrefix(content, "#") {
-		return content
-	}
-	if i := strings.IndexByte(content, '\n'); i >= 0 {
-		return content[i+1:]
-	}
-	return ""
-}
-
-func normalizeTitle(title string) string {
-	return strings.ToLower(strings.TrimSpace(title))
-}
-
-func lineCount(content string) int {
-	return strings.Count(content, "\n") + 1
 }

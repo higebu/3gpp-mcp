@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
     <title>3GPP Spec Viewer</title>
     <link rel="stylesheet" href="/static/katex/katex.min.css">
     <link rel="stylesheet" href="/static/style.css">
@@ -36,6 +37,12 @@
             {{template "openapi_list.html" .Data}}
         {{else if eq .Page "openapi"}}
             {{template "openapi.html" .Data}}
+        {{else if eq .Page "compare"}}
+            {{template "compare.html" .Data}}
+        {{else if eq .Page "versions"}}
+            {{template "versions.html" .Data}}
+        {{else if eq .Page "fetching"}}
+            {{template "fetching.html" .Data}}
         {{else if eq .Page "error"}}
             <div class="error-page">
                 <h1>{{.Data.Code}}</h1>

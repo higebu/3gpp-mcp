@@ -55,7 +55,7 @@ func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
 // token is set it guards everything except the health probe: the web viewer
 // serves the same corpus as the MCP tools, so leaving it open would make the
 // token meaningless.
-func buildHTTPHandler(d *db.DB, s *mcp.Server, bearerToken string, enableWeb bool) http.Handler {
+func buildHTTPHandler(src *tools.Source, s *mcp.Server, bearerToken string, enableWeb bool) http.Handler {
 	// Stateless mode is required to serve protocol version 2026-07-28,
 	// whose lifecycle has no initialize handshake or Mcp-Session-Id.
 	// Older clients still work: each request runs in a temporary session.
@@ -69,7 +69,7 @@ func buildHTTPHandler(d *db.DB, s *mcp.Server, bearerToken string, enableWeb boo
 	appMux := http.NewServeMux()
 	if enableWeb {
 		appMux.Handle("/mcp/", http.StripPrefix("/mcp", mcpHandler))
-		appMux.Handle("/", web.NewServer(d))
+		appMux.Handle("/", web.NewServer(src))
 	} else {
 		appMux.Handle("/", mcpHandler)
 	}
@@ -244,7 +244,7 @@ func cmdServe(args []string) {
 
 		server := &http.Server{
 			Addr:    *addr,
-			Handler: buildHTTPHandler(d, s, *bearerToken, *enableWeb),
+			Handler: buildHTTPHandler(src, s, *bearerToken, *enableWeb),
 			// Bound header reads and idle keep-alives so stalled connections
 			// (slowloris) cannot pile up. No overall write timeout: MCP
 			// responses may legitimately stream for a long time.

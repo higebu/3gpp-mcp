@@ -55,6 +55,9 @@ func sourceWithStore(t *testing.T, d *db.DB, fetcher versionstore.Fetcher) *Sour
 	store, err := versionstore.Open(versionstore.Options{
 		Path:    filepath.Join(t.TempDir(), "versions.db"),
 		Fetcher: fetcher,
+		// Tests read two versions side by side; the default zero limit keeps
+		// only the newest fetch, making concurrent fetches evict each other.
+		LimitBytes: -1,
 	})
 	if err != nil {
 		t.Fatalf("versionstore.Open: %v", err)
@@ -96,7 +99,7 @@ func TestGetSectionUsesDatabaseVersion(t *testing.T) {
 		if len(sections) != 1 {
 			t.Fatalf("GetSection(%q) = %d sections, want 1", request, len(sections))
 		}
-		if res.archived {
+		if res.Archived {
 			t.Errorf("GetSection(%q) reported archived, want database", request)
 		}
 	}
@@ -111,8 +114,8 @@ func TestGetSectionFetchesArchivedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSection: %v", err)
 	}
-	if !res.archived || res.version != "19.5.0" {
-		t.Fatalf("resolution = %+v, want archived v19.5.0", res)
+	if !res.Archived || res.Version != "19.5.0" {
+		t.Fatalf("Resolution = %+v, want archived v19.5.0", res)
 	}
 	if len(sections) != 1 || !strings.Contains(sections[0].Content, "Archived text") {
 		t.Fatalf("GetSection = %+v, want the fetched content", sections)
@@ -127,7 +130,7 @@ func TestGetSectionFetchesArchivedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTOC: %v", err)
 	}
-	if !res.archived || len(toc) != 1 {
+	if !res.Archived || len(toc) != 1 {
 		t.Errorf("GetTOC = %+v, %+v; want one archived section", toc, res)
 	}
 }
@@ -270,9 +273,9 @@ func TestHandleListVersions(t *testing.T) {
 		t.Fatalf("got %d versions, want 3: %+v", len(out.Versions), out.Versions)
 	}
 	want := []VersionInfo{
-		{Version: "20.2.0", Release: "20", Token: "k20", Availability: availabilityArchive},
-		{Version: "19.5.0", Release: "19", Token: "j50", Availability: availabilityCached},
-		{Version: "18.6.0", Release: "18", Token: "i60", Availability: availabilityDatabase},
+		{Version: "20.2.0", Release: "20", Token: "k20", Availability: AvailabilityArchive},
+		{Version: "19.5.0", Release: "19", Token: "j50", Availability: AvailabilityCached},
+		{Version: "18.6.0", Release: "18", Token: "i60", Availability: AvailabilityDatabase},
 	}
 	for i, w := range want {
 		if out.Versions[i] != w {
