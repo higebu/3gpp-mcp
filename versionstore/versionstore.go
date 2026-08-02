@@ -171,28 +171,9 @@ func Open(opts Options) (*Store, error) {
 		_ = conn.Close()
 		return nil, fmt.Errorf("ping version cache: %w", err)
 	}
-	var generation int
-	if err := conn.QueryRow("PRAGMA user_version").Scan(&generation); err != nil {
+	if err := initSchema(conn); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("read version cache generation: %w", err)
-	}
-	if generation != cacheSchemaVersion {
-		// A fresh file reads 0 and has nothing to drop; an older-generation
-		// file holds content in an incompatible format and starts over.
-		for _, table := range []string{"cache_entries", "images", "sections", "specs"} {
-			if _, err := conn.Exec("DROP TABLE IF EXISTS " + table); err != nil {
-				_ = conn.Close()
-				return nil, fmt.Errorf("reset version cache: %w", err)
-			}
-		}
-		if _, err := conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", cacheSchemaVersion)); err != nil {
-			_ = conn.Close()
-			return nil, fmt.Errorf("stamp version cache generation: %w", err)
-		}
-	}
-	if _, err := conn.Exec(schema); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("create version cache schema: %w", err)
+		return nil, err
 	}
 
 	return &Store{
@@ -204,6 +185,55 @@ func Open(opts Options) (*Store, error) {
 		imageFetcher: opts.ImageFetcher,
 		inflight:     map[string]*fetch{},
 	}, nil
+}
+
+// initSchema checks the cache generation and creates the schema in a single
+// immediate transaction: several processes may share the file, and taking the
+// write lock before reading user_version means each one sees either the
+// complete old generation (and wipes it) or the complete, already-stamped new
+// one — never the half-dropped state in between.
+func initSchema(conn *sql.DB) error {
+	ctx := context.Background()
+	c, err := conn.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("init version cache: %w", err)
+	}
+	defer c.Close()
+
+	if _, err := c.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return fmt.Errorf("lock version cache: %w", err)
+	}
+	if err := migrateAndCreate(ctx, c); err != nil {
+		_, _ = c.ExecContext(ctx, "ROLLBACK")
+		return err
+	}
+	if _, err := c.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("commit version cache schema: %w", err)
+	}
+	return nil
+}
+
+func migrateAndCreate(ctx context.Context, c *sql.Conn) error {
+	var generation int
+	if err := c.QueryRowContext(ctx, "PRAGMA user_version").Scan(&generation); err != nil {
+		return fmt.Errorf("read version cache generation: %w", err)
+	}
+	if generation != cacheSchemaVersion {
+		// A fresh file reads 0 and has nothing to drop; an older-generation
+		// file holds content in an incompatible format and starts over.
+		for _, table := range []string{"cache_entries", "images", "sections", "specs"} {
+			if _, err := c.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
+				return fmt.Errorf("reset version cache: %w", err)
+			}
+		}
+		if _, err := c.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", cacheSchemaVersion)); err != nil {
+			return fmt.Errorf("stamp version cache generation: %w", err)
+		}
+	}
+	if _, err := c.ExecContext(ctx, schema); err != nil {
+		return fmt.Errorf("create version cache schema: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Close() error {
