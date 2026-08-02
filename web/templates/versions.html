@@ -1,10 +1,6 @@
 {{define "versions.html"}}
+{{template "spec-header" .Header}}
 <div class="versions-page">
-    <div class="page-header">
-        <h1>{{.SpecID}} — Versions</h1>
-        <p class="subtitle"><a href="{{specURL .SpecID}}">Back to the specification</a></p>
-    </div>
-
     {{if .ArchiveErr}}
     <p class="search-error">{{.ArchiveErr}}</p>
     {{end}}

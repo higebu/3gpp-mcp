@@ -343,6 +343,66 @@ mark {
     grid-column: 1 / -1;
 }
 
+/* === Spec header (identity + Document/Versions/Compare tabs) === */
+.spec-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem 1.25rem;
+    padding-top: 4px;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.spec-header-id {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    padding-bottom: 8px;
+}
+
+.spec-header-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+.spec-header-version {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
+.spec-tabs {
+    display: flex;
+    gap: 2px;
+    margin-left: auto;
+}
+
+.spec-tab {
+    padding: 6px 14px;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    /* The active underline sits on the header's own border. */
+    margin-bottom: -1px;
+    border-bottom: 2px solid transparent;
+}
+
+.spec-tab:hover {
+    color: var(--text);
+    text-decoration: none;
+}
+
+.spec-tab:focus-visible {
+    outline: 2px solid var(--link);
+    outline-offset: -2px;
+    border-radius: var(--radius);
+}
+
+.spec-tab.active {
+    color: var(--link);
+    border-bottom-color: var(--link);
+    font-weight: 600;
+}
+
 /* === TOC Sidebar === */
 .toc-sidebar {
     background: var(--sidebar-bg);
@@ -357,6 +417,32 @@ mark {
 .toc-header {
     padding: 12px 16px;
     border-bottom: 1px solid var(--border);
+    /* Keep the label and the drawer's close button visible while the
+       section list scrolls. */
+    position: sticky;
+    top: 0;
+    background: var(--sidebar-bg);
+    z-index: 1;
+}
+
+.toc-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+}
+
+.toc-close {
+    display: none;
+    float: right;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 4px 8px;
+    cursor: pointer;
 }
 
 .toc-header h3 {
@@ -748,11 +834,6 @@ mark {
     color: var(--text-secondary);
 }
 
-.toc-links {
-    margin-top: 0.35rem;
-    font-size: 0.85rem;
-}
-
 /* === Compare page === */
 .compare-page {
     max-width: 1000px;
@@ -914,20 +995,27 @@ mark {
         display: block;
     }
 
+    /* Full-screen drawer above the navbar: the mobile navbar wraps to an
+       arbitrary height, so anchoring below it would hide the drawer's
+       header (and the way to close it) behind the navbar. */
     .toc-sidebar {
         display: none;
         position: fixed;
-        top: 48px;
+        top: 0;
         left: 0;
         right: 0;
         bottom: 0;
         max-height: none;
         border-radius: 0;
-        z-index: 50;
+        z-index: 200;
         border: none;
     }
 
     .toc-sidebar.open {
+        display: block;
+    }
+
+    .toc-close {
         display: block;
     }
 
@@ -960,11 +1048,21 @@ mark {
     .section-nav-next {
         text-align: left;
     }
+
+    .spec-tabs {
+        margin-left: 0;
+        width: 100%;
+    }
+
+    .spec-tab {
+        flex: 1;
+        text-align: center;
+    }
 }
 
 /* === Print === */
 @media print {
-    .navbar, .toc-sidebar, .toc-toggle, .theme-toggle, .pagination, .filter-form, .section-nav {
+    .navbar, .toc-sidebar, .toc-toggle, .theme-toggle, .pagination, .filter-form, .section-nav, .spec-tabs {
         display: none;
     }
 

@@ -39,6 +39,7 @@ type compareData struct {
 	DiffLines                    []diffLine
 	Identical                    bool
 	Notice                       string
+	Header                       specHeader
 }
 
 func (h *handler) handleCompare(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +52,9 @@ func (h *handler) handleCompare(w http.ResponseWriter, r *http.Request) {
 		NewParam:   q.Get("new"),
 		Section:    q.Get("section"),
 		OldSection: q.Get("old_section"),
+		// Carrying the old version keeps the tabs on the version being
+		// compared: Document opens it, Compare keeps it selected.
+		Header: specHeader{SpecID: specID, Active: "compare", Version: q.Get("old")},
 	}
 
 	// Without an old version there is nothing to compare yet; show the form.

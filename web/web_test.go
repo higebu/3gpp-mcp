@@ -264,8 +264,8 @@ func TestHandleSpec(t *testing.T) {
 	if !strings.Contains(body, `name="spec_id" value="TS 23.501"`) {
 		t.Errorf("expected navbar search to be pre-filled with the current spec ID, got:\n%s", body)
 	}
-	if !strings.Contains(body, `<p class="toc-version">v18.6.0 (Rel-18)</p>`) {
-		t.Errorf("expected the TOC header to name the spec version, got:\n%s", body)
+	if !strings.Contains(body, `<span class="spec-header-version">v18.6.0 (Rel-18)</span>`) {
+		t.Errorf("expected the spec header to name the spec version, got:\n%s", body)
 	}
 }
 
@@ -1523,5 +1523,86 @@ func TestHandleCompare_UnknownNewVersion(t *testing.T) {
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestSpecHeaderTabs verifies the Document / Versions / Compare tabs are on
+// every spec-scoped page with the current page marked, and that only the
+// document page carries the contents drawer.
+func TestSpecHeaderTabs(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	pages := []struct {
+		path       string
+		hasDrawer  bool
+		activeName string
+	}{
+		{"/specs/TS 23.501/sections/5.1", true, ">Document</a>"},
+		{"/specs/TS 23.501/versions", false, ">Versions</a>"},
+		{"/specs/TS 23.501/compare", false, ">Compare</a>"},
+	}
+	for _, p := range pages {
+		resp, err := http.Get(ts.URL + p.path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", p.path, err)
+		}
+		body := readBody(t, resp)
+		resp.Body.Close()
+
+		if !strings.Contains(body, `class="spec-tabs"`) {
+			t.Errorf("%s: expected the spec tabs, got:\n%s", p.path, body)
+		}
+		if !strings.Contains(body, `aria-current="page"`+" "+p.activeName) &&
+			!strings.Contains(body, `aria-current="page" href`) {
+			t.Errorf("%s: expected an active tab, got:\n%s", p.path, body)
+		}
+		for _, item := range []string{">Document</a>", ">Versions</a>", ">Compare</a>"} {
+			if !strings.Contains(body, item) {
+				t.Errorf("%s: expected tab %s, got:\n%s", p.path, item, body)
+			}
+		}
+		if got := strings.Contains(body, `id="toc-close"`); got != p.hasDrawer {
+			t.Errorf("%s: drawer close button present = %v, want %v", p.path, got, p.hasDrawer)
+		}
+	}
+}
+
+// TestSpecHeaderTabs_ArchivedVersionCarried keeps the tabs on the archived
+// version: Document and Compare carry the version being browsed.
+func TestSpecHeaderTabs_ArchivedVersionCarried(t *testing.T) {
+	ts, _ := setupVersionedServer(t, cannedFetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/sections/5.1?version=19.5.0")
+	if err != nil {
+		t.Fatalf("GET archived section: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if !strings.Contains(body, `?version=19.5.0">Document</a>`) {
+		t.Errorf("expected the Document tab to carry the version, got:\n%s", body)
+	}
+	if !strings.Contains(body, `/compare?old=19.5.0">Compare</a>`) {
+		t.Errorf("expected the Compare tab to preset the version, got:\n%s", body)
+	}
+}
+
+// TestSpecHeaderTabs_CompareKeepsOldVersion keeps the compared old version in
+// the header tabs: Document opens it, Compare keeps it selected.
+func TestSpecHeaderTabs_CompareKeepsOldVersion(t *testing.T) {
+	ts, _ := setupVersionedServer(t, cannedFetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=19.5.0")
+	if err != nil {
+		t.Fatalf("GET compare: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if !strings.Contains(body, `?version=19.5.0">Document</a>`) {
+		t.Errorf("expected the Document tab to open the compared version, got:\n%s", body)
+	}
+	if !strings.Contains(body, `/compare?old=19.5.0">Compare</a>`) {
+		t.Errorf("expected the Compare tab to keep the old version, got:\n%s", body)
 	}
 }
