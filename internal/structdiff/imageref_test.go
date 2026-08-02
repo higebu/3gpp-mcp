@@ -39,6 +39,24 @@ func TestNormalizeImageRefs(t *testing.T) {
 			same: false,
 		},
 		{
+			name: "non-conversion extension change stays different",
+			a:    "![Figure](image://image3.jpg)",
+			b:    "![Figure](image://image3.png)",
+			same: false,
+		},
+		{
+			name: "same non-conversion extension compares equal",
+			a:    "![image3.jpg](image://image3.jpg?w=10&h=20)",
+			b:    "![Figure](image://image3.jpg?w=10&h=20)",
+			same: true,
+		},
+		{
+			name: "pcz source folds with png target",
+			a:    "![Figure](image://image7.pcz)",
+			b:    "![Figure](image://image7.png)",
+			same: true,
+		},
+		{
 			name: "real alt text change stays different",
 			a:    "![Network Topology](image://image3.png)",
 			b:    "![Attach Procedure](image://image3.png)",

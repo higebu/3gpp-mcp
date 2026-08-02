@@ -123,7 +123,8 @@ filename differs between paths — `image3.png` after `--convert-image`
 `image3.emf` otherwise; `GetImage` resolves either spelling (the version cache
 falls back to a basename match). `compare_versions` and the web compare page
 normalize references (`structdiff.NormalizeImageRefs`) before diffing so the
-extension and alt spelling never count as a content change. The web viewer
+conversion-pair extensions (`.emf`/`.wmf`/`.pcz`/`.png`) and alt spelling
+never count as a content change; other extension changes stay visible. The web viewer
 serves an SVG placeholder for formats a browser cannot render (EMF/WMF).
 
 The version cache stamps `PRAGMA user_version`
