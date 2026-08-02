@@ -387,11 +387,14 @@ func TestPutImagesAfterEviction(t *testing.T) {
 	}
 }
 
-// TestOpenMigratesPreImageCache checks that a cache file created before images
-// were cached opens cleanly and gains the images_fetched column.
-func TestOpenMigratesPreImageCache(t *testing.T) {
+// TestOpenWipesOldGenerationCache checks that a cache file from an earlier
+// schema generation (its content stored in an incompatible format, e.g. the
+// pre-unification image notation) is dropped and recreated on open, while a
+// current-generation cache survives a reopen intact.
+func TestOpenWipesOldGenerationCache(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "versions.db")
-	const oldSchema = db.SpecTablesSchema + `
+	// An old-generation file: same tables, but user_version is 0.
+	oldSchema := db.SpecTablesSchema + `
 CREATE TABLE IF NOT EXISTS cache_entries (
     spec_id TEXT NOT NULL,
     version TEXT NOT NULL,
@@ -419,24 +422,25 @@ CREATE TABLE IF NOT EXISTS cache_entries (
 
 	s, err := Open(Options{Path: path, LimitBytes: DefaultLimitBytes})
 	if err != nil {
-		t.Fatalf("Open on a pre-image cache: %v", err)
+		t.Fatalf("Open on an old-generation cache: %v", err)
 	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	if has, err := s.Has("TS 23.501", "18.6.0"); err != nil || !has {
-		t.Errorf("Has = %v, %v; want the migrated entry", has, err)
-	}
-	if fetched, err := s.HasImages("TS 23.501", "18.6.0"); err != nil || fetched {
-		t.Errorf("HasImages = %v, %v; want false for a migrated entry", fetched, err)
+	if has, err := s.Has("TS 23.501", "18.6.0"); err != nil || has {
+		t.Errorf("Has = %v, %v; want the old-generation entry wiped", has, err)
 	}
 
-	// Reopening an already-migrated cache must tolerate the existing column.
+	// Seed an entry through the store, then reopen: a current-generation
+	// cache must keep its content.
+	if err := s.put(db.Spec{ID: "TS 23.501", Version: "18.6.0"}, []db.Section{
+		{Number: "1", Title: "Scope", Content: "# 1 Scope\nBody."},
+	}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
 	if err := s.Close(); err != nil {
-		t.Fatalf("close migrated cache: %v", err)
+		t.Fatalf("close cache: %v", err)
 	}
 	reopened, err := Open(Options{Path: path, LimitBytes: DefaultLimitBytes})
 	if err != nil {
-		t.Fatalf("Open on an already-migrated cache: %v", err)
+		t.Fatalf("Open on a current-generation cache: %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
 	if has, err := reopened.Has("TS 23.501", "18.6.0"); err != nil || !has {

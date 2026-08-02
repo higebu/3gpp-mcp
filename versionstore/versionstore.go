@@ -47,6 +47,13 @@ const maxFetchDuration = 30 * time.Minute
 // DefaultFileName is the cache file created inside the XDG cache directory.
 const DefaultFileName = "versions.db"
 
+// cacheSchemaVersion is stamped into PRAGMA user_version. Opening a cache
+// file with a different generation drops every table and starts over: entries
+// are re-downloadable, so a wipe is cheaper than migrating. Bump it when the
+// stored content becomes incompatible — generation 2 unified the image
+// reference notation (![Figure](image://...) for every format).
+const cacheSchemaVersion = 2
+
 // schema mirrors the spec, section and image tables of the main database,
 // without the full-text index: cached versions must never appear in search
 // results. images_fetched distinguishes "images fetched, none found" from
@@ -164,16 +171,28 @@ func Open(opts Options) (*Store, error) {
 		_ = conn.Close()
 		return nil, fmt.Errorf("ping version cache: %w", err)
 	}
+	var generation int
+	if err := conn.QueryRow("PRAGMA user_version").Scan(&generation); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("read version cache generation: %w", err)
+	}
+	if generation != cacheSchemaVersion {
+		// A fresh file reads 0 and has nothing to drop; an older-generation
+		// file holds content in an incompatible format and starts over.
+		for _, table := range []string{"cache_entries", "images", "sections", "specs"} {
+			if _, err := conn.Exec("DROP TABLE IF EXISTS " + table); err != nil {
+				_ = conn.Close()
+				return nil, fmt.Errorf("reset version cache: %w", err)
+			}
+		}
+		if _, err := conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", cacheSchemaVersion)); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("stamp version cache generation: %w", err)
+		}
+	}
 	if _, err := conn.Exec(schema); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("create version cache schema: %w", err)
-	}
-	// Cache files created before images were cached lack this column; the
-	// CREATE TABLE above is IF NOT EXISTS and does not add it.
-	if _, err := conn.Exec("ALTER TABLE cache_entries ADD COLUMN images_fetched INTEGER NOT NULL DEFAULT 0"); err != nil &&
-		!strings.Contains(err.Error(), "duplicate column name") {
-		_ = conn.Close()
-		return nil, fmt.Errorf("migrate version cache schema: %w", err)
 	}
 
 	return &Store{
