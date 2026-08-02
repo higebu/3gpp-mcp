@@ -195,21 +195,14 @@ func imagePlaceholder(relMap map[string]string, images map[string]*EmbeddedImage
 	if ref.WidthPx > 0 && ref.HeightPx > 0 {
 		dimSuffix = fmt.Sprintf("?w=%d&h=%d", ref.WidthPx, ref.HeightPx)
 	}
-	if img.LLMReadable {
-		alt := "Figure"
-		if ref.AltText != "" {
-			alt = ref.AltText
-		}
-		return fmt.Sprintf("![%s](image://%s%s)", alt, img.Name, dimSuffix)
-	}
-	alt := img.Name
+	// Every format gets the same markdown link, EMF/WMF included, so the two
+	// conversion paths (prebuilt DB and on-demand archive fetch) emit
+	// byte-identical section text and compare_versions sees no notation noise.
+	alt := "Figure"
 	if ref.AltText != "" {
 		alt = ref.AltText
 	}
-	if dimSuffix != "" {
-		return fmt.Sprintf("[Figure: %s (%s, use get_image to retrieve, %dx%d)]", alt, img.Name, ref.WidthPx, ref.HeightPx)
-	}
-	return fmt.Sprintf("[Figure: %s (%s, use get_image to retrieve)]", alt, img.Name)
+	return fmt.Sprintf("![%s](image://%s%s)", alt, img.Name, dimSuffix)
 }
 
 // diagramPlaceholder returns a markdown placeholder for a grouped vector

@@ -979,3 +979,38 @@ func TestParseSections_ASN1UnterminatedFlushedByTable(t *testing.T) {
 		t.Errorf("expected fence before table content, got %v", sections[0].Content)
 	}
 }
+
+func TestImagePlaceholder_UnifiedNotation(t *testing.T) {
+	relMap := map[string]string{"rId1": "media/image1.emf"}
+	images := map[string]*EmbeddedImage{
+		"media/image1.emf": {Name: "image1.emf", MIMEType: "image/x-emf", LLMReadable: false},
+	}
+	tests := []struct {
+		name string
+		ref  imageRef
+		want string
+	}{
+		{
+			name: "non-readable with dimensions",
+			ref:  imageRef{RID: "rId1", WidthPx: 612, HeightPx: 208},
+			want: "![Figure](image://image1.emf?w=612&h=208)",
+		},
+		{
+			name: "non-readable without dimensions",
+			ref:  imageRef{RID: "rId1"},
+			want: "![Figure](image://image1.emf)",
+		},
+		{
+			name: "alt text kept",
+			ref:  imageRef{RID: "rId1", AltText: "Network Topology", WidthPx: 10, HeightPx: 20},
+			want: "![Network Topology](image://image1.emf?w=10&h=20)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := imagePlaceholder(relMap, images, tt.ref); got != tt.want {
+				t.Errorf("imagePlaceholder() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

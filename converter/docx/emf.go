@@ -89,19 +89,15 @@ func ConvertResultImages(ctx context.Context, result *ParseResult) int {
 	return n
 }
 
-// placeholderRE matches non-LLM-readable image placeholders in section content,
-// with optional dimension suffix like ", 576x432".
-var placeholderRE = regexp.MustCompile(`\[Figure:\s*(.+?)\s*\(([^,]+),\s*use get_image to retrieve(?:,\s*(\d+)x(\d+))?\)\]`)
-
-// imageRefRE matches the filename in an image:// reference (e.g. inside an HTML
-// <img src="image://image1.wmf?w=..&h=.."> tag or a Markdown image link),
-// capturing only the filename portion up to any query string or delimiter.
+// imageRefRE matches the filename in an image:// reference (a Markdown image
+// link or an HTML <img src="image://image1.wmf?w=..&h=.."> tag emitted for
+// table images), capturing only the filename portion up to any query string or
+// delimiter.
 var imageRefRE = regexp.MustCompile(`image://([^?"')\s]+)`)
 
-// UpdateImagePlaceholders replaces non-LLM-readable image placeholders in
-// section content with LLM-readable image links after image conversion, and
-// rewrites image:// references (e.g. HTML <img> tags emitted for table images)
-// to point at the converted PNG filenames.
+// UpdateImagePlaceholders rewrites image:// references in section content to
+// point at the converted PNG filenames after EMF/WMF conversion. Only the
+// filename is replaced; alt text and any ?w=&h= suffix are kept.
 func UpdateImagePlaceholders(result *ParseResult) {
 	converted := make(map[string]string) // base name (without ext) → new PNG name
 	for _, img := range result.Images {
@@ -117,31 +113,7 @@ func UpdateImagePlaceholders(result *ParseResult) {
 
 	for _, section := range result.Sections {
 		for i, content := range section.Content {
-			content = placeholderRE.ReplaceAllStringFunc(content, func(match string) string {
-				sub := placeholderRE.FindStringSubmatch(match)
-				if len(sub) < 3 {
-					return match
-				}
-				alt, filename := sub[1], sub[2]
-				base := strings.TrimSuffix(filename, filepath.Ext(filename))
-				newName, ok := converted[base]
-				if !ok {
-					return match
-				}
-				if alt == filename {
-					alt = "Figure"
-				}
-				dimSuffix := ""
-				if len(sub) >= 5 && sub[3] != "" && sub[4] != "" {
-					dimSuffix = fmt.Sprintf("?w=%s&h=%s", sub[3], sub[4])
-				}
-				return fmt.Sprintf("![%s](image://%s%s)", alt, newName, dimSuffix)
-			})
-
-			// Rewrite remaining image:// references (e.g. HTML <img> tags in
-			// table content) whose original filename was renamed during PNG
-			// conversion. Only the filename is replaced; any ?w=&h= suffix is kept.
-			content = imageRefRE.ReplaceAllStringFunc(content, func(match string) string {
+			section.Content[i] = imageRefRE.ReplaceAllStringFunc(content, func(match string) string {
 				sub := imageRefRE.FindStringSubmatch(match)
 				if len(sub) < 2 {
 					return match
@@ -154,8 +126,6 @@ func UpdateImagePlaceholders(result *ParseResult) {
 				}
 				return "image://" + newName
 			})
-
-			section.Content[i] = content
 		}
 	}
 }

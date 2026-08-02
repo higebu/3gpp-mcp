@@ -69,9 +69,9 @@ func TestUpdateImagePlaceholders(t *testing.T) {
 				Level:  3,
 				Content: []string{
 					"Some text before",
-					"[Figure: Network Topology (image1.emf, use get_image to retrieve)]",
-					"[Figure: image2.wmf (image2.wmf, use get_image to retrieve)]",
-					"[Figure: image3.emf (image3.emf, use get_image to retrieve)]",
+					"![Network Topology](image://image1.emf)",
+					"![Figure](image://image2.wmf)",
+					"![Figure](image://image3.emf)",
 				},
 			},
 		},
@@ -95,8 +95,8 @@ func TestUpdateImagePlaceholders(t *testing.T) {
 	if content[2] != "![Figure](image://image2.png)" {
 		t.Errorf("expected converted placeholder without alt text, got %q", content[2])
 	}
-	if !strings.Contains(content[3], "use get_image to retrieve") {
-		t.Errorf("unconverted image should keep placeholder, got %q", content[3])
+	if content[3] != "![Figure](image://image3.emf)" {
+		t.Errorf("unconverted image should keep its original filename, got %q", content[3])
 	}
 }
 
@@ -108,8 +108,8 @@ func TestUpdateImagePlaceholders_WithDimensions(t *testing.T) {
 				Title:  "Test",
 				Level:  3,
 				Content: []string{
-					"[Figure: Network (image1.emf, use get_image to retrieve, 600x400)]",
-					"[Figure: image2.wmf (image2.wmf, use get_image to retrieve)]",
+					"![Network](image://image1.emf?w=600&h=400)",
+					"![Figure](image://image2.wmf)",
 				},
 			},
 		},
@@ -336,7 +336,7 @@ func TestUpdateImagePlaceholders_TableImageRef(t *testing.T) {
 				Number: "6.4.1.3.1.1",
 				Content: []string{
 					`<table><tr><td><img src="image://image1.wmf?w=100&h=50" alt="Figure"></td></tr></table>`,
-					"[Figure: Figure (image2.emf, use get_image to retrieve)]",
+					"![Figure](image://image2.emf)",
 					`<table><tr><td><img src="image://image3.png" alt="Figure"></td></tr></table>`,
 				},
 			},

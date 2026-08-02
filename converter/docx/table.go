@@ -303,11 +303,9 @@ func imageHTML(ctx imageContext, ref imageRef) string {
 		dimSuffix = fmt.Sprintf("?w=%d&h=%d", ref.WidthPx, ref.HeightPx)
 		dimAttrs = fmt.Sprintf(` width="%d" height="%d"`, ref.WidthPx, ref.HeightPx)
 	}
-	alt := img.Name
+	alt := "Figure"
 	if ref.AltText != "" {
 		alt = ref.AltText
-	} else if img.LLMReadable {
-		alt = "Figure"
 	}
 	return fmt.Sprintf(`<img src="image://%s%s" alt="%s"%s>`,
 		img.Name, dimSuffix, htmlpkg.EscapeString(alt), dimAttrs)

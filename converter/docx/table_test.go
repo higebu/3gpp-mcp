@@ -332,3 +332,37 @@ func TestTableToHTML_ImageInCell(t *testing.T) {
 		t.Errorf("expected <img> tag with image:// src in cell, got: %s", html)
 	}
 }
+
+// TestTableToHTML_NonReadableImageInCell verifies that a non-LLM-readable
+// image (EMF) in a cell gets the same alt="Figure" default as readable ones,
+// so both conversion paths emit identical table HTML.
+func TestTableToHTML_NonReadableImageInCell(t *testing.T) {
+	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+		xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+		xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+		xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+		<w:tr><w:tc>
+			<w:p><w:r>
+				<w:drawing>
+					<wp:inline>
+						<wp:extent cx="952500" cy="952500"/>
+						<a:graphic><a:graphicData>
+							<a:blip r:embed="rId7"/>
+						</a:graphicData></a:graphic>
+					</wp:inline>
+				</w:drawing>
+			</w:r></w:p>
+		</w:tc></w:tr>
+	</w:tbl>`
+	info := extractTable([]byte(xml))
+	ctx := imageContext{
+		relMap: map[string]string{"rId7": "media/image1.emf"},
+		images: map[string]*EmbeddedImage{
+			"media/image1.emf": {Name: "image1.emf", LLMReadable: false},
+		},
+	}
+	html := tableToHTML(info, ctx)
+	if !strings.Contains(html, `<img src="image://image1.emf?w=100&h=100" alt="Figure" width="100" height="100">`) {
+		t.Errorf("expected <img> tag with alt=Figure for EMF cell image, got: %s", html)
+	}
+}
