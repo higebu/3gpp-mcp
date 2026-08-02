@@ -151,7 +151,7 @@ func (h *handler) compareSectionPage(w http.ResponseWriter, r *http.Request, dat
 		return
 	}
 
-	diff := textdiff.Unified(structdiff.SectionLines(oldSecs), structdiff.SectionLines(newSecs), compareContextLines)
+	diff := textdiff.UnifiedKeyed(structdiff.SectionLines(oldSecs), structdiff.SectionLines(newSecs), compareContextLines, structdiff.NormalizeImageRefs)
 	if diff == "" {
 		data.Identical = true
 		h.renderCompare(w, data)

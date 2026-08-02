@@ -64,7 +64,7 @@ func Diff(oldSecs, newSecs []db.Section) Result {
 		// The leading markdown heading restates number and title, so it is
 		// stripped before comparing: a pure retitle must not also count as a
 		// content change.
-		bodyChanged := stripHeadingLine(o.Content) != stripHeadingLine(n.Content)
+		bodyChanged := bodyKey(o.Content) != bodyKey(n.Content)
 		if o.Title != n.Title {
 			d.Retitled = append(d.Retitled, Retitle{n.Number, o.Title, n.Title})
 		}
@@ -134,7 +134,7 @@ func (d *Result) promoteRenumbered() {
 			moved[n.Number] = true
 			// A renumbered section may have been edited too; that must not
 			// hide behind the move.
-			if stripHeadingLine(o.Content) != stripHeadingLine(n.Content) {
+			if bodyKey(o.Content) != bodyKey(n.Content) {
 				d.ContentChanged = append(d.ContentChanged, ContentChange{
 					Number:    n.Number,
 					OldNumber: o.Number,
@@ -156,6 +156,21 @@ func (d *Result) promoteRenumbered() {
 		}
 	}
 	d.Added = added
+}
+
+// bodyKey is the comparison key of a section body: the heading stripped, and
+// image references normalized so the two conversion paths' spellings of the
+// same figure do not count as a content change.
+func bodyKey(content string) string {
+	content = stripHeadingLine(content)
+	if !strings.Contains(content, "image://") {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	for i, l := range lines {
+		lines[i] = NormalizeImageRefs(l)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // stripHeadingLine removes the leading markdown heading of a section body.

@@ -140,7 +140,7 @@ func compareSection(ctx context.Context, src *Source, input CompareVersionsInput
 	}
 
 	header := compareHeader(input.SpecID, input.SectionNumber, oldLabel, newLabel)
-	diff := textdiff.Unified(structdiff.SectionLines(oldSecs), structdiff.SectionLines(newSecs), ctxLines)
+	diff := textdiff.UnifiedKeyed(structdiff.SectionLines(oldSecs), structdiff.SectionLines(newSecs), ctxLines, structdiff.NormalizeImageRefs)
 	if diff == "" {
 		msg := fmt.Sprintf("Section %s is identical between %s and %s.", input.SectionNumber, oldLabel, newLabel)
 		return prependLine(header, textResult(msg))

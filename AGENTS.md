@@ -113,6 +113,25 @@ version alongside its sections (image bytes count against the same LRU limit,
 and a version's text and images are evicted as one unit). OpenAPI YAML and
 cross-references remain prebuilt-only.
 
+### Image notation
+
+Every conversion path emits the same image reference regardless of format:
+`![Figure](image://NAME?w=&h=)` in body text and
+`<img src="image://NAME?w=&h=" alt="Figure" ...>` in table cells. Only the
+filename differs between paths — `image3.png` after `--convert-image`
+(`UpdateImagePlaceholders` renames references post-conversion), the original
+`image3.emf` otherwise; `GetImage` resolves either spelling (the version cache
+falls back to a basename match). `compare_versions` and the web compare page
+normalize references (`structdiff.NormalizeImageRefs`) before diffing so the
+conversion-pair extensions (`.emf`/`.wmf`/`.pcz`/`.png`) and alt spelling
+never count as a content change; other extension changes stay visible. The web viewer
+serves an SVG placeholder for formats a browser cannot render (EMF/WMF).
+
+The version cache stamps `PRAGMA user_version`
+(`versionstore.cacheSchemaVersion`); opening a cache from another generation
+wipes it. Databases built before the unified notation are incompatible with
+the compare normalization — rebuild them (`make build-db`).
+
 ### MCP Tools
 
 Eleven tools are exposed via MCP:

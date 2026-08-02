@@ -31,11 +31,23 @@ const dCap = 1024
 // the edit distance exceeded the search limit and the script is a full
 // replacement rather than a minimal diff.
 func Diff(a, b []string) (edits []Edit, capped bool) {
+	return DiffKeyed(a, b, nil)
+}
+
+// DiffKeyed is Diff comparing lines by key(line) while reporting original
+// lines, so cosmetic per-line differences (e.g. image reference notation) can
+// be ignored without altering what the caller displays. A nil key compares
+// lines verbatim. Equal edits carry the b-side original: when two lines match
+// only by key, the newer spelling is the one worth showing.
+func DiffKeyed(a, b []string, key func(string) string) (edits []Edit, capped bool) {
 	// Interned lines let the Myers loop compare ints instead of strings.
 	ids := make(map[string]int, len(a)+len(b))
 	intern := func(lines []string) []int {
 		out := make([]int, len(lines))
 		for i, l := range lines {
+			if key != nil {
+				l = key(l)
+			}
 			id, ok := ids[l]
 			if !ok {
 				id = len(ids)
@@ -60,7 +72,7 @@ func Diff(a, b []string) (edits []Edit, capped bool) {
 
 	edits = make([]Edit, 0, len(a)+len(b))
 	for i := 0; i < prefix; i++ {
-		edits = append(edits, Edit{Equal, a[i]})
+		edits = append(edits, Edit{Equal, b[i]})
 	}
 
 	ma, mb := ia[prefix:len(ia)-suffix], ib[prefix:len(ib)-suffix]
@@ -78,7 +90,7 @@ func Diff(a, b []string) (edits []Edit, capped bool) {
 		for _, op := range ops {
 			switch op {
 			case Equal:
-				edits = append(edits, Edit{Equal, a[ai]})
+				edits = append(edits, Edit{Equal, b[bi]})
 				ai++
 				bi++
 			case Delete:
@@ -91,8 +103,8 @@ func Diff(a, b []string) (edits []Edit, capped bool) {
 		}
 	}
 
-	for i := len(a) - suffix; i < len(a); i++ {
-		edits = append(edits, Edit{Equal, a[i]})
+	for i := len(b) - suffix; i < len(b); i++ {
+		edits = append(edits, Edit{Equal, b[i]})
 	}
 	return edits, capped
 }
@@ -193,10 +205,16 @@ func Stats(edits []Edit) (del, ins int) {
 // Unified renders the diff between a and b as unified-diff hunks with the
 // given number of context lines. Identical inputs render as an empty string.
 func Unified(a, b []string, context int) string {
+	return UnifiedKeyed(a, b, context, nil)
+}
+
+// UnifiedKeyed is Unified comparing lines by key(line); see DiffKeyed. Inputs
+// whose lines all match by key render as an empty string.
+func UnifiedKeyed(a, b []string, context int, key func(string) string) string {
 	if context < 0 {
 		context = 0
 	}
-	edits, capped := Diff(a, b)
+	edits, capped := DiffKeyed(a, b, key)
 
 	// keep marks the lines that appear in some hunk: every change plus its
 	// surrounding context. Adjacent hunks closer than a context apart merge by

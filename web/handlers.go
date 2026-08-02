@@ -5,6 +5,7 @@ import (
 	"fmt"
 	htmlpkg "html"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -458,10 +459,28 @@ func (h *handler) handleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Browsers cannot render EMF/WMF. Serve a placeholder instead of the raw
+	// bytes; no-store because a later fetch with LibreOffice available can
+	// replace the image with a renderable PNG.
+	if !img.LLMReadable {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "no-store")
+		io.WriteString(w, nonRenderableImageSVG)
+		return
+	}
+
 	w.Header().Set("Content-Type", img.MIMEType)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Write(img.Data)
 }
+
+// nonRenderableImageSVG is served in place of image formats a browser cannot
+// display (EMF/WMF); converting them to PNG requires LibreOffice (soffice).
+const nonRenderableImageSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="80" viewBox="0 0 360 80">` +
+	`<rect width="359" height="79" x="0.5" y="0.5" fill="#f8f9fa" stroke="#adb5bd" stroke-dasharray="4 3"/>` +
+	`<text x="180" y="36" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#495057">Figure not converted (EMF/WMF)</text>` +
+	`<text x="180" y="56" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#868e96">converting requires LibreOffice (soffice)</text>` +
+	`</svg>`
 
 func (h *handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")

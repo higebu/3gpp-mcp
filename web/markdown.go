@@ -21,7 +21,6 @@ import (
 
 var (
 	imageRE     = regexp.MustCompile(`!\[([^\]]*)\]\(image://([^?)]+)(?:\?w=(\d+)&h=(\d+))?\)`)
-	figureRE    = regexp.MustCompile(`\[Figure:\s*([^(]+?)\s*\(([^,]+),\s*use get_image to retrieve(?:,\s*(\d+)x(\d+))?\)\]`)
 	htmlImageRE = regexp.MustCompile(`(<img\s+[^>]*?\bsrc=")image://([^"?]+)(?:\?[^"]*)?("[^>]*>)`)
 	// mathRE matches LaTeX math emitted by the DOCX converter: display
 	// ($$...$$) is tried before inline ($...$). Inline math may not span lines.
@@ -91,18 +90,6 @@ func renderMarkdown(content, specID, version string, bracketMap map[string]strin
 		sub := htmlImageRE.FindStringSubmatch(match)
 		prefix, name, suffix := sub[1], sub[2], sub[3]
 		return prefix + imageURL(name) + suffix
-	})
-	content = figureRE.ReplaceAllStringFunc(content, func(match string) string {
-		sub := figureRE.FindStringSubmatch(match)
-		alt, name := sub[1], sub[2]
-		src := imageURL(name)
-		escapedAlt := htmlpkg.EscapeString(alt)
-		dimAttrs := ""
-		if len(sub) >= 5 && sub[3] != "" && sub[4] != "" {
-			dimAttrs = fmt.Sprintf(` width="%s" height="%s"`, sub[3], sub[4])
-		}
-		return fmt.Sprintf(`<figure><img src="%s" alt="%s"%s><figcaption>%s</figcaption></figure>`,
-			src, escapedAlt, dimAttrs, escapedAlt)
 	})
 
 	// Protect LaTeX math from goldmark, which would otherwise mangle backslash

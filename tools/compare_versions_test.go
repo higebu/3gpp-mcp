@@ -305,3 +305,94 @@ func TestCompareVersionsBothFetchesInProgress(t *testing.T) {
 }
 
 // The structural diff classification itself is tested in internal/structdiff.
+
+// seedImageNotationSections adds a section pair whose bodies differ only in
+// image reference spelling (on-demand EMF vs prebuilt PNG), and a pair with a
+// real edit next to such a difference.
+func seedImageNotationSections(t *testing.T, d *db.DB) {
+	t.Helper()
+	err := d.ExecScript(`
+INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES
+    ('TS 23.501', '17.9.0', '8', 'Figures', 1, NULL, '# 8 Figures
+Intro text.
+![Figure](image://image3.emf?w=612&h=208)
+<table><tr><td><img src="image://image4.emf?w=100&h=50" alt="image4.emf" width="100" height="50"></td></tr></table>'),
+    ('TS 23.501', '18.6.0', '8', 'Figures', 1, NULL, '# 8 Figures
+Intro text.
+![Figure](image://image3.png?w=612&h=208)
+<table><tr><td><img src="image://image4.png?w=100&h=50" alt="Figure" width="100" height="50"></td></tr></table>'),
+    ('TS 23.501', '17.9.0', '9', 'Edited figures', 1, NULL, '# 9 Edited figures
+Old sentence.
+![Figure](image://image5.emf?w=10&h=20)'),
+    ('TS 23.501', '18.6.0', '9', 'Edited figures', 1, NULL, '# 9 Edited figures
+New sentence.
+![Figure](image://image5.png?w=10&h=20)');
+`)
+	if err != nil {
+		t.Fatalf("seed image notation sections: %v", err)
+	}
+}
+
+// TestCompareVersionsImageNotationNoise checks that image reference spelling
+// differences between the prebuilt and on-demand conversion paths do not
+// surface as content changes or diff lines.
+func TestCompareVersionsImageNotationNoise(t *testing.T) {
+	d := setupTestDB(t)
+	seedOldVersion(t, d)
+	seedImageNotationSections(t, d)
+	handler := HandleCompareVersions(NewSource(d))
+
+	// Structural summary: section 8 (notation only) must not be listed as
+	// changed; section 9 (real edit) must be.
+	result, _, err := handler(context.Background(), nil, CompareVersionsInput{
+		SpecID:     "TS 23.501",
+		OldVersion: "17.9.0",
+		NewVersion: "18.6.0",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := getTextContent(result)
+	if strings.Contains(text, "- 8 Figures") {
+		t.Errorf("image-notation-only section reported as changed:\n%s", text)
+	}
+	if !strings.Contains(text, "- 9 Edited figures") {
+		t.Errorf("really edited section missing from summary:\n%s", text)
+	}
+
+	// Section 8 diff: identical.
+	result, _, err = handler(context.Background(), nil, CompareVersionsInput{
+		SpecID:        "TS 23.501",
+		OldVersion:    "17.9.0",
+		NewVersion:    "18.6.0",
+		SectionNumber: "8",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if text := getTextContent(result); !strings.Contains(text, "Section 8 is identical") {
+		t.Errorf("notation-only section not reported identical: %q", text)
+	}
+
+	// Section 9 diff: the edited sentence appears, the image line does not.
+	result, _, err = handler(context.Background(), nil, CompareVersionsInput{
+		SpecID:        "TS 23.501",
+		OldVersion:    "17.9.0",
+		NewVersion:    "18.6.0",
+		SectionNumber: "9",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text = getTextContent(result)
+	if !strings.Contains(text, "-Old sentence.") || !strings.Contains(text, "+New sentence.") {
+		t.Errorf("real edit missing from diff:\n%s", text)
+	}
+	if strings.Contains(text, "-![Figure](image://image5.emf") || strings.Contains(text, "+![Figure](image://image5.png") {
+		t.Errorf("image notation difference leaked into diff:\n%s", text)
+	}
+	// The context line shows the new-side spelling.
+	if !strings.Contains(text, " ![Figure](image://image5.png?w=10&h=20)") {
+		t.Errorf("context line should show the new-side image reference:\n%s", text)
+	}
+}

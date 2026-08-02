@@ -119,3 +119,28 @@ func TestSectionLines(t *testing.T) {
 		}
 	}
 }
+
+// TestDiffImageNotationIsNotAContentChange checks that sections whose bodies
+// differ only in image reference spelling (converted PNG vs original EMF,
+// filename alt vs "Figure") classify as unchanged, while a real edit next to
+// such a difference still counts.
+func TestDiffImageNotationIsNotAContentChange(t *testing.T) {
+	oldSecs := []db.Section{
+		{Number: "1", Title: "Arch", Content: "# 1 Arch\nIntro.\n![Figure](image://image3.emf?w=612&h=208)\nOutro."},
+		{Number: "2", Title: "Cells", Content: "# 2 Cells\n<table><tr><td><img src=\"image://image1.emf?w=100&h=50\" alt=\"image1.emf\" width=\"100\" height=\"50\"></td></tr></table>"},
+		{Number: "3", Title: "Edited", Content: "# 3 Edited\nOld sentence.\n![Figure](image://image5.emf?w=10&h=20)"},
+	}
+	newSecs := []db.Section{
+		{Number: "1", Title: "Arch", Content: "# 1 Arch\nIntro.\n![Figure](image://image3.png?w=612&h=208)\nOutro."},
+		{Number: "2", Title: "Cells", Content: "# 2 Cells\n<table><tr><td><img src=\"image://image1.png?w=100&h=50\" alt=\"Figure\" width=\"100\" height=\"50\"></td></tr></table>"},
+		{Number: "3", Title: "Edited", Content: "# 3 Edited\nNew sentence.\n![Figure](image://image5.png?w=10&h=20)"},
+	}
+
+	d := Diff(oldSecs, newSecs)
+	if d.Unchanged != 2 {
+		t.Errorf("Unchanged = %d, want 2 (image notation only)", d.Unchanged)
+	}
+	if len(d.ContentChanged) != 1 || d.ContentChanged[0].Number != "3" {
+		t.Errorf("ContentChanged = %+v, want section 3 alone", d.ContentChanged)
+	}
+}

@@ -33,22 +33,16 @@ func TestRenderMarkdown(t *testing.T) {
 			want:    `/specs/TS%2023.501/images/fig1.png`,
 		},
 		{
-			name:    "figure rewrite",
-			content: "[Figure: Network (image1.png, use get_image to retrieve)]",
+			name:    "non-readable image rewrite",
+			content: "![Figure](image://image3.emf?w=612&h=208)",
 			specID:  "TS 23.501",
-			want:    `/specs/TS%2023.501/images/image1.png`,
+			want:    `<img src="/specs/TS%2023.501/images/image3.emf" alt="Figure" width="612" height="208">`,
 		},
 		{
 			name:    "image with dimensions",
 			content: "![diagram](image://fig1.png?w=600&h=400)",
 			specID:  "TS 23.501",
 			want:    `<img src="/specs/TS%2023.501/images/fig1.png" alt="diagram" width="600" height="400">`,
-		},
-		{
-			name:    "figure with dimensions",
-			content: "[Figure: Network (image1.png, use get_image to retrieve, 576x432)]",
-			specID:  "TS 23.501",
-			want:    `width="576" height="432"`,
 		},
 		{
 			name:    "basic markdown",
@@ -674,6 +668,41 @@ func TestHandleImage(t *testing.T) {
 		}
 	})
 
+	t.Run("non-renderable format serves SVG placeholder", func(t *testing.T) {
+		if err := d.UpsertImage(db.Image{
+			SpecID:      "TS 23.501",
+			Version:     "18.6.0",
+			Name:        "fig2.emf",
+			MIMEType:    "image/x-emf",
+			Data:        []byte("emf-bytes"),
+			LLMReadable: false,
+		}); err != nil {
+			t.Fatalf("seed EMF image: %v", err)
+		}
+		resp, err := http.Get(ts.URL + "/specs/TS 23.501/images/fig2.emf")
+		if err != nil {
+			t.Fatalf("GET image error: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("status = %d, want 200", resp.StatusCode)
+		}
+		if ct := resp.Header.Get("Content-Type"); ct != "image/svg+xml" {
+			t.Errorf("Content-Type = %q, want image/svg+xml", ct)
+		}
+		if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("Cache-Control = %q, want no-store (a later fetch may convert the image)", cc)
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		if !strings.Contains(string(body), "Figure not converted") {
+			t.Errorf("expected placeholder SVG, got: %s", body)
+		}
+	})
+
 	t.Run("not found", func(t *testing.T) {
 		resp, err := http.Get(ts.URL + "/specs/TS 23.501/images/missing.png")
 		if err != nil {
@@ -739,18 +768,6 @@ func TestRenderMarkdown_ImageAltEscaped(t *testing.T) {
 	}
 	if !strings.Contains(got, `&#34;`) && !strings.Contains(got, `&quot;`) {
 		t.Errorf("expected escaped quotation mark in alt text, got:\n%s", got)
-	}
-}
-
-// TestRenderMarkdown_FigureAltEscaped exercises the figure-syntax alt escaping.
-func TestRenderMarkdown_FigureAltEscaped(t *testing.T) {
-	content := `[Figure: <script>x</script> Network (fig.png, use get_image to retrieve, 100x100)]`
-	got := renderMarkdown(content, "TS 23.501", "", nil)
-	if strings.Contains(got, "<script>x</script> Network") {
-		t.Errorf("figure alt text should be escaped, got:\n%s", got)
-	}
-	if !strings.Contains(got, "&lt;script&gt;") {
-		t.Errorf("expected escaped <script> in figure alt, got:\n%s", got)
 	}
 }
 
