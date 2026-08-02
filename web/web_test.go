@@ -1586,3 +1586,23 @@ func TestSpecHeaderTabs_ArchivedVersionCarried(t *testing.T) {
 		t.Errorf("expected the Compare tab to preset the version, got:\n%s", body)
 	}
 }
+
+// TestSpecHeaderTabs_CompareKeepsOldVersion keeps the compared old version in
+// the header tabs: Document opens it, Compare keeps it selected.
+func TestSpecHeaderTabs_CompareKeepsOldVersion(t *testing.T) {
+	ts, _ := setupVersionedServer(t, cannedFetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=19.5.0")
+	if err != nil {
+		t.Fatalf("GET compare: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if !strings.Contains(body, `?version=19.5.0">Document</a>`) {
+		t.Errorf("expected the Document tab to open the compared version, got:\n%s", body)
+	}
+	if !strings.Contains(body, `/compare?old=19.5.0">Compare</a>`) {
+		t.Errorf("expected the Compare tab to keep the old version, got:\n%s", body)
+	}
+}
