@@ -180,3 +180,47 @@ func TestDiffLargeButLocalChange(t *testing.T) {
 		t.Errorf("Stats = (%d, %d), want (1, 1)", del, ins)
 	}
 }
+
+func TestDiffKeyedNilMatchesDiff(t *testing.T) {
+	a := []string{"one", "two", "three"}
+	b := []string{"one", "2", "three"}
+	got, gotCapped := DiffKeyed(a, b, nil)
+	want, wantCapped := Diff(a, b)
+	if gotCapped != wantCapped || len(got) != len(want) {
+		t.Fatalf("DiffKeyed(nil) = %v/%v, want %v/%v", got, gotCapped, want, wantCapped)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("edit %d: got %v, want %v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestUnifiedKeyedFoldsKeyEqualLines(t *testing.T) {
+	key := func(l string) string { return strings.TrimSuffix(l, ".emf") }
+	a := []string{"text", "figure.emf", "more"}
+	b := []string{"text", "figure", "more"}
+	if got := UnifiedKeyed(a, b, 3, key); got != "" {
+		t.Errorf("key-equal inputs should render empty, got %q", got)
+	}
+}
+
+func TestUnifiedKeyedShowsNewSideContext(t *testing.T) {
+	key := func(l string) string { return strings.TrimSuffix(l, ".emf") }
+	a := []string{"figure.emf", "old line", "tail.emf"}
+	b := []string{"figure", "new line", "tail"}
+	got := UnifiedKeyed(a, b, 1, key)
+	want := "@@ -1,3 +1,3 @@\n figure\n-old line\n+new line\n tail"
+	if got != want {
+		t.Errorf("UnifiedKeyed = %q, want %q", got, want)
+	}
+}
+
+func TestDiffKeyedStats(t *testing.T) {
+	key := func(l string) string { return strings.TrimSuffix(l, ".emf") }
+	edits, _ := DiffKeyed([]string{"same.emf", "gone"}, []string{"same", "here"}, key)
+	del, ins := Stats(edits)
+	if del != 1 || ins != 1 {
+		t.Errorf("Stats = %d/%d, want 1/1", del, ins)
+	}
+}
