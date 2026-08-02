@@ -21,7 +21,7 @@ type GetSectionInput struct {
 
 var GetSectionTool = &mcp.Tool{
 	Name:        "get_section",
-	Description: "Get the markdown content of a specific section in a 3GPP specification. This tool is for reading specification document text (architecture, procedures, requirements). For API details such as HTTP request/response bodies, paths, and data models of 5G service-based interfaces (TS 29.xxx series), use get_openapi instead. Specify the section number with the `section_number` parameter (e.g. 5.1.2). Pass `version` to read a past version, which is downloaded and converted on first use; call list_versions first to see which versions exist. Large sections are paginated (default 200 lines). Use offset and max_lines to navigate.",
+	Description: "Get the markdown content of a specific section in a 3GPP specification. This tool is for reading specification document text (architecture, procedures, requirements). For API details such as HTTP request/response bodies, paths, and data models of 5G service-based interfaces (TS 29.xxx series), use get_openapi instead. Specify the section number with the `section_number` parameter (e.g. 5.1.2). Figures appear as `![...](image://NAME)` links; fetch one with get_image and that NAME. Pass `version` to read a past version, which is downloaded and converted on first use; call list_versions first to see which versions exist. Large sections are paginated (default 200 lines). Use offset and max_lines to navigate.",
 }
 
 func HandleGetSection(src *Source) func(ctx context.Context, req *mcp.CallToolRequest, input GetSectionInput) (*mcp.CallToolResult, any, error) {
