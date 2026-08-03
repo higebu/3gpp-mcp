@@ -1174,6 +1174,10 @@ mark {
 /* NameException */ [data-theme="dark"] .chroma .ne { color: #f0883e; font-weight: bold }
 /* NameLabel */ [data-theme="dark"] .chroma .nl { color: #79c0ff; font-weight: bold }
 /* NameNamespace */ [data-theme="dark"] .chroma .nn { color: #ff7b72 }
+/* NameAttribute */ [data-theme="dark"] .chroma .na { color: #79c0ff }
+/* NameOther */ [data-theme="dark"] .chroma .nx { color: #e6edf3 }
+/* NameBuiltin */ [data-theme="dark"] .chroma .nb { color: #d2a8ff }
+/* NameBuiltinPseudo */ [data-theme="dark"] .chroma .bp { color: #8b949e }
 /* NameProperty */ [data-theme="dark"] .chroma .py { color: #79c0ff }
 /* NameTag */ [data-theme="dark"] .chroma .nt { color: #7ee787 }
 /* NameVariable */ [data-theme="dark"] .chroma .nv { color: #79c0ff }
@@ -1208,6 +1212,7 @@ mark {
 /* LiteralNumberOct */ [data-theme="dark"] .chroma .mo { color: #a5d6ff }
 /* Operator */ [data-theme="dark"] .chroma .o { color: #ff7b72; font-weight: bold }
 /* OperatorWord */ [data-theme="dark"] .chroma .ow { color: #ff7b72; font-weight: bold }
+/* Punctuation */ [data-theme="dark"] .chroma .p { color: #e6edf3 }
 /* Comment */ [data-theme="dark"] .chroma .c { color: #8b949e; font-style: italic }
 /* CommentHashbang */ [data-theme="dark"] .chroma .ch { color: #8b949e; font-style: italic }
 /* CommentMultiline */ [data-theme="dark"] .chroma .cm { color: #8b949e; font-style: italic }
