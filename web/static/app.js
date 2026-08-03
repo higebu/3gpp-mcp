@@ -1,15 +1,9 @@
 // Dark mode toggle
 (function () {
+    // The theme itself is initialized by an inline script in the <head> of
+    // layout.html, before the first paint; this only wires up the toggle.
     const toggle = document.getElementById('theme-toggle');
     const html = document.documentElement;
-
-    // Initialize theme
-    const saved = localStorage.getItem('theme');
-    if (saved) {
-        html.dataset.theme = saved;
-    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-        html.dataset.theme = 'dark';
-    }
 
     if (toggle) {
         toggle.addEventListener('click', function () {
