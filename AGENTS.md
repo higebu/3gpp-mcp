@@ -129,13 +129,14 @@ serves an SVG placeholder for formats a browser cannot render (EMF/WMF).
 
 ### Code fences
 
-The converter emits three tagged fences: ` ```asn1 ` for ASN.1 modules
+The converter emits five tagged fences: ` ```asn1 ` for ASN.1 modules
 between the `-- ASN1START`/`-- ASN1STOP` markers, ` ```diameter ` for
-Diameter command/grouped-AVP definitions (RFC 6733 Command Code Format), and
+Diameter command/grouped-AVP definitions (RFC 6733 Command Code Format),
 ` ```xml ` for XML schemas, XML body examples and DTDs written as plain body
-paragraphs. The web viewer highlights the first two through custom Chroma
-lexers (`web/asn1lexer.go`, `web/diameterlexer.go`) and ` ```xml ` through
-Chroma's built-in XML lexer. Diameter definitions and XML/DTD blocks carry no
+paragraphs, and ` ```sip `/` ```sdp ` for SIP/RTSP messages and SDP session
+descriptions (see below). The web viewer highlights them through custom
+Chroma lexers (`web/asn1lexer.go`, `web/diameterlexer.go`,
+`web/siplexer.go`) and, for ` ```xml `, Chroma's built-in XML lexer. Diameter definitions and XML/DTD blocks carry no
 code style or font in the source documents, so both are detected by content:
 `::= < Diameter|AVP Header:` starts a Diameter block and AVP reference lines
 continue it; an XML declaration or DOCTYPE starts an XML block on its own,
@@ -150,17 +151,19 @@ content (`converter/docx/sipblock.go`), since several specs write them as
 plain Normal-styled paragraphs: a SIP/RTSP request or status line — or a run
 of at least three SDP field lines (two when starting at `v=0`) — opens a
 block, message-shaped lines continue it, and the first paragraph that is
-neither ends it. These become bare ` ``` ` fences; paragraphs already claimed
-by a style-based path never enter this detection, so monospace-styled
-examples keep their existing output. An `EXAMPLE n:` label directly in front
-of a match is emitted as its own prose paragraph, and a leading list dash is
-dropped.
+neither ends it. These become ` ```sip ` fences (` ```sdp ` for SDP-only
+blocks), highlighted by a shared custom Chroma lexer (`web/siplexer.go`,
+registered under the `sip`, `sdp` and `rtsp` aliases); paragraphs already
+claimed by a style-based path never enter this detection, so
+monospace-styled examples keep their existing bare ` ``` ` fences. An
+`EXAMPLE n:` label directly in front of a match is emitted as its own prose
+paragraph, and a leading list dash is dropped.
 
 The version cache stamps `PRAGMA user_version`
 (`versionstore.cacheSchemaVersion`); opening a cache from another generation
 wipes it. Databases built before the unified notation, the Diameter
-code-fence change, the SIP/SDP fencing change or the XML code-fence change
-are incompatible with the compare normalization — rebuild them
+code-fence change, the SIP/SDP fencing/tagging changes or the XML code-fence
+change are incompatible with the compare normalization — rebuild them
 (`make build-db`).
 
 ### MCP Tools

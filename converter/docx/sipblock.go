@@ -7,8 +7,8 @@ package docx
 // ordinary prose paragraph. Like the Diameter definitions, they are
 // recognized by their line syntax instead: a SIP request/status line or an
 // SDP field-line run opens a block, message-shaped lines continue it, and
-// the first paragraph that is neither ends it. Matched blocks become bare
-// ``` fences.
+// the first paragraph that is neither ends it. Matched blocks become ```sip
+// fences (```sdp for SDP-only blocks), highlighted by web/siplexer.go.
 //
 // Detection runs on the raw paragraph text (codeLineText), before any
 // bold/italic markers are applied — TS 23.700-19 styles entire SIP
