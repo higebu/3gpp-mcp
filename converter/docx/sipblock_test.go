@@ -88,7 +88,7 @@ func TestParseSections_SIPFullMessageBlock(t *testing.T) {
 	if len(content) != 4 {
 		t.Fatalf("expected intro, fence, and two trailing prose paragraphs, got %v", content)
 	}
-	want := "```\n" +
+	want := "```sip\n" +
 		"INVITE sip: A2EA2@Iputrannode2.operator.net\n" +
 		"Via: SIP/2.0/SCTP 194.237.226.242:5062\n" +
 		"From: sip: A2EA1@iwf1.operator.net\n" +
@@ -125,7 +125,7 @@ func TestParseSections_SIPRequestLineOnly(t *testing.T) {
 	if len(content) != 3 {
 		t.Fatalf("expected prose, fence, prose, got %v", content)
 	}
-	want := "```\nINVITE sip:B-Party;tgrp=CGR2;trunk-context=Realm6@operator.net SIP/2.0\n```"
+	want := "```sip\nINVITE sip:B-Party;tgrp=CGR2;trunk-context=Realm6@operator.net SIP/2.0\n```"
 	if content[1] != want {
 		t.Errorf("expected single-line fence %q, got %q", want, content[1])
 	}
@@ -164,7 +164,7 @@ func TestParseSections_SIPCompactHeadersAndEmphasis(t *testing.T) {
 	if len(content) != 5 {
 		t.Fatalf("expected prose, fence, prose, fence, prose, got %v", content)
 	}
-	wantFirst := "```\n" +
+	wantFirst := "```sip\n" +
 		"INVITE tel:+8613587654321 SIP/2.0\n" +
 		"v:SIP/2.0/UDP A;branch=z9hG4bK122456\n" +
 		"f:<sip:A>;tag=205847\n" +
@@ -177,7 +177,7 @@ func TestParseSections_SIPCompactHeadersAndEmphasis(t *testing.T) {
 	if content[1] != wantFirst {
 		t.Errorf("expected INVITE fence without emphasis markers %q, got %q", wantFirst, content[1])
 	}
-	wantSecond := "```\nSIP/2.0 100\ni:a9gH\n```"
+	wantSecond := "```sip\nSIP/2.0 100\ni:a9gH\n```"
 	if content[3] != wantSecond {
 		t.Errorf("expected status fence %q, got %q", wantSecond, content[3])
 	}
@@ -200,7 +200,7 @@ func TestParseSections_SIPDashPrefixedRequestLine(t *testing.T) {
 	if len(content) != 3 {
 		t.Fatalf("expected prose, fence, prose, got %v", content)
 	}
-	want := "```\nINVITE sip:control@mrf.example.com;ccxml=http://server.example.com/conference.ccxml\n```"
+	want := "```sip\nINVITE sip:control@mrf.example.com;ccxml=http://server.example.com/conference.ccxml\n```"
 	if content[1] != want {
 		t.Errorf("expected dash-stripped fence %q, got %q", want, content[1])
 	}
@@ -230,7 +230,7 @@ func TestParseSections_SDPBlock(t *testing.T) {
 	if len(content) != 3 {
 		t.Fatalf("expected prose, fence, prose, got %v", content)
 	}
-	want := "```\n" +
+	want := "```sdp\n" +
 		"v=0\n" +
 		"o=SESPhone 0 1 IN IP4 10.132.30.33\n" +
 		"s=asymmetric ses dsr session\n" +
@@ -268,7 +268,7 @@ func TestParseSections_SDPExampleLabelAndWrappedLine(t *testing.T) {
 	if content[1] != "EXAMPLE 1:" {
 		t.Errorf("expected the example label as its own paragraph, got %q", content[1])
 	}
-	want := "```\n" +
+	want := "```sdp\n" +
 		"v=0\no=ghost 2890844526 2890842807 IN IP4 192.168.10.10\ns=3GPP Unicast SDP Example\nc=IN IP4 0.0.0.0\nt=0 0\n" +
 		"\n" +
 		"a=range:npt=0-45.678\nm=video 1024 RTP/AVP 96\n" +
@@ -301,7 +301,7 @@ func TestParseSections_SDPFragmentStartingAtMediaLine(t *testing.T) {
 	if content[1] != "EXAMPLE 3:" {
 		t.Errorf("expected the example label as its own paragraph, got %q", content[1])
 	}
-	want := "```\nm=audio 0 RTP/AVP 97\nb=AS:12\nb=TIAS:8500\na=rtpmap:97 AMR/8000\n```"
+	want := "```sdp\nm=audio 0 RTP/AVP 97\nb=AS:12\nb=TIAS:8500\na=rtpmap:97 AMR/8000\n```"
 	if content[2] != want {
 		t.Errorf("expected SDP fragment fence %q, got %q", want, content[2])
 	}
@@ -357,7 +357,7 @@ func TestParseSections_SDPInsideH248Local(t *testing.T) {
 	if len(content) != 4 {
 		t.Fatalf("expected two prose paragraphs, fence, closing brace, got %v", content)
 	}
-	want := "```\nv=0\nc=IN IP4 $\nm=audio $ RTP/AVP 96\na=rtpmap:96 AMR/8000\n```"
+	want := "```sdp\nv=0\nc=IN IP4 $\nm=audio $ RTP/AVP 96\na=rtpmap:96 AMR/8000\n```"
 	if content[2] != want {
 		t.Errorf("expected SDP fence %q, got %q", want, content[2])
 	}
@@ -461,11 +461,11 @@ func TestParseSections_SIPFlushedByHeadingAndTable(t *testing.T) {
 	if len(sections) != 2 {
 		t.Fatalf("expected 2 sections, got %d", len(sections))
 	}
-	if len(sections[0].Content) != 1 || !strings.HasPrefix(sections[0].Content[0], "```\n") {
+	if len(sections[0].Content) != 1 || !strings.HasPrefix(sections[0].Content[0], "```sip\n") {
 		t.Errorf("expected SIP fence flushed by heading in first section, got %v", sections[0].Content)
 	}
 	second := strings.Join(sections[1].Content, "\n")
-	if !strings.Contains(second, "```\nSIP/2.0 183 Session Progress\n```") || !strings.Contains(second, "cell") {
+	if !strings.Contains(second, "```sip\nSIP/2.0 183 Session Progress\n```") || !strings.Contains(second, "cell") {
 		t.Errorf("expected SIP fence flushed by table plus table content, got %v", sections[1].Content)
 	}
 	if strings.Index(second, "```") > strings.Index(second, "cell") {
@@ -485,7 +485,7 @@ func TestParseSections_SIPImageParagraphEndsBlock(t *testing.T) {
 	}
 	sections := sipParse(elements)
 	content := sections[0].Content
-	if len(content) == 0 || content[0] != "```\nINVITE sip:bob@example.net SIP/2.0\n```" {
+	if len(content) == 0 || content[0] != "```sip\nINVITE sip:bob@example.net SIP/2.0\n```" {
 		t.Errorf("expected the image paragraph to end the fence, got %v", content)
 	}
 	for _, c := range content[1:] {

@@ -381,16 +381,21 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 		xmlTracker = xmlLineTracker{}
 	}
 
-	// Accumulates SIP message and standalone SDP examples into one bare
-	// fence. Like the Diameter definitions, these carry no code style or
-	// font in several specs, so capture is content-based: a SIP
-	// request/status line or an SDP field-line run starts it, and the first
-	// paragraph that no longer looks like part of the message ends it (see
-	// sipblock.go).
+	// Accumulates SIP message and standalone SDP examples into one tagged
+	// fence — ```sip for message blocks, ```sdp for SDP-only blocks, both
+	// highlighted by the web viewer's SIP lexer (web/siplexer.go). Like the
+	// Diameter definitions, these carry no code style or font in several
+	// specs, so capture is content-based: a SIP request/status line or an
+	// SDP field-line run starts it, and the first paragraph that no longer
+	// looks like part of the message ends it (see sipblock.go).
 	var sipBuffer []string
 	inSIP := false
 	sipSDPOnly := false
 	flushSIP := func() {
+		tag := "sip"
+		if sipSDPOnly {
+			tag = "sdp"
+		}
 		inSIP = false
 		sipSDPOnly = false
 		if len(sipBuffer) == 0 || currentSection == nil {
@@ -402,7 +407,7 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 		body := strings.TrimRight(strings.Join(sipBuffer, "\n"), " \t\n")
 		if body != "" {
 			currentSection.Content = append(currentSection.Content,
-				"```\n"+body+"\n```")
+				"```"+tag+"\n"+body+"\n```")
 		}
 		sipBuffer = nil
 	}
