@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 const seedData = `
@@ -1740,4 +1741,75 @@ RRCSetup-IEs ::= SEQUENCE {');`)
 			t.Fatalf("expected 0 results, got %d", len(page.Results))
 		}
 	})
+}
+
+func TestExtractContext(t *testing.T) {
+	// The context window is a byte count, so text without ASCII spaces used to
+	// be sliced in the middle of a multi-byte rune.
+	cjkPad := strings.Repeat("日本語仕様書テキスト", 8)
+	// 3GPP DOCX files separate spec IDs with NO-BREAK SPACE (U+00A0), which the
+	// space-based snapping never sees.
+	nbspPad := strings.Repeat("あ\u00a0い", 20)
+	asciiPad := strings.Repeat("A", 60)
+
+	tests := []struct {
+		name    string
+		content string
+		match   string
+		want    string
+	}{
+		{
+			name:    "ascii snaps to word boundaries",
+			content: "The IMS registration procedure for the terminal is specified in TS 23.228 clause 5.2.1 and it also applies to roaming subscribers.",
+			match:   "TS 23.228",
+			want:    "...procedure for the terminal is specified in TS 23.228 clause 5.2.1 and it also applies to roaming...",
+		},
+		{
+			name:    "short content keeps no ellipsis",
+			content: "See TS 23.228 for details.",
+			match:   "TS 23.228",
+			want:    "See TS 23.228 for details.",
+		},
+		{
+			name:    "long unbroken ascii token is cut at the window",
+			content: asciiPad + "TS 23.228" + asciiPad,
+			match:   "TS 23.228",
+			want:    "..." + strings.Repeat("A", 50) + "TS 23.228" + strings.Repeat("A", 50) + "...",
+		},
+		{
+			name:    "cjk without spaces stays on rune boundaries",
+			content: cjkPad + "TS 23.228" + cjkPad,
+			match:   "TS 23.228",
+			want: "..." + "様書テキスト日本語仕様書テキスト" +
+				"TS 23.228" +
+				"日本語仕様書テキスト日本語仕様書" + "...",
+		},
+		{
+			name:    "no-break space separators stay on rune boundaries",
+			content: nbspPad + "TS\u00a023.228" + nbspPad,
+			match:   "TS\u00a023.228",
+			want: "..." + strings.Repeat("あ\u00a0い", 6) +
+				"TS\u00a023.228" +
+				strings.Repeat("あ\u00a0い", 6) + "...",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start := strings.Index(tt.content, tt.match)
+			if start < 0 {
+				t.Fatalf("match %q not found in content", tt.match)
+			}
+			got := extractContext(tt.content, start, start+len(tt.match))
+			if !utf8.ValidString(got) {
+				t.Errorf("extractContext returned invalid UTF-8: %q", got)
+			}
+			if !strings.Contains(got, tt.match) {
+				t.Errorf("extractContext dropped the match: %q", got)
+			}
+			if got != tt.want {
+				t.Errorf("extractContext = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }

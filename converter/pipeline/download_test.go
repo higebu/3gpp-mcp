@@ -158,6 +158,63 @@ func TestDownloadAndExtract_NoDoc(t *testing.T) {
 	}
 }
 
+// TestDownloadAndExtract_AllDocxExtractionsFail verifies that a ZIP whose only
+// .docx entry cannot be extracted is not reported as OK. The entry name carries
+// a path-traversal component, so extractFile rejects it and no file lands in the
+// output directory.
+func TestDownloadAndExtract_AllDocxExtractionsFail(t *testing.T) {
+	zipBytes := makeRawZipEntry(t, "../evil.docx", []byte("pwned"))
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipBytes)
+	}))
+	defer ts.Close()
+
+	outDir := t.TempDir()
+	spec := &SpecVersion{SpecID: "TS 99.003", URL: ts.URL + "/z.zip"}
+	result, err := DownloadAndExtract(context.Background(), ts.Client(), spec, outDir, 5*time.Second)
+	if err == nil {
+		t.Fatal("expected an error when no .docx could be extracted")
+	}
+	if result.Status != "FAILED" {
+		t.Errorf("status = %q, want FAILED", result.Status)
+	}
+	if len(result.DocxFiles) != 0 {
+		t.Errorf("DocxFiles = %v, want none", result.DocxFiles)
+	}
+	if _, statErr := os.Stat(filepath.Join(outDir, "evil.docx")); !os.IsNotExist(statErr) {
+		t.Errorf("evil.docx should not exist: %v", statErr)
+	}
+}
+
+// TestDownloadAndExtract_OK verifies the success path is unchanged: an
+// extractable .docx yields OK, a nil error and the extracted path.
+func TestDownloadAndExtract_OK(t *testing.T) {
+	zipBytes := makeZipWithFile(t, "spec.docx", []byte("docx content"))
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipBytes)
+	}))
+	defer ts.Close()
+
+	outDir := t.TempDir()
+	spec := &SpecVersion{SpecID: "TS 99.004", URL: ts.URL + "/ok.zip"}
+	result, err := DownloadAndExtract(context.Background(), ts.Client(), spec, outDir, 5*time.Second)
+	if err != nil {
+		t.Fatalf("DownloadAndExtract: %v", err)
+	}
+	if result.Status != "OK" {
+		t.Errorf("status = %q, want OK", result.Status)
+	}
+	want := []string{filepath.Join(outDir, "spec.docx")}
+	if len(result.DocxFiles) != 1 || result.DocxFiles[0] != want[0] {
+		t.Fatalf("DocxFiles = %v, want %v", result.DocxFiles, want)
+	}
+	if _, err := os.Stat(want[0]); err != nil {
+		t.Errorf("expected spec.docx on disk: %v", err)
+	}
+}
+
 // TestDownloadZip_TooLargeContentLength verifies the early rejection path when
 // the server advertises a Content-Length that exceeds maxZipSize.
 func TestDownloadZip_TooLargeContentLength(t *testing.T) {

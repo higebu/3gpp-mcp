@@ -597,3 +597,57 @@ func TestPipelineRun_AllFailed(t *testing.T) {
 		t.Error("expected an error when every spec failed")
 	}
 }
+
+// TestYAMLVersionRE checks that the OpenAPI version capture stops at the end of
+// the line. The character class must exclude a newline, and must not exclude
+// the letter "n" or a backslash.
+func TestYAMLVersionRE(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "unquoted followed by more yaml",
+			content: "info:\n  version: 1.2.3\n  title: Nnrf_NFManagement\n",
+			want:    "1.2.3",
+		},
+		{
+			name:    "single quoted",
+			content: "info:\n  version: '1.2.0-alpha.1'\n  title: Nnrf_NFManagement\n",
+			want:    "1.2.0-alpha.1",
+		},
+		{
+			name:    "double quoted",
+			content: "info:\n  version: \"1.2.0-alpha.1\"\n  title: Nnrf_NFManagement\n",
+			want:    "1.2.0-alpha.1",
+		},
+		{
+			name:    "unquoted containing the letter n",
+			content: "info:\n  version: 1.0.0-nightly\n  title: 3gpp-ue-context-transfer\n",
+			want:    "1.0.0-nightly",
+		},
+		{
+			name:    "unquoted on the last line without a trailing newline",
+			content: "info:\n  version: 1.0.0",
+			want:    "1.0.0",
+		},
+		{
+			name:    "crlf line ending",
+			content: "info:\r\n  version: 1.2.3\r\n  title: Nnrf_NFManagement\r\n",
+			want:    "1.2.3",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := yamlVersionRE.FindSubmatch([]byte(tc.content))
+			if m == nil {
+				t.Fatalf("no match for %q", tc.content)
+			}
+			// processOne applies the same TrimSpace to the capture.
+			if got := strings.TrimSpace(string(m[1])); got != tc.want {
+				t.Errorf("version = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

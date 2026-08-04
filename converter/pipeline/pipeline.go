@@ -41,7 +41,7 @@ func releaseFromDocxFilename(filename string) int {
 
 var (
 	yamlFilenameRE = regexp.MustCompile(`^TS(\d{2})(\d{3})_(.+)\.ya?ml$`)
-	yamlVersionRE  = regexp.MustCompile(`(?m)^\s+version:\s*['"]?([^'"\\n]+)`)
+	yamlVersionRE  = regexp.MustCompile(`(?m)^\s+version:\s*['"]?([^'"\n]+)`)
 )
 
 // Pipeline orchestrates the download-convert-store workflow.

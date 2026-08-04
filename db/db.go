@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/higebu/3gpp-mcp/internal/specver"
 	_ "modernc.org/sqlite"
@@ -1417,6 +1418,19 @@ func extractContext(content string, start, end int) string {
 		if idx := strings.LastIndexByte(content[end:ctxEnd], ' '); idx >= 0 {
 			ctxEnd = end + idx
 		}
+	}
+
+	// The window and the snapping above work on raw byte offsets, so both ends
+	// can still sit inside a multi-byte rune whenever no ASCII space falls in
+	// the window (CJK text, no-break spaces, long unbroken tokens). Pull each
+	// end onto the nearest rune boundary, inwards, before slicing. The match
+	// itself is rune-aligned, so neither loop can cross it and ctxStart <=
+	// ctxEnd is preserved.
+	for ctxStart < start && !utf8.RuneStart(content[ctxStart]) {
+		ctxStart++
+	}
+	for ctxEnd > end && ctxEnd < len(content) && !utf8.RuneStart(content[ctxEnd]) {
+		ctxEnd--
 	}
 
 	var b strings.Builder
