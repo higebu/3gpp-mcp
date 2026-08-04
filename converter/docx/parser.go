@@ -324,6 +324,63 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 		diameterBuffer = nil
 	}
 
+	// emitParagraph renders a paragraph through the normal (non-code) path.
+	// Split out so an abandoned XML-opener candidate (see below) replays
+	// through exactly the same logic.
+	emitParagraph := func(info paragraphInfo, styleName string) {
+		flushCodeBlock()
+		if currentSection != nil {
+			blocks := paragraphToMarkdownBlocks(info, styleName, func(ref imageRef) string {
+				if relMap == nil {
+					return ""
+				}
+				return imagePlaceholder(relMap, images, ref)
+			})
+			currentSection.Content = append(currentSection.Content, blocks...)
+		}
+		// Surface any grouped vector diagram this converter couldn't render
+		// as an image (see issue #25), instead of silently dropping it.
+		if currentSection != nil && info.SkippedDiagramLabels != nil {
+			currentSection.Content = append(currentSection.Content, diagramPlaceholder(info.SkippedDiagramLabels))
+		}
+	}
+
+	// Accumulates XML/DTD blocks into one ```xml fence. Like the Diameter
+	// definitions these paragraphs carry no code style or font, so capture is
+	// content-based (see xmlblock.go): an XML declaration or DOCTYPE opens a
+	// block on its own, an ordinary tag/comment line only when the next
+	// paragraph also looks like XML — until then it is held in xmlPending and
+	// replayed as a normal paragraph if the second line never comes.
+	var xmlBuffer []string
+	var xmlTracker xmlLineTracker
+	var xmlPending *paragraphInfo
+	var xmlPendingStyle string
+	inXML := false
+	flushXML := func() {
+		inXML = false
+		xmlTracker = xmlLineTracker{}
+		if len(xmlBuffer) == 0 || currentSection == nil {
+			xmlBuffer = nil
+			return
+		}
+		for len(xmlBuffer) > 0 && strings.TrimSpace(xmlBuffer[len(xmlBuffer)-1]) == "" {
+			xmlBuffer = xmlBuffer[:len(xmlBuffer)-1]
+		}
+		if len(xmlBuffer) > 0 {
+			currentSection.Content = append(currentSection.Content,
+				"```xml\n"+strings.Join(xmlBuffer, "\n")+"\n```")
+		}
+		xmlBuffer = nil
+	}
+	abandonXMLPending := func() {
+		if xmlPending == nil {
+			return
+		}
+		emitParagraph(*xmlPending, xmlPendingStyle)
+		xmlPending = nil
+		xmlTracker = xmlLineTracker{}
+	}
+
 	// Accumulates SIP message and standalone SDP examples into one bare
 	// fence. Like the Diameter definitions, these carry no code style or
 	// font in several specs, so capture is content-based: a SIP
@@ -357,6 +414,8 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 			// what was collected rather than swallowing the table.
 			flushASN1()
 			flushDiameter()
+			abandonXMLPending()
+			flushXML()
 			flushSIP()
 			flushCodeBlock()
 			html := tableToHTML(elem.Table, imageContext{relMap: relMap, images: images})
@@ -383,6 +442,8 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 				// flush so headings are never swallowed into a code block.
 				flushASN1()
 				flushDiameter()
+				abandonXMLPending()
+				flushXML()
 				flushSIP()
 				flushCodeBlock()
 				// Normalize text
@@ -456,6 +517,28 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 				sections = append(sections, section)
 				currentSection = section
 			} else {
+				// Computed before the XML pending/continuation checks: content
+				// detection must never capture an already code-styled
+				// paragraph — those keep their bare ``` fences.
+				isCodePara := (info.IsCode || isCodeStyleName(styleName) || codeStyles[info.StyleID]) && len(info.Images) == 0
+				if xmlPending != nil {
+					// The commit test deliberately ignores element depth
+					// (matchXMLLine, not matchXMLContinuation): a quoted
+					// "<userid>" opener in prose must not pull the following
+					// prose paragraph into a fence.
+					if !isCodePara && len(info.Images) == 0 && matchXMLLine(info, &xmlTracker) {
+						// Second consecutive XML-looking paragraph: commit the
+						// held opener and the current line to an XML block.
+						flushCodeBlock()
+						inXML = true
+						line := codeLineText(info)
+						xmlBuffer = append(xmlBuffer, codeLineText(*xmlPending), line)
+						xmlTracker.observe(line)
+						xmlPending = nil
+						continue
+					}
+					abandonXMLPending()
+				}
 				if inASN1 {
 					// Capture verbatim (tabs and indentation kept, blank
 					// paragraphs become blank lines, the STOP marker line
@@ -468,11 +551,32 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 				}
 				if matchASN1Marker(asn1StartRE, info) {
 					flushDiameter()
+					flushXML()
 					flushSIP()
 					flushCodeBlock()
 					inASN1 = true
 					asn1Buffer = append(asn1Buffer, codeLineText(info))
 					continue
+				}
+				if inXML {
+					switch {
+					case strings.TrimSpace(info.Text) == "" && len(info.Images) == 0:
+						// Preserve blank lines inside a pending block
+						// (whitespace-only paragraphs included, so indentation
+						// filler does not split the fence); trailing ones are
+						// trimmed at flush.
+						xmlBuffer = append(xmlBuffer, "")
+						continue
+					case !isCodePara && len(info.Images) == 0 && matchXMLContinuation(info, &xmlTracker):
+						line := codeLineText(info)
+						xmlBuffer = append(xmlBuffer, line)
+						xmlTracker.observe(line)
+						continue
+					default:
+						// First non-matching (or code-styled) paragraph ends
+						// the block and is handled normally below.
+						flushXML()
+					}
 				}
 				if inSIP {
 					continues := sipBlockContinues(info, sipLastBufferedLine(sipBuffer))
@@ -517,7 +621,28 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 					diameterBuffer = append(diameterBuffer, codeLineText(info))
 					continue
 				}
-				isCodePara := (info.IsCode || isCodeStyleName(styleName) || codeStyles[info.StyleID]) && len(info.Images) == 0
+				// Content-based XML detection only applies to paragraphs the
+				// style/font paths would render as prose: specs whose XML is
+				// already code-styled keep their existing bare ``` fences.
+				if !isCodePara && len(info.Images) == 0 && currentSection != nil {
+					if matchXMLStrongStart(info) {
+						flushCodeBlock()
+						inXML = true
+						line := codeLineText(info)
+						xmlBuffer = append(xmlBuffer, line)
+						xmlTracker = xmlLineTracker{}
+						xmlTracker.observe(line)
+						continue
+					}
+					if matchXMLCandidateStart(info) {
+						p := info
+						xmlPending = &p
+						xmlPendingStyle = styleName
+						xmlTracker = xmlLineTracker{}
+						xmlTracker.observe(codeLineText(info))
+						continue
+					}
+				}
 				// Content-based SIP/SDP example detection applies only to
 				// paragraphs that no style-based path claims, so specs whose
 				// examples are monospace-styled keep their existing fenced
@@ -546,22 +671,7 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 					// Preserve blank lines inside a pending code block.
 					codeBuffer = append(codeBuffer, "")
 				default:
-					flushCodeBlock()
-					if currentSection != nil {
-						blocks := paragraphToMarkdownBlocks(info, styleName, func(ref imageRef) string {
-							if relMap == nil {
-								return ""
-							}
-							return imagePlaceholder(relMap, images, ref)
-						})
-						currentSection.Content = append(currentSection.Content, blocks...)
-					}
-					// Surface any grouped vector diagram this converter
-					// couldn't render as an image (see issue #25), instead
-					// of silently dropping it.
-					if currentSection != nil && info.SkippedDiagramLabels != nil {
-						currentSection.Content = append(currentSection.Content, diagramPlaceholder(info.SkippedDiagramLabels))
-					}
+					emitParagraph(info, styleName)
 				}
 			}
 		}
@@ -569,6 +679,8 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 
 	flushASN1()
 	flushDiameter()
+	abandonXMLPending()
+	flushXML()
 	flushSIP()
 	flushCodeBlock()
 

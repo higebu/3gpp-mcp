@@ -53,8 +53,9 @@ const DefaultFileName = "versions.db"
 // stored content becomes incompatible — generation 2 unified the image
 // reference notation (![Figure](image://...) for every format), generation 3
 // fences Diameter command/AVP definitions (```diameter), generation 4 fences
-// SIP/RTSP message and SDP examples by content detection.
-const cacheSchemaVersion = 4
+// SIP/RTSP message and SDP examples by content detection, generation 5
+// fences content-detected XML/DTD blocks (```xml).
+const cacheSchemaVersion = 5
 
 // schema mirrors the spec, section and image tables of the main database,
 // without the full-text index: cached versions must never appear in search
