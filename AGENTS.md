@@ -127,10 +127,22 @@ conversion-pair extensions (`.emf`/`.wmf`/`.pcz`/`.png`) and alt spelling
 never count as a content change; other extension changes stay visible. The web viewer
 serves an SVG placeholder for formats a browser cannot render (EMF/WMF).
 
+### Code fences
+
+The converter emits two tagged fences, both syntax-highlighted by the web
+viewer through custom Chroma lexers (`web/asn1lexer.go`, `web/diameterlexer.go`):
+` ```asn1 ` for ASN.1 modules between the `-- ASN1START`/`-- ASN1STOP` markers,
+and ` ```diameter ` for Diameter command/grouped-AVP definitions (RFC 6733
+Command Code Format). Diameter definitions carry no code style or font in the
+source documents, so they are detected by content (`::= < Diameter|AVP
+Header:` starts a block, AVP reference lines continue it). Monospace-styled
+paragraphs outside these two notations become bare ` ``` ` fences.
+
 The version cache stamps `PRAGMA user_version`
 (`versionstore.cacheSchemaVersion`); opening a cache from another generation
-wipes it. Databases built before the unified notation are incompatible with
-the compare normalization — rebuild them (`make build-db`).
+wipes it. Databases built before the unified notation or the Diameter
+code-fence change are incompatible with the compare normalization —
+rebuild them (`make build-db`).
 
 ### MCP Tools
 

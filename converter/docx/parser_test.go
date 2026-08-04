@@ -980,6 +980,223 @@ func TestParseSections_ASN1UnterminatedFlushedByTable(t *testing.T) {
 	}
 }
 
+func TestDiameterDefRegex(t *testing.T) {
+	tests := []struct {
+		text  string
+		start bool
+		line  bool
+	}{
+		// Header spelling variants observed across Diameter specs.
+		{"< Update-Location-Request> ::=\t< Diameter Header: 316, REQ, PXY, 16777251 >", true, true},
+		{"Subscription-Data ::= <AVP header: 1400 10415>", true, true},
+		{"MIP6-Agent-Info ::=< AVP Header: 486 >", true, true},
+		{"EPS-User-State ::= <AVP header:1495 10415>", true, true},
+		{" Supported-Services::= <AVP header: 3143 10415>", true, true},
+		// AVP reference lines.
+		{"< Session-Id >", false, true},
+		{"{ Origin-Host }", false, true},
+		{"[ DRMP ]", false, true},
+		{"*[ Supported-Features ]", false, true},
+		{"1*{ Proxy-Info }", false, true},
+		{"0*2[ Subscription-Data ]", false, true},
+		{"\t[ Destination-Host ]", false, true},
+		// ASN.1 and prose must match neither.
+		{"Foo ::= SEQUENCE {", false, false},
+		{"where X ::= Y denotes a production", false, false},
+		{"The AVP header is described in clause 4.", false, false},
+		{"plain text", false, false},
+		{"", false, false},
+	}
+	for _, tt := range tests {
+		info := paragraphInfo{Text: tt.text, Runs: []runInfo{{Text: tt.text}}}
+		if got := matchDiameterStart(info); got != tt.start {
+			t.Errorf("start match for %q = %v, want %v", tt.text, got, tt.start)
+		}
+		if got := matchDiameterLine(info); got != tt.line {
+			t.Errorf("line match for %q = %v, want %v", tt.text, got, tt.line)
+		}
+	}
+}
+
+func TestParseSections_DiameterCommandBlock(t *testing.T) {
+	para := func(text string) bodyElement {
+		return bodyElement{Tag: "p", Paragraph: paragraphInfo{
+			Text: text, Runs: []runInfo{{Text: text}},
+		}}
+	}
+	elements := []bodyElement{
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading1", Text: "6.1.1\tUser-Authorization-Request (UAR) Command",
+			Runs: []runInfo{{Text: "6.1.1\tUser-Authorization-Request (UAR) Command"}},
+		}},
+		para("Message Format"),
+		para("< User-Authorization-Request> ::=\t< Diameter Header: 300, REQ, PXY, 16777216 >"),
+		para("< Session-Id >"),
+		{Tag: "p", Paragraph: paragraphInfo{}}, // blank paragraph → blank line
+		para("{ Origin-Host }"),
+		// Bold runs (TS 29.229) must be captured without markdown markers.
+		{Tag: "p", Paragraph: paragraphInfo{
+			Text: "*[ Supported-Features ]",
+			Runs: []runInfo{{Text: "*[ Supported-Features ]", Bold: true}},
+		}},
+		para("*[ AVP ]"),
+		para("Trailing prose."),
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(sections))
+	}
+	content := sections[0].Content
+	want := "```diameter\n" +
+		"< User-Authorization-Request> ::=\t< Diameter Header: 300, REQ, PXY, 16777216 >\n" +
+		"< Session-Id >\n" +
+		"\n" +
+		"{ Origin-Host }\n" +
+		"*[ Supported-Features ]\n" +
+		"*[ AVP ]\n" +
+		"```"
+	var found bool
+	for _, c := range content {
+		if c == want {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected verbatim diameter fence %q; got content:\n%v", want, content)
+	}
+	if content[len(content)-1] != "Trailing prose." {
+		t.Errorf("expected trailing prose after the fence, got %q", content[len(content)-1])
+	}
+	joined := strings.Join(content, "\n")
+	if strings.Contains(joined, "**") {
+		t.Errorf("bold markers leaked into output:\n%v", content)
+	}
+}
+
+func TestParseSections_DiameterGroupedAVPVariants(t *testing.T) {
+	para := func(text string) bodyElement {
+		return bodyElement{Tag: "p", Paragraph: paragraphInfo{
+			Text: text, Runs: []runInfo{{Text: text}},
+		}}
+	}
+	elements := []bodyElement{
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading1", Text: "7.3.2\tGrouped AVPs",
+			Runs: []runInfo{{Text: "7.3.2\tGrouped AVPs"}},
+		}},
+		para("Subscription-Data ::= <AVP header: 1400 10415>"),
+		para("[ Subscriber-Status ]"),
+		{Tag: "p", Paragraph: paragraphInfo{}},
+		// Consecutive definitions merge into a single fence.
+		para("MIP6-Agent-Info ::=< AVP Header: 486 >"),
+		para("[ MIP-Home-Agent-Address ]"),
+		para("*[ AVP ]"),
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(sections))
+	}
+	if len(sections[0].Content) != 1 {
+		t.Fatalf("expected exactly 1 content entry, got %v", sections[0].Content)
+	}
+	c := sections[0].Content[0]
+	if !strings.HasPrefix(c, "```diameter\n") ||
+		!strings.Contains(c, "Subscription-Data ::= <AVP header: 1400 10415>") ||
+		!strings.Contains(c, "MIP6-Agent-Info ::=< AVP Header: 486 >") {
+		t.Errorf("expected one merged diameter fence with both definitions, got %q", c)
+	}
+}
+
+func TestParseSections_DiameterFlushedByHeadingAndTable(t *testing.T) {
+	para := func(text string) bodyElement {
+		return bodyElement{Tag: "p", Paragraph: paragraphInfo{
+			Text: text, Runs: []runInfo{{Text: text}},
+		}}
+	}
+	heading := func(text string) bodyElement {
+		return bodyElement{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading1", Text: text, Runs: []runInfo{{Text: text}},
+		}}
+	}
+	elements := []bodyElement{
+		heading("1\tFirst"),
+		para("ULR ::= < Diameter Header: 316, REQ, PXY >"),
+		para("{ Origin-Host }"),
+		heading("2\tSecond"),
+		para("ULA ::= < Diameter Header: 316, PXY >"),
+		para("{ Result-Code }"),
+		{Tag: "tbl", Table: tableInfo{Rows: []tableRow{{Cells: []tableCell{{Paras: []paragraphInfo{{Text: "cell", Runs: []runInfo{{Text: "cell"}}}}}}}}}},
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	if len(sections) != 2 {
+		t.Fatalf("expected 2 sections, got %d", len(sections))
+	}
+	if len(sections[0].Content) != 1 || !strings.HasPrefix(sections[0].Content[0], "```diameter\n") {
+		t.Errorf("expected diameter fence flushed by heading in first section, got %v", sections[0].Content)
+	}
+	second := strings.Join(sections[1].Content, "\n")
+	if !strings.Contains(second, "```diameter\n") || !strings.Contains(second, "cell") {
+		t.Errorf("expected diameter fence flushed by table plus table content, got %v", sections[1].Content)
+	}
+	if strings.Index(second, "```diameter") > strings.Index(second, "cell") {
+		t.Errorf("expected fence before table content, got %v", sections[1].Content)
+	}
+}
+
+func TestParseSections_DiameterFalsePositiveProse(t *testing.T) {
+	elements := []bodyElement{
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading1", Text: "1\tFirst",
+			Runs: []runInfo{{Text: "1\tFirst"}},
+		}},
+		{Tag: "p", Paragraph: paragraphInfo{
+			Text: "where X ::= Y denotes a production",
+			Runs: []runInfo{{Text: "where X ::= Y denotes a production"}},
+		}},
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(sections))
+	}
+	if len(sections[0].Content) != 1 || strings.Contains(sections[0].Content[0], "```") {
+		t.Errorf("expected plain prose paragraph, got %v", sections[0].Content)
+	}
+}
+
+func TestParseSections_DiameterAfterCodeStyledBlock(t *testing.T) {
+	elements := []bodyElement{
+		{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: "Heading1", Text: "1\tFirst",
+			Runs: []runInfo{{Text: "1\tFirst"}},
+		}},
+		{Tag: "p", Paragraph: paragraphInfo{
+			Text: "yaml: sample", Runs: []runInfo{{Text: "yaml: sample"}}, IsCode: true,
+		}},
+		{Tag: "p", Paragraph: paragraphInfo{
+			Text: "CCR ::= < Diameter Header: 272, REQ, PXY >",
+			Runs: []runInfo{{Text: "CCR ::= < Diameter Header: 272, REQ, PXY >"}},
+		}},
+		{Tag: "p", Paragraph: paragraphInfo{
+			Text: "{ Origin-Host }", Runs: []runInfo{{Text: "{ Origin-Host }"}},
+		}},
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(sections))
+	}
+	content := sections[0].Content
+	if len(content) != 2 {
+		t.Fatalf("expected a plain fence then a diameter fence, got %v", content)
+	}
+	if !strings.HasPrefix(content[0], "```\n") || !strings.Contains(content[0], "yaml: sample") {
+		t.Errorf("expected plain code fence first, got %q", content[0])
+	}
+	if !strings.HasPrefix(content[1], "```diameter\n") || !strings.Contains(content[1], "{ Origin-Host }") {
+		t.Errorf("expected diameter fence second, got %q", content[1])
+	}
+}
+
 func TestImagePlaceholder_UnifiedNotation(t *testing.T) {
 	relMap := map[string]string{"rId1": "media/image1.emf"}
 	images := map[string]*EmbeddedImage{
