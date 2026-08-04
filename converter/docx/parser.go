@@ -489,12 +489,16 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 				sections = append(sections, section)
 				currentSection = section
 			} else {
+				// Computed before the XML pending/continuation checks: content
+				// detection must never capture an already code-styled
+				// paragraph — those keep their bare ``` fences.
+				isCodePara := (info.IsCode || isCodeStyleName(styleName) || codeStyles[info.StyleID]) && len(info.Images) == 0
 				if xmlPending != nil {
 					// The commit test deliberately ignores element depth
 					// (matchXMLLine, not matchXMLContinuation): a quoted
 					// "<userid>" opener in prose must not pull the following
 					// prose paragraph into a fence.
-					if len(info.Images) == 0 && matchXMLLine(info, &xmlTracker) {
+					if !isCodePara && len(info.Images) == 0 && matchXMLLine(info, &xmlTracker) {
 						// Second consecutive XML-looking paragraph: commit the
 						// held opener and the current line to an XML block.
 						flushCodeBlock()
@@ -534,14 +538,14 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 						// trimmed at flush.
 						xmlBuffer = append(xmlBuffer, "")
 						continue
-					case len(info.Images) == 0 && matchXMLContinuation(info, &xmlTracker):
+					case !isCodePara && len(info.Images) == 0 && matchXMLContinuation(info, &xmlTracker):
 						line := codeLineText(info)
 						xmlBuffer = append(xmlBuffer, line)
 						xmlTracker.observe(line)
 						continue
 					default:
-						// First non-matching paragraph ends the block and is
-						// handled normally below.
+						// First non-matching (or code-styled) paragraph ends
+						// the block and is handled normally below.
 						flushXML()
 					}
 				}
@@ -569,7 +573,6 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 					diameterBuffer = append(diameterBuffer, codeLineText(info))
 					continue
 				}
-				isCodePara := (info.IsCode || isCodeStyleName(styleName) || codeStyles[info.StyleID]) && len(info.Images) == 0
 				// Content-based XML detection only applies to paragraphs the
 				// style/font paths would render as prose: specs whose XML is
 				// already code-styled keep their existing bare ``` fences.

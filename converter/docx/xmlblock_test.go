@@ -349,6 +349,48 @@ func TestParseSections_XMLNotSwallowingMathOrImages(t *testing.T) {
 	}
 }
 
+// An XML-looking but code-styled paragraph neither confirms a held opener
+// candidate nor continues an open block: code-styled XML keeps its bare
+// fence in both positions.
+func TestParseSections_XMLCodeStyledStopsPendingAndContinuation(t *testing.T) {
+	codePara := func(text string) bodyElement {
+		return bodyElement{Tag: "p", Paragraph: paragraphInfo{
+			Text: text, Runs: []runInfo{{Text: text, IsCode: true}}, IsCode: true,
+		}}
+	}
+	elements := []bodyElement{
+		xmlTestHeading("1\tFirst"),
+		// Unstyled candidate followed by code-styled XML: no commit.
+		xmlTestPara(`<single-tag-line>`),
+		codePara(`<code-styled-tag>`),
+		xmlTestHeading("2\tSecond"),
+		// Open block ended by code-styled XML: fence flushes before it.
+		xmlTestPara(`<?xml version="1.0"?>`),
+		codePara(`<code-styled-tag>`),
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	if len(sections) != 2 {
+		t.Fatalf("expected 2 sections, got %d", len(sections))
+	}
+	first := sections[0].Content
+	if len(first) != 2 || strings.Contains(first[0], "```") {
+		t.Fatalf("expected abandoned candidate as plain paragraph, got %v", first)
+	}
+	if !strings.HasPrefix(first[1], "```\n") || strings.HasPrefix(first[1], "```xml") {
+		t.Errorf("expected code-styled paragraph in a bare fence, got %q", first[1])
+	}
+	second := sections[1].Content
+	if len(second) != 2 {
+		t.Fatalf("expected xml fence + bare fence, got %v", second)
+	}
+	if !strings.HasPrefix(second[0], "```xml\n") || strings.Contains(second[0], "code-styled-tag") {
+		t.Errorf("expected xml fence without the code-styled line, got %q", second[0])
+	}
+	if !strings.HasPrefix(second[1], "```\n") || !strings.Contains(second[1], "<code-styled-tag>") {
+		t.Errorf("expected code-styled paragraph in a bare fence, got %q", second[1])
+	}
+}
+
 // A candidate opener directly followed by a code-styled paragraph is
 // abandoned and the code block forms as before.
 func TestParseSections_XMLPendingAbandonedByCodePara(t *testing.T) {
