@@ -21,26 +21,35 @@
     const settingsPopover = document.getElementById('settings-popover');
 
     if (settingsToggle && settingsPopover) {
+        // Keep the popover inside the viewport: on narrow screens the
+        // navbar wraps and the gear no longer sits at the right edge, so
+        // right-aligning the popover to it can push it off the left edge.
+        // Measure and shift right just enough, without crossing the right
+        // edge either. Recomputed on resize (e.g. orientation change) while
+        // the popover is open, since the offset depends on the layout.
+        const clampToViewport = function () {
+            settingsPopover.style.right = '';
+            const margin = 8;
+            const rect = settingsPopover.getBoundingClientRect();
+            if (rect.left < margin) {
+                const shift = Math.min(margin - rect.left, window.innerWidth - margin - rect.right);
+                if (shift > 0) {
+                    settingsPopover.style.right = -shift + 'px';
+                }
+            }
+        };
         const setOpen = function (open) {
             settingsPopover.hidden = !open;
             settingsToggle.setAttribute('aria-expanded', String(open));
             if (open) {
-                // Keep the popover inside the viewport: on narrow screens
-                // the navbar wraps and the gear no longer sits at the right
-                // edge, so right-aligning the popover to it can push it off
-                // the left edge. Measure after showing and shift right just
-                // enough, without crossing the right edge either.
-                settingsPopover.style.right = '';
-                const margin = 8;
-                const rect = settingsPopover.getBoundingClientRect();
-                if (rect.left < margin) {
-                    const shift = Math.min(margin - rect.left, window.innerWidth - margin - rect.right);
-                    if (shift > 0) {
-                        settingsPopover.style.right = -shift + 'px';
-                    }
-                }
+                clampToViewport();
             }
         };
+        window.addEventListener('resize', function () {
+            if (!settingsPopover.hidden) {
+                clampToViewport();
+            }
+        });
         settingsToggle.addEventListener('click', function () {
             setOpen(settingsPopover.hidden);
         });
