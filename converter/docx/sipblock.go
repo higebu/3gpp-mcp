@@ -49,10 +49,11 @@ var (
 	sipStatusRE = regexp.MustCompile(`^` + sipDirectionPat + sipVersionPat + `[ \t]+\d{3}(?:[ \t]+[A-Z][A-Za-z-]*){0,4}[ \t]*$`)
 
 	// Header lines that continue a SIP message. A hyphenated field name
-	// ("Call-ID:", "Max-Forwards:70", "UC-Indicator=true;") is accepted
-	// generically; hyphen-less names are limited to well-known SIP headers
-	// so prose like "where:" or "NOTE:" ends the block.
-	sipHyphenHeaderRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+[ \t]*[:=]`)
+	// ("Call-ID:", "Max-Forwards:70", "UC-Indicator=true;",
+	// "3GPP-QoE-Metrics:url=...") is accepted generically; hyphen-less names
+	// are limited to well-known SIP headers so prose like "where:" or
+	// "NOTE:" ends the block.
+	sipHyphenHeaderRE = regexp.MustCompile(`^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+[ \t]*[:=]`)
 	sipPlainHeaderRE  = regexp.MustCompile(`(?i)^(?:via|to|from|contact|cseq|route|path|require|supported|expires|event|accept|allow|authorization|privacy|reason|warning|server|unsupported|date|subject|priority|organization|rack|rseq|join|replaces|timestamp)[ \t]*:`)
 	// Compact-form header, one letter and a colon: "v:SIP/2.0/UDP A;...",
 	// "f:<sip:A>;tag=205847", "l:120" (TS 23.700-19).
