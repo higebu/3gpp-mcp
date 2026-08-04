@@ -129,20 +129,27 @@ serves an SVG placeholder for formats a browser cannot render (EMF/WMF).
 
 ### Code fences
 
-The converter emits two tagged fences, both syntax-highlighted by the web
-viewer through custom Chroma lexers (`web/asn1lexer.go`, `web/diameterlexer.go`):
-` ```asn1 ` for ASN.1 modules between the `-- ASN1START`/`-- ASN1STOP` markers,
-and ` ```diameter ` for Diameter command/grouped-AVP definitions (RFC 6733
-Command Code Format). Diameter definitions carry no code style or font in the
-source documents, so they are detected by content (`::= < Diameter|AVP
-Header:` starts a block, AVP reference lines continue it). Monospace-styled
-paragraphs outside these two notations become bare ` ``` ` fences.
+The converter emits three tagged fences: ` ```asn1 ` for ASN.1 modules
+between the `-- ASN1START`/`-- ASN1STOP` markers, ` ```diameter ` for
+Diameter command/grouped-AVP definitions (RFC 6733 Command Code Format), and
+` ```xml ` for XML schemas, XML body examples and DTDs written as plain body
+paragraphs. The web viewer highlights the first two through custom Chroma
+lexers (`web/asn1lexer.go`, `web/diameterlexer.go`) and ` ```xml ` through
+Chroma's built-in XML lexer. Diameter definitions and XML/DTD blocks carry no
+code style or font in the source documents, so both are detected by content:
+`::= < Diameter|AVP Header:` starts a Diameter block and AVP reference lines
+continue it; an XML declaration or DOCTYPE starts an XML block on its own,
+ordinary tag/comment/DTD lines only in consecutive pairs (so prose quoting a
+single element never fences — see `converter/docx/xmlblock.go`). XML
+detection skips paragraphs already fenced via code style or font, which keep
+their bare ` ``` ` fences; monospace-styled paragraphs outside these
+notations become bare ` ``` ` fences as before.
 
 The version cache stamps `PRAGMA user_version`
 (`versionstore.cacheSchemaVersion`); opening a cache from another generation
-wipes it. Databases built before the unified notation or the Diameter
-code-fence change are incompatible with the compare normalization —
-rebuild them (`make build-db`).
+wipes it. Databases built before the unified notation, the Diameter
+code-fence change or the XML code-fence change are incompatible with the
+compare normalization — rebuild them (`make build-db`).
 
 ### MCP Tools
 

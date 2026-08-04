@@ -52,8 +52,9 @@ const DefaultFileName = "versions.db"
 // are re-downloadable, so a wipe is cheaper than migrating. Bump it when the
 // stored content becomes incompatible — generation 2 unified the image
 // reference notation (![Figure](image://...) for every format), generation 3
-// fences Diameter command/AVP definitions (```diameter).
-const cacheSchemaVersion = 3
+// fences Diameter command/AVP definitions (```diameter), generation 4 fences
+// content-detected XML/DTD blocks (```xml).
+const cacheSchemaVersion = 4
 
 // schema mirrors the spec, section and image tables of the main database,
 // without the full-text index: cached versions must never appear in search
