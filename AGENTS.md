@@ -145,11 +145,23 @@ detection skips paragraphs already fenced via code style or font, which keep
 their bare ` ``` ` fences; monospace-styled paragraphs outside these
 notations become bare ` ``` ` fences as before.
 
+SIP/RTSP message and SDP session-description examples are also detected by
+content (`converter/docx/sipblock.go`), since several specs write them as
+plain Normal-styled paragraphs: a SIP/RTSP request or status line — or a run
+of at least three SDP field lines (two when starting at `v=0`) — opens a
+block, message-shaped lines continue it, and the first paragraph that is
+neither ends it. These become bare ` ``` ` fences; paragraphs already claimed
+by a style-based path never enter this detection, so monospace-styled
+examples keep their existing output. An `EXAMPLE n:` label directly in front
+of a match is emitted as its own prose paragraph, and a leading list dash is
+dropped.
+
 The version cache stamps `PRAGMA user_version`
 (`versionstore.cacheSchemaVersion`); opening a cache from another generation
 wipes it. Databases built before the unified notation, the Diameter
-code-fence change or the XML code-fence change are incompatible with the
-compare normalization — rebuild them (`make build-db`).
+code-fence change, the SIP/SDP fencing change or the XML code-fence change
+are incompatible with the compare normalization — rebuild them
+(`make build-db`).
 
 ### MCP Tools
 
