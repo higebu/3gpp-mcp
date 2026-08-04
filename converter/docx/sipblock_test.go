@@ -1,0 +1,469 @@
+package docx
+
+import (
+	"strings"
+	"testing"
+)
+
+func sipPara(text string) bodyElement {
+	return bodyElement{Tag: "p", Paragraph: paragraphInfo{
+		Text: text, Runs: []runInfo{{Text: text}},
+	}}
+}
+
+func sipHeading(text string) bodyElement {
+	return bodyElement{Tag: "p", Paragraph: paragraphInfo{
+		StyleID: "Heading1", Text: text, Runs: []runInfo{{Text: text}},
+	}}
+}
+
+func sipParse(elements []bodyElement) []*Section {
+	return parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+}
+
+func TestSIPStartLineRegex(t *testing.T) {
+	tests := []struct {
+		line string
+		want bool
+	}{
+		// Request lines with the SIP-version token.
+		{"INVITE sip:B-Party;tgrp=CGR2;trunk-context=Realm6@operator.net SIP/2.0", true},
+		{"INVITE tel:+8613587654321 SIP/2.0", true},
+		{"INVITE sip:bob@example.net SIP/2.0", true},
+		{"REGISTER sip:registrar.home1.net SIP/2.0", true},
+		// Request line without the version token (TS 25.933), including a
+		// space after the URI scheme.
+		{"INVITE sip: A2EA2@Iputrannode2.operator.net", true},
+		{"INVITE sip:control@mrf.example.com;ccxml=http://server.example.com/conference.ccxml", true},
+		// Status lines.
+		{"SIP/2.0 100", true},
+		{"SIP/2.0 100 Trying", true},
+		{"SIP/2.0 183 Session Progress", true},
+		{"SIP/2.0 486 Busy Here", true},
+		// Prose that mentions SIP must not match.
+		{"The UE sends an INVITE request to the P-CSCF.", false},
+		{"INVITE sip:bob@example.com is then routed onwards", false},
+		{"SIP/2.0 200 OK is sent to the UE", false},
+		{"SIP/2.0 200 OK is sent to the UE.", false},
+		{"sends an INVITE request", false},
+		{"The SIP/2.0 protocol is used", false},
+		{"OPTIONS for deployment are discussed below", false},
+	}
+	for _, tt := range tests {
+		if got := sipStartLine(tt.line); got != tt.want {
+			t.Errorf("sipStartLine(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
+
+// TS 25.933 style: full SIP message with SDP body, each line its own
+// Normal-styled paragraph, request line without a SIP-version token.
+func TestParseSections_SIPFullMessageBlock(t *testing.T) {
+	elements := []bodyElement{
+		sipHeading("1\tExample message"),
+		sipPara("An example SIP Invite request could be represented as the following:"),
+		sipPara("INVITE sip: A2EA2@Iputrannode2.operator.net"),
+		sipPara("Via: SIP/2.0/SCTP 194.237.226.242:5062"),
+		sipPara("From: sip: A2EA1@iwf1.operator.net"),
+		sipPara("To: sip: A2EA2@Iputrannode2.operator.net"),
+		sipPara("Call-ID: <BIDD1>"),
+		sipPara("CSeq: 1 INVITE"),
+		sipPara("Content-type: application/sdp"),
+		sipPara("Content-length: 141"),
+		sipPara("v=0"),
+		sipPara("o= - <bidd1> 924526776692 IN IP4 194.237.226.242"),
+		sipPara("s= -"),
+		sipPara("c=IN IP4 194.237.226.242"),
+		// Soft line break inside one paragraph.
+		sipPara("t=76554467889 0\nm=app 7094 UDP/IubFP 96"),
+		sipPara("a= fmtp: 96 41 38 16400 8550"),
+		sipPara("where:"),
+		sipPara("A2EA1 = E164 address of the ATM node"),
+	}
+	sections := sipParse(elements)
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(sections))
+	}
+	content := sections[0].Content
+	if len(content) != 4 {
+		t.Fatalf("expected intro, fence, and two trailing prose paragraphs, got %v", content)
+	}
+	want := "```\n" +
+		"INVITE sip: A2EA2@Iputrannode2.operator.net\n" +
+		"Via: SIP/2.0/SCTP 194.237.226.242:5062\n" +
+		"From: sip: A2EA1@iwf1.operator.net\n" +
+		"To: sip: A2EA2@Iputrannode2.operator.net\n" +
+		"Call-ID: <BIDD1>\n" +
+		"CSeq: 1 INVITE\n" +
+		"Content-type: application/sdp\n" +
+		"Content-length: 141\n" +
+		"v=0\n" +
+		"o= - <bidd1> 924526776692 IN IP4 194.237.226.242\n" +
+		"s= -\n" +
+		"c=IN IP4 194.237.226.242\n" +
+		"t=76554467889 0\nm=app 7094 UDP/IubFP 96\n" +
+		"a= fmtp: 96 41 38 16400 8550\n" +
+		"```"
+	if content[1] != want {
+		t.Errorf("expected verbatim SIP fence %q, got %q", want, content[1])
+	}
+	if content[2] != "where:" {
+		t.Errorf("expected prose to resume at %q, got %q", "where:", content[2])
+	}
+}
+
+// TS 23.850 style: a request line with nothing else, ended by prose.
+func TestParseSections_SIPRequestLineOnly(t *testing.T) {
+	elements := []bodyElement{
+		sipHeading("1\tRouting"),
+		sipPara("For example as follows:"),
+		sipPara("INVITE sip:B-Party;tgrp=CGR2;trunk-context=Realm6@operator.net SIP/2.0"),
+		sipPara("Table 5.3.3.2-1"),
+	}
+	sections := sipParse(elements)
+	content := sections[0].Content
+	if len(content) != 3 {
+		t.Fatalf("expected prose, fence, prose, got %v", content)
+	}
+	want := "```\nINVITE sip:B-Party;tgrp=CGR2;trunk-context=Realm6@operator.net SIP/2.0\n```"
+	if content[1] != want {
+		t.Errorf("expected single-line fence %q, got %q", want, content[1])
+	}
+}
+
+// TS 23.700-19 style: request and status messages styled bold/italic, with
+// compact-form headers and an SDP body, ended by an Editor's note.
+func TestParseSections_SIPCompactHeadersAndEmphasis(t *testing.T) {
+	emphaticPara := func(runs ...runInfo) bodyElement {
+		var full []string
+		for _, r := range runs {
+			full = append(full, r.Text)
+		}
+		return bodyElement{Tag: "p", Paragraph: paragraphInfo{
+			Text: strings.Join(full, ""), Runs: runs,
+		}}
+	}
+	elements := []bodyElement{
+		sipHeading("1\tMobile originating"),
+		sipPara("The UE sends SIP INVITE with SDP offer to the P-CSCF."),
+		emphaticPara(runInfo{Text: "INVITE", Bold: true, Italic: true}, runInfo{Text: " tel:+8613587654321 SIP/2.0", Italic: true}),
+		emphaticPara(runInfo{Text: "v:SIP/2.0/UDP A;branch=z9hG4bK122456", Italic: true}),
+		emphaticPara(runInfo{Text: "f:<sip:A>;tag=205847", Italic: true}),
+		emphaticPara(runInfo{Text: "CSeq:81 INVITE", Italic: true}),
+		emphaticPara(runInfo{Text: "Max-Forwards:70", Italic: true}),
+		emphaticPara(runInfo{Text: "l:120", Italic: true}),
+		emphaticPara(runInfo{Text: "v=0", Italic: true}),
+		emphaticPara(runInfo{Text: "m=audio 49155 RTP/AVP 0 8", Italic: true}),
+		sipPara("The P-CSCF sends SIP 100 to the UE."),
+		emphaticPara(runInfo{Text: "SIP/2.0", Italic: true}, runInfo{Text: " 100", Bold: true, Italic: true}),
+		emphaticPara(runInfo{Text: "i:a9gH", Italic: true}),
+		sipPara("Editor's note:\tWhether SIP 100 can be omitted is FFS."),
+	}
+	sections := sipParse(elements)
+	content := sections[0].Content
+	if len(content) != 5 {
+		t.Fatalf("expected prose, fence, prose, fence, prose, got %v", content)
+	}
+	wantFirst := "```\n" +
+		"INVITE tel:+8613587654321 SIP/2.0\n" +
+		"v:SIP/2.0/UDP A;branch=z9hG4bK122456\n" +
+		"f:<sip:A>;tag=205847\n" +
+		"CSeq:81 INVITE\n" +
+		"Max-Forwards:70\n" +
+		"l:120\n" +
+		"v=0\n" +
+		"m=audio 49155 RTP/AVP 0 8\n" +
+		"```"
+	if content[1] != wantFirst {
+		t.Errorf("expected INVITE fence without emphasis markers %q, got %q", wantFirst, content[1])
+	}
+	wantSecond := "```\nSIP/2.0 100\ni:a9gH\n```"
+	if content[3] != wantSecond {
+		t.Errorf("expected status fence %q, got %q", wantSecond, content[3])
+	}
+	if !strings.HasPrefix(content[4], "Editor's note:") {
+		t.Errorf("expected Editor's note to stay prose, got %q", content[4])
+	}
+}
+
+// TS 22.948 style: a list dash before the request line. The dash is
+// styling, not message content, and the next dashed list item stays prose.
+func TestParseSections_SIPDashPrefixedRequestLine(t *testing.T) {
+	elements := []bodyElement{
+		sipHeading("1\tRe-use of W3C conferencing capabilities"),
+		sipPara("CCXML can be invoked using SIP in IMS networks. For example:"),
+		sipPara("-\tINVITE sip:control@mrf.example.com;ccxml=http://server.example.com/conference.ccxml"),
+		sipPara("-\tSIP/2.0\tThis allows application servers to use CCXML in IMS network."),
+	}
+	sections := sipParse(elements)
+	content := sections[0].Content
+	if len(content) != 3 {
+		t.Fatalf("expected prose, fence, prose, got %v", content)
+	}
+	want := "```\nINVITE sip:control@mrf.example.com;ccxml=http://server.example.com/conference.ccxml\n```"
+	if content[1] != want {
+		t.Errorf("expected dash-stripped fence %q, got %q", want, content[1])
+	}
+	if !strings.Contains(content[2], "This allows application servers") {
+		t.Errorf("expected following list item to stay prose, got %q", content[2])
+	}
+}
+
+// TS 23.877 style: a standalone SDP description, one field line per
+// paragraph, no SIP message around it.
+func TestParseSections_SDPBlock(t *testing.T) {
+	elements := []bodyElement{
+		sipHeading("1\tUni-directional codec and SDP"),
+		sipPara("One example for DSR on the uplink is shown below:"),
+		sipPara("v=0"),
+		sipPara("o=SESPhone 0 1 IN IP4 10.132.30.33"),
+		sipPara("s=asymmetric ses dsr session"),
+		sipPara("c=IN IP4 10.132.30.33"),
+		sipPara("t=0 0"),
+		sipPara("m=audio 9002 RTP/AVP 97"),
+		sipPara("a=rtpmap:97 AMR/8000"),
+		sipPara("a=recvonly"),
+		sipPara("This example above uses IP4 but can easily be extended to IP6 for IMS."),
+	}
+	sections := sipParse(elements)
+	content := sections[0].Content
+	if len(content) != 3 {
+		t.Fatalf("expected prose, fence, prose, got %v", content)
+	}
+	want := "```\n" +
+		"v=0\n" +
+		"o=SESPhone 0 1 IN IP4 10.132.30.33\n" +
+		"s=asymmetric ses dsr session\n" +
+		"c=IN IP4 10.132.30.33\n" +
+		"t=0 0\n" +
+		"m=audio 9002 RTP/AVP 97\n" +
+		"a=rtpmap:97 AMR/8000\n" +
+		"a=recvonly\n" +
+		"```"
+	if content[1] != want {
+		t.Errorf("expected SDP fence %q, got %q", want, content[1])
+	}
+}
+
+// TS 26.234 A.1 style: "EXAMPLE 1:<tab>v=0" starts a multi-line SDP
+// paragraph, with a backslash-wrapped a=fmtp value whose continuation line
+// is not itself a field line.
+func TestParseSections_SDPExampleLabelAndWrappedLine(t *testing.T) {
+	elements := []bodyElement{
+		sipHeading("1\tSDP"),
+		sipPara("The example below shows an SDP file:"),
+		sipPara("EXAMPLE 1:\tv=0\no=ghost 2890844526 2890842807 IN IP4 192.168.10.10\ns=3GPP Unicast SDP Example\nc=IN IP4 0.0.0.0\nt=0 0"),
+		bodyElement{Tag: "p", Paragraph: paragraphInfo{}}, // blank paragraph
+		sipPara("a=range:npt=0-45.678\nm=video 1024 RTP/AVP 96"),
+		sipPara("a=fmtp:96 packetization-mode=1; profile-level-id=64001e; \\"),
+		sipPara("sprop-parameter-sets= Z2QAHpWQC0PaAfyQ,aOuOoA=="),
+		sipPara("a=control:rtsp://mediaserver.com/movie.3gp/trackID=1"),
+		sipPara("The following examples show some usage of the \"alt\" attribute:"),
+	}
+	sections := sipParse(elements)
+	content := sections[0].Content
+	if len(content) != 4 {
+		t.Fatalf("expected prose, label, fence, prose, got %v", content)
+	}
+	if content[1] != "EXAMPLE 1:" {
+		t.Errorf("expected the example label as its own paragraph, got %q", content[1])
+	}
+	want := "```\n" +
+		"v=0\no=ghost 2890844526 2890842807 IN IP4 192.168.10.10\ns=3GPP Unicast SDP Example\nc=IN IP4 0.0.0.0\nt=0 0\n" +
+		"\n" +
+		"a=range:npt=0-45.678\nm=video 1024 RTP/AVP 96\n" +
+		"a=fmtp:96 packetization-mode=1; profile-level-id=64001e; \\\n" +
+		"sprop-parameter-sets= Z2QAHpWQC0PaAfyQ,aOuOoA==\n" +
+		"a=control:rtsp://mediaserver.com/movie.3gp/trackID=1\n" +
+		"```"
+	if content[2] != want {
+		t.Errorf("expected labeled SDP fence %q, got %q", want, content[2])
+	}
+}
+
+// TS 26.234 A.2.1 style: an SDP fragment that starts at an m-line rather
+// than v=0 still fences once three field lines run consecutively.
+func TestParseSections_SDPFragmentStartingAtMediaLine(t *testing.T) {
+	elements := []bodyElement{
+		sipHeading("1\tExamples"),
+		sipPara("The equivalent SDP for alternative 1 (default) is:"),
+		sipPara("EXAMPLE 3:\tm=audio 0 RTP/AVP 97"),
+		sipPara("b=AS:12"),
+		sipPara("b=TIAS:8500"),
+		sipPara("a=rtpmap:97 AMR/8000"),
+		sipPara("Alternative 2 is based on the default alternative."),
+	}
+	sections := sipParse(elements)
+	content := sections[0].Content
+	if len(content) != 4 {
+		t.Fatalf("expected prose, label, fence, prose, got %v", content)
+	}
+	if content[1] != "EXAMPLE 3:" {
+		t.Errorf("expected the example label as its own paragraph, got %q", content[1])
+	}
+	want := "```\nm=audio 0 RTP/AVP 97\nb=AS:12\nb=TIAS:8500\na=rtpmap:97 AMR/8000\n```"
+	if content[2] != want {
+		t.Errorf("expected SDP fragment fence %q, got %q", want, content[2])
+	}
+}
+
+// TS 23.207 Annex C prose: isolated SDP field-form templates separated by
+// prose must not fence, and neither must equations or short field runs.
+func TestParseSections_SDPFalsePositiveProse(t *testing.T) {
+	elements := []bodyElement{
+		sipHeading("1\tMapping"),
+		sipPara("The media announcements field is of the form:"),
+		sipPara("m=<media> <port> <transport> <fmt list>"),
+		sipPara("The attributes field is of the form:"),
+		sipPara("a=<attribute><value>"),
+		sipPara("The connection data field is of the form:"),
+		sipPara("c=<network type> <address type> <connection address>"),
+		sipPara("An equation like x=y+1 stays prose."),
+		sipPara("v=0"),
+		sipPara("Only one field line follows nothing, so it stays prose too."),
+		// Prose enumerations of the SDP field types (TS 23.700-19) end each
+		// line with a period, which no real field value does.
+		sipPara("v= (protocol version)."),
+		sipPara("o= (originator and session identifier)."),
+		sipPara("s= (session name)."),
+		sipPara("c= (connection information)."),
+	}
+	sections := sipParse(elements)
+	for _, c := range sections[0].Content {
+		if strings.Contains(c, "```") {
+			t.Errorf("expected no fence in prose-only section, got %q", c)
+		}
+	}
+	if len(sections[0].Content) != len(elements)-1 {
+		t.Errorf("expected every paragraph kept as prose, got %v", sections[0].Content)
+	}
+}
+
+// TS 29.332 style: SDP lines inside an H.248 Local descriptor. The braces
+// stay prose; the field lines in between fence.
+func TestParseSections_SDPInsideH248Local(t *testing.T) {
+	elements := []bodyElement{
+		sipHeading("1\tAMR and AMR-WB Codecs"),
+		sipPara("ABNF:"),
+		sipPara("Local {"),
+		sipPara("v=0"),
+		sipPara("c=IN IP4 $"),
+		sipPara("m=audio $ RTP/AVP 96"),
+		sipPara("a=rtpmap:96 AMR/8000"),
+		sipPara("}"),
+	}
+	sections := sipParse(elements)
+	content := sections[0].Content
+	if len(content) != 4 {
+		t.Fatalf("expected two prose paragraphs, fence, closing brace, got %v", content)
+	}
+	want := "```\nv=0\nc=IN IP4 $\nm=audio $ RTP/AVP 96\na=rtpmap:96 AMR/8000\n```"
+	if content[2] != want {
+		t.Errorf("expected SDP fence %q, got %q", want, content[2])
+	}
+}
+
+// TS 33.838 style: generic hyphenated headers and parameter continuation
+// lines ("UC-Indicator=true;") stay inside the message.
+func TestParseSections_SIPHyphenatedHeaderContinuation(t *testing.T) {
+	elements := []bodyElement{
+		sipHeading("1\tPUCI information"),
+		sipPara("The UC Score could be incorporated into the SIP header as shown below:"),
+		sipPara("INVITE sip:bob@example.net SIP/2.0"),
+		sipPara("Via: SIP/2.0/UDP sip.example.net;branch=z9hG4bKnashds8;received=192.0.2.1"),
+		sipPara("UC-Score: 75 by sip.example.net;"),
+		sipPara("UC-Indicator=true;"),
+		sipPara("Max-Forwards: 70"),
+		sipPara("To: Bob <sip:bob@example.net>"),
+		sipPara("Content-Length: 142"),
+		sipPara("[... SDP excluded from this example...]"),
+	}
+	sections := sipParse(elements)
+	content := sections[0].Content
+	if len(content) != 3 {
+		t.Fatalf("expected prose, fence, trailing prose, got %v", content)
+	}
+	fence := content[1]
+	for _, line := range []string{"UC-Score: 75", "UC-Indicator=true;", "Content-Length: 142"} {
+		if !strings.Contains(fence, line) {
+			t.Errorf("expected %q inside the fence, got %q", line, fence)
+		}
+	}
+	if strings.Contains(fence, "SDP excluded") {
+		t.Errorf("expected the bracketed omission note to stay prose, got %q", fence)
+	}
+}
+
+// Monospace-styled SIP examples (TS 24.228, TS 24.337, ...) must keep
+// flowing through the style-based code path unchanged.
+func TestParseSections_SIPCodeStyledUnchanged(t *testing.T) {
+	codePara := func(text string) bodyElement {
+		return bodyElement{Tag: "p", Paragraph: paragraphInfo{
+			Text: text, Runs: []runInfo{{Text: text, IsCode: true}}, IsCode: true,
+		}}
+	}
+	elements := []bodyElement{
+		sipHeading("1\tSignalling flows"),
+		codePara("INVITE sip:bob@example.net SIP/2.0"),
+		codePara("Via: SIP/2.0/UDP pc33.example.com"),
+		codePara("v=0"),
+		sipPara("Trailing prose."),
+	}
+	sections := sipParse(elements)
+	content := sections[0].Content
+	if len(content) != 2 {
+		t.Fatalf("expected one fence and one prose paragraph, got %v", content)
+	}
+	want := "```\nINVITE sip:bob@example.net SIP/2.0\nVia: SIP/2.0/UDP pc33.example.com\nv=0\n```"
+	if content[0] != want {
+		t.Errorf("expected the code-styled fence unchanged %q, got %q", want, content[0])
+	}
+}
+
+// A heading or table while capturing flushes the pending block.
+func TestParseSections_SIPFlushedByHeadingAndTable(t *testing.T) {
+	elements := []bodyElement{
+		sipHeading("1\tFirst"),
+		sipPara("INVITE sip:bob@example.net SIP/2.0"),
+		sipPara("Via: SIP/2.0/UDP pc33.example.com"),
+		sipHeading("2\tSecond"),
+		sipPara("SIP/2.0 183 Session Progress"),
+		{Tag: "tbl", Table: tableInfo{Rows: []tableRow{{Cells: []tableCell{{Paras: []paragraphInfo{{Text: "cell", Runs: []runInfo{{Text: "cell"}}}}}}}}}},
+	}
+	sections := sipParse(elements)
+	if len(sections) != 2 {
+		t.Fatalf("expected 2 sections, got %d", len(sections))
+	}
+	if len(sections[0].Content) != 1 || !strings.HasPrefix(sections[0].Content[0], "```\n") {
+		t.Errorf("expected SIP fence flushed by heading in first section, got %v", sections[0].Content)
+	}
+	second := strings.Join(sections[1].Content, "\n")
+	if !strings.Contains(second, "```\nSIP/2.0 183 Session Progress\n```") || !strings.Contains(second, "cell") {
+		t.Errorf("expected SIP fence flushed by table plus table content, got %v", sections[1].Content)
+	}
+	if strings.Index(second, "```") > strings.Index(second, "cell") {
+		t.Errorf("expected fence before table content, got %v", sections[1].Content)
+	}
+}
+
+// A paragraph with an image never joins or continues a block.
+func TestParseSections_SIPImageParagraphEndsBlock(t *testing.T) {
+	elements := []bodyElement{
+		sipHeading("1\tFirst"),
+		sipPara("INVITE sip:bob@example.net SIP/2.0"),
+		{Tag: "p", Paragraph: paragraphInfo{
+			Text: "v=0", Runs: []runInfo{{Text: "v=0"}},
+			Images: []imageRef{{RID: "rId1"}},
+		}},
+	}
+	sections := sipParse(elements)
+	content := sections[0].Content
+	if len(content) == 0 || content[0] != "```\nINVITE sip:bob@example.net SIP/2.0\n```" {
+		t.Errorf("expected the image paragraph to end the fence, got %v", content)
+	}
+	for _, c := range content[1:] {
+		if strings.Contains(c, "```") {
+			t.Errorf("expected no second fence, got %q", c)
+		}
+	}
+}

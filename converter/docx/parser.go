@@ -324,13 +324,40 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 		diameterBuffer = nil
 	}
 
-	for _, elem := range elements {
+	// Accumulates SIP message and standalone SDP examples into one bare
+	// fence. Like the Diameter definitions, these carry no code style or
+	// font in several specs, so capture is content-based: a SIP
+	// request/status line or an SDP field-line run starts it, and the first
+	// paragraph that no longer looks like part of the message ends it (see
+	// sipblock.go).
+	var sipBuffer []string
+	inSIP := false
+	sipSDPOnly := false
+	flushSIP := func() {
+		inSIP = false
+		sipSDPOnly = false
+		if len(sipBuffer) == 0 || currentSection == nil {
+			sipBuffer = nil
+			return
+		}
+		// Trim trailing blank lines, including a soft line break at the end
+		// of the final absorbed paragraph.
+		body := strings.TrimRight(strings.Join(sipBuffer, "\n"), " \t\n")
+		if body != "" {
+			currentSection.Content = append(currentSection.Content,
+				"```\n"+body+"\n```")
+		}
+		sipBuffer = nil
+	}
+
+	for i, elem := range elements {
 		switch elem.Tag {
 		case "tbl":
 			// A table while capturing ASN.1 means a missing ASN1STOP; flush
 			// what was collected rather than swallowing the table.
 			flushASN1()
 			flushDiameter()
+			flushSIP()
 			flushCodeBlock()
 			html := tableToHTML(elem.Table, imageContext{relMap: relMap, images: images})
 			if html != "" && currentSection != nil {
@@ -356,6 +383,7 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 				// flush so headings are never swallowed into a code block.
 				flushASN1()
 				flushDiameter()
+				flushSIP()
 				flushCodeBlock()
 				// Normalize text
 				text := strings.ReplaceAll(info.Text, "\u00a0", " ")
@@ -440,10 +468,30 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 				}
 				if matchASN1Marker(asn1StartRE, info) {
 					flushDiameter()
+					flushSIP()
 					flushCodeBlock()
 					inASN1 = true
 					asn1Buffer = append(asn1Buffer, codeLineText(info))
 					continue
+				}
+				if inSIP {
+					continues := sipBlockContinues(info, sipLastBufferedLine(sipBuffer))
+					if sipSDPOnly {
+						continues = sdpBlockContinues(info, sipLastBufferedLine(sipBuffer))
+					}
+					if continues {
+						if strings.TrimSpace(codeLineText(info)) == "" {
+							// Preserve blank lines inside a pending block;
+							// trailing ones are trimmed at flush.
+							sipBuffer = append(sipBuffer, "")
+						} else {
+							sipBuffer = append(sipBuffer, codeLineText(info))
+						}
+						continue
+					}
+					// First non-matching paragraph ends the block and is
+					// handled normally below.
+					flushSIP()
 				}
 				if inDiameter {
 					switch {
@@ -470,6 +518,26 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 					continue
 				}
 				isCodePara := (info.IsCode || isCodeStyleName(styleName) || codeStyles[info.StyleID]) && len(info.Images) == 0
+				// Content-based SIP/SDP example detection applies only to
+				// paragraphs that no style-based path claims, so specs whose
+				// examples are monospace-styled keep their existing fenced
+				// output unchanged.
+				if !isCodePara && currentSection != nil && len(info.Images) == 0 && info.SkippedDiagramLabels == nil {
+					label, text, ok := sipExampleStart(info)
+					if ok {
+						inSIP = true
+					} else if label, text, ok = sdpExampleStart(elements, i); ok {
+						inSIP, sipSDPOnly = true, true
+					}
+					if ok {
+						flushCodeBlock()
+						if label != "" {
+							currentSection.Content = append(currentSection.Content, label)
+						}
+						sipBuffer = append(sipBuffer, text)
+						continue
+					}
+				}
 				switch {
 				case isCodePara && currentSection != nil:
 					// Append to the pending code block, preserving whitespace.
@@ -501,6 +569,7 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 
 	flushASN1()
 	flushDiameter()
+	flushSIP()
 	flushCodeBlock()
 
 	return sections
