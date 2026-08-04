@@ -28,6 +28,19 @@ var (
 	// convention) never matches.
 	asn1StartRE = regexp.MustCompile(`^--\s*(?:/[^/]*/\s*)?ASN1START\b`)
 	asn1StopRE  = regexp.MustCompile(`^--\s*(?:/[^/]*/\s*)?ASN1STOP\b`)
+
+	// Diameter Command Code Format (RFC 6733 clause 3.2) definition header:
+	//   < Update-Location-Request> ::=	< Diameter Header: 316, REQ, PXY, 16777251 >
+	//   Subscription-Data ::= <AVP header: 1400 10415>
+	//   MIP6-Agent-Info ::=< AVP Header: 486 >
+	// Case and spacing vary between specs. Requiring "< Diameter|AVP Header:"
+	// after "::=" keeps ASN.1 value assignments and prose that merely contains
+	// "::=" from matching.
+	diameterDefRE = regexp.MustCompile(`(?i)::=\s*<\s*(?:diameter|avp)\s+header\s*:`)
+	// One AVP reference line of a definition: an optional multiplicity
+	// qualifier (RFC 6733 qual: [min] "*" [max]) followed by exactly one
+	// fixed < >, mandatory { } or optional [ ] AVP reference.
+	diameterAVPLineRE = regexp.MustCompile(`^[ \t]*(?:\d+\*\d*|\*\d*|\d+)?[ \t]*(?:<[^<>]+>|\{[^{}]+\}|\[[^\][]+\])[ \t]*$`)
 )
 
 // matchASN1Marker reports whether the paragraph is an ASN.1 extraction marker.
@@ -36,6 +49,23 @@ var (
 func matchASN1Marker(re *regexp.Regexp, info paragraphInfo) bool {
 	text := strings.ReplaceAll(codeLineText(info), "\u00a0", " ")
 	return re.MatchString(strings.TrimSpace(text))
+}
+
+// matchDiameterStart reports whether the paragraph is a Diameter command or
+// grouped-AVP definition header. Diameter specs style these as plain body
+// paragraphs (no code font or style), so detection is content-based like the
+// ASN.1 markers. NBSP is normalized for the same reason as matchASN1Marker.
+func matchDiameterStart(info paragraphInfo) bool {
+	text := strings.ReplaceAll(codeLineText(info), "\u00a0", " ")
+	return diameterDefRE.MatchString(text)
+}
+
+// matchDiameterLine reports whether the paragraph continues a Diameter
+// definition: an AVP reference line, or another definition header (so that
+// consecutive grouped-AVP definitions in one clause merge into one block).
+func matchDiameterLine(info paragraphInfo) bool {
+	text := strings.ReplaceAll(codeLineText(info), "\u00a0", " ")
+	return diameterAVPLineRE.MatchString(text) || diameterDefRE.MatchString(text)
 }
 
 // bodyElement represents a top-level element in the document body.
@@ -271,12 +301,36 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 		asn1Buffer = nil
 	}
 
+	// Accumulates Diameter command/grouped-AVP definitions into one
+	// ```diameter fence. Their paragraphs carry no code style or font in the
+	// source documents, so capture is triggered by content: a definition
+	// header starts it, AVP reference lines continue it, and the first
+	// paragraph that is neither ends it (see matchDiameterStart/Line).
+	var diameterBuffer []string
+	inDiameter := false
+	flushDiameter := func() {
+		inDiameter = false
+		if len(diameterBuffer) == 0 || currentSection == nil {
+			diameterBuffer = nil
+			return
+		}
+		for len(diameterBuffer) > 0 && strings.TrimSpace(diameterBuffer[len(diameterBuffer)-1]) == "" {
+			diameterBuffer = diameterBuffer[:len(diameterBuffer)-1]
+		}
+		if len(diameterBuffer) > 0 {
+			currentSection.Content = append(currentSection.Content,
+				"```diameter\n"+strings.Join(diameterBuffer, "\n")+"\n```")
+		}
+		diameterBuffer = nil
+	}
+
 	for _, elem := range elements {
 		switch elem.Tag {
 		case "tbl":
 			// A table while capturing ASN.1 means a missing ASN1STOP; flush
 			// what was collected rather than swallowing the table.
 			flushASN1()
+			flushDiameter()
 			flushCodeBlock()
 			html := tableToHTML(elem.Table, imageContext{relMap: relMap, images: images})
 			if html != "" && currentSection != nil {
@@ -301,6 +355,7 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 				// A heading while capturing ASN.1 means a missing ASN1STOP;
 				// flush so headings are never swallowed into a code block.
 				flushASN1()
+				flushDiameter()
 				flushCodeBlock()
 				// Normalize text
 				text := strings.ReplaceAll(info.Text, "\u00a0", " ")
@@ -384,9 +439,34 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 					continue
 				}
 				if matchASN1Marker(asn1StartRE, info) {
+					flushDiameter()
 					flushCodeBlock()
 					inASN1 = true
 					asn1Buffer = append(asn1Buffer, codeLineText(info))
+					continue
+				}
+				if inDiameter {
+					switch {
+					case info.Text == "" && len(info.Images) == 0:
+						// Preserve blank lines inside a pending block;
+						// trailing ones are trimmed at flush.
+						diameterBuffer = append(diameterBuffer, "")
+						continue
+					case matchDiameterLine(info) && len(info.Images) == 0:
+						diameterBuffer = append(diameterBuffer, codeLineText(info))
+						continue
+					default:
+						// First non-matching paragraph ends the block and is
+						// handled normally below.
+						flushDiameter()
+					}
+				}
+				if matchDiameterStart(info) && len(info.Images) == 0 && currentSection != nil {
+					// Before the isCodePara path so a code-styled definition
+					// starts a tagged fence instead of a bare one.
+					flushCodeBlock()
+					inDiameter = true
+					diameterBuffer = append(diameterBuffer, codeLineText(info))
 					continue
 				}
 				isCodePara := (info.IsCode || isCodeStyleName(styleName) || codeStyles[info.StyleID]) && len(info.Images) == 0
@@ -420,6 +500,7 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 	}
 
 	flushASN1()
+	flushDiameter()
 	flushCodeBlock()
 
 	return sections
