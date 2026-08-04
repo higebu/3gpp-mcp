@@ -133,6 +133,14 @@ func DownloadAndExtract(ctx context.Context, client *http.Client, spec *SpecVers
 					}
 				}
 			}
+			// The archive listed .docx entries but none of them could be
+			// written out (disk full, permission denied, corrupt member),
+			// leaving callers with nothing to parse. A partial extraction
+			// still counts as OK; an empty one must not.
+			if len(result.DocxFiles) == 0 {
+				result.Status = "FAILED"
+				return result, fmt.Errorf("extracted none of the %d .docx file(s) in the archive", len(docxFiles))
+			}
 			result.Status = "OK"
 			return result, nil
 		}
