@@ -394,6 +394,33 @@ func TestParseSections_SIPHyphenatedHeaderContinuation(t *testing.T) {
 	}
 }
 
+// TS 26.234 11.3.3 style: a continuation paragraph whose header value wraps
+// onto a soft-break line that matches no line rule on its own. Blocks are
+// absorbed at paragraph granularity — only the first line decides — so the
+// wrapped value stays inside the message instead of ending the block; prose
+// in these specs lives in its own paragraphs, never after a soft break in a
+// message paragraph.
+func TestParseSections_SIPWrappedHeaderContinuation(t *testing.T) {
+	elements := []bodyElement{
+		sipHeading("1\tMetrics initiation with RTSP"),
+		sipPara("SETUP rtsp://example.com/foo/bar/baz.3gp/trackID=3 RTSP/1.0"),
+		sipPara("Cseq: 2"),
+		sipPara("3GPP-QoE-Metrics:url=\"rtsp://example.com/foo/bar/baz.3gp/trackID=3\"; metrics={Corruption_Duration };rate=10, url=\"rtsp://example.com/foo/bar/baz.3gp\";\nmetrics={Initial_Buffering_Duration|Rebuffering_Duration };rate=End"),
+		sipPara("In the above SETUP request, the client modifies the sending rate."),
+	}
+	sections := sipParse(elements)
+	content := sections[0].Content
+	if len(content) != 2 {
+		t.Fatalf("expected fence and trailing prose, got %v", content)
+	}
+	if !strings.Contains(content[0], "\nmetrics={Initial_Buffering_Duration|Rebuffering_Duration };rate=End\n") {
+		t.Errorf("expected the wrapped header value inside the fence, got %q", content[0])
+	}
+	if !strings.HasPrefix(content[1], "In the above SETUP request") {
+		t.Errorf("expected trailing prose after the fence, got %q", content[1])
+	}
+}
+
 // Monospace-styled SIP examples (TS 24.228, TS 24.337, ...) must keep
 // flowing through the style-based code path unchanged.
 func TestParseSections_SIPCodeStyledUnchanged(t *testing.T) {
