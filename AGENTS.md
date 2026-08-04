@@ -193,6 +193,13 @@ Eleven tools are exposed via MCP:
 
 When running with `--transport http --web`, a browser-based UI is served alongside the MCP endpoint. It supports spec browsing, section viewing, full-text search (paginated, with total counts), and OpenAPI rendering. Accessible via `make web` (default: `http://localhost:8080`).
 
+Code fences are highlighted with Chroma. Token colors live in
+`web/static/style.css` as light/dark pairs selected by `data-code-theme` on
+`<html>` — Catppuccin (Latte/Mocha, default), GitHub, Monokai and
+Xcode/Dracula — switchable from the settings popover (gear icon) in the
+navbar and persisted in `localStorage`; the pair follows the site's
+light/dark theme, so no server state is involved.
+
 The viewer reads through the same `tools.Source` as the MCP tools, so it is version-aware: `?version=` on spec, section and image URLs serves past versions (downloading them on demand — a fetch that outlives the budget answers 202 with an auto-refreshing page), `/specs/{id}/versions` lists every version with its availability (database/cached/archive), and `/specs/{id}/compare` renders the `compare_versions` structural summary and per-section unified diffs. Archived pages degrade gracefully: cross-references, OpenAPI links and the bracketed-reference map are database-version-only and are omitted.
 
 ## Coding Standards

@@ -13,6 +13,45 @@
         });
     }
 
+    // Settings popover: code highlighting theme. The choice sets
+    // data-code-theme on <html> (selecting a light/dark CSS pair in
+    // style.css) and persists in localStorage; the inline script in
+    // layout.html applies it before first paint on later page loads.
+    const settingsToggle = document.getElementById('settings-toggle');
+    const settingsPopover = document.getElementById('settings-popover');
+
+    if (settingsToggle && settingsPopover) {
+        const setOpen = function (open) {
+            settingsPopover.hidden = !open;
+            settingsToggle.setAttribute('aria-expanded', String(open));
+        };
+        settingsToggle.addEventListener('click', function () {
+            setOpen(settingsPopover.hidden);
+        });
+        document.addEventListener('click', function (e) {
+            if (!settingsPopover.hidden && !settingsPopover.contains(e.target) && e.target !== settingsToggle) {
+                setOpen(false);
+            }
+        });
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && !settingsPopover.hidden) {
+                setOpen(false);
+                settingsToggle.focus();
+            }
+        });
+
+        const current = html.dataset.codeTheme || 'catppuccin';
+        settingsPopover.querySelectorAll('input[name="code-theme"]').forEach(function (radio) {
+            radio.checked = radio.value === current;
+            radio.addEventListener('change', function () {
+                if (radio.checked) {
+                    html.dataset.codeTheme = radio.value;
+                    localStorage.setItem('codeTheme', radio.value);
+                }
+            });
+        });
+    }
+
     // TOC toggle for mobile
     const tocToggle = document.getElementById('toc-toggle');
     const tocSidebar = document.getElementById('toc-sidebar');

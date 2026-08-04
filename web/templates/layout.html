@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="light" data-code-theme="catppuccin">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -16,6 +16,13 @@
                 theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
             }
             document.documentElement.dataset.theme = theme;
+            // Code highlighting theme (see the settings popover): each value
+            // selects a light/dark pair in style.css keyed off data-theme.
+            var code;
+            try { code = localStorage.getItem('codeTheme'); } catch (e) { }
+            if (['catppuccin', 'github', 'monokai', 'xcode-dracula'].indexOf(code) >= 0) {
+                document.documentElement.dataset.codeTheme = code;
+            }
         })();
     </script>
     <link rel="stylesheet" href="/static/katex/katex.min.css">
@@ -36,6 +43,17 @@
                     <span class="theme-icon-light">&#9788;</span>
                     <span class="theme-icon-dark">&#9789;</span>
                 </button>
+                <div class="settings-menu">
+                    <button id="settings-toggle" class="settings-toggle" aria-label="Settings"
+                        aria-haspopup="true" aria-expanded="false" aria-controls="settings-popover">&#9881;</button>
+                    <div id="settings-popover" class="settings-popover" hidden>
+                        <h3>Code highlighting</h3>
+                        <label><input type="radio" name="code-theme" value="catppuccin"> Catppuccin</label>
+                        <label><input type="radio" name="code-theme" value="github"> GitHub</label>
+                        <label><input type="radio" name="code-theme" value="monokai"> Monokai</label>
+                        <label><input type="radio" name="code-theme" value="xcode-dracula"> Xcode / Dracula</label>
+                    </div>
+                </div>
             </nav>
         </div>
     </header>
