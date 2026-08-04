@@ -2,6 +2,7 @@ package docx
 
 import (
 	"encoding/xml"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -638,6 +639,48 @@ func TestScanDrawingSubtree_DepthCap(t *testing.T) {
 	_, _, _, _ = scanDrawingSubtree(d, start)
 	if _, err := d.Token(); err == nil {
 		t.Error("expected the decoder to be fully consumed")
+	}
+}
+
+// TestScanDrawingSubtree_DepthCapAcrossTextBoxes verifies that the depth cap
+// also holds across the indirect recursion cycle
+// scanDrawingSubtreeDepth -> txbxContent -> scanTextBoxLabels ->
+// parseParagraphFromDecoderDepth -> scanDrawingSubtreeDepth. Before the fix
+// the paragraph parser restarted the counter at 0 on every lap, so nesting
+// drawings inside text boxes inside drawings recursed without bound: every one
+// of the labels below was collected, and a document with enough laps could
+// exhaust the goroutine stack.
+func TestScanDrawingSubtree_DepthCapAcrossTextBoxes(t *testing.T) {
+	// Every lap is a group that also holds a raster image, so its text-box
+	// labels are folded into the enclosing paragraph's own text; that makes the
+	// innermost label observable at the top level exactly when the parser
+	// descended all the way down.
+	laps := maxDrawingDepth * 3
+	var sb strings.Builder
+	sb.WriteString(`<w:p ` + wXMLNS + `><w:r><w:pict>`)
+	for i := range laps {
+		fmt.Fprintf(&sb, `<group><shape><imagedata r:id="rId%d"/></shape>`, i)
+		fmt.Fprintf(&sb, `<shape><textbox><txbxContent><w:p><w:r><w:t>lap%d </w:t></w:r><w:pict>`, i)
+	}
+	sb.WriteString(`<w:r><w:t>DEEPEST</w:t></w:r>`)
+	for range laps {
+		sb.WriteString(`</w:pict></w:p></txbxContent></textbox></shape></group>`)
+	}
+	sb.WriteString(`</w:pict></w:r></w:p>`)
+
+	info := parseParagraph([]byte(sb.String()))
+
+	// The outermost laps are still parsed normally...
+	if !strings.Contains(info.Text, "lap0 ") {
+		t.Errorf("expected the outermost text-box label in Text, got %q", info.Text)
+	}
+	// ...but the cap must stop the descent well before the bottom, otherwise
+	// the recursion is unbounded and a deeper document exhausts the stack.
+	if strings.Contains(info.Text, "DEEPEST") {
+		t.Error("depth cap not enforced across the txbxContent cycle: the parser recursed through all nesting levels")
+	}
+	if n := strings.Count(info.Text, "lap"); n > maxDrawingDepth {
+		t.Errorf("descended %d laps, want at most %d", n, maxDrawingDepth)
 	}
 }
 

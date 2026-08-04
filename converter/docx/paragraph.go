@@ -61,7 +61,19 @@ func parseParagraph(data []byte) paragraphInfo {
 
 // parseParagraphFromDecoder parses a w:p element from an existing decoder.
 // The start element has already been consumed; this reads through the matching end element.
-func parseParagraphFromDecoder(d *xml.Decoder, _ xml.StartElement) paragraphInfo {
+func parseParagraphFromDecoder(d *xml.Decoder, start xml.StartElement) paragraphInfo {
+	return parseParagraphFromDecoderDepth(d, start, 0)
+}
+
+// parseParagraphFromDecoderDepth is parseParagraphFromDecoder with the drawing
+// recursion depth threaded through. A paragraph can be reached from inside a
+// drawing (a w:txbxContent text box label), and that paragraph can contain
+// another drawing, so drawDepth must be carried across the whole
+// scanDrawingSubtreeDepth -> scanTextBoxLabels -> parseParagraphFromDecoderDepth
+// cycle; otherwise the counter restarts at 0 on every lap and maxDrawingDepth
+// bounds nothing. The depth travels on the stack rather than in package state so
+// the parser stays safe for concurrent use.
+func parseParagraphFromDecoderDepth(d *xml.Decoder, _ xml.StartElement, drawDepth int) paragraphInfo {
 	var info paragraphInfo
 	var inPPr, inPPrRPr, inRPr, inR, inT bool
 	var paragraphCodeFont bool
@@ -105,7 +117,7 @@ func parseParagraphFromDecoder(d *xml.Decoder, _ xml.StartElement) paragraphInfo
 			// (see issue #25). scanDrawingSubtree consumes the whole subtree
 			// itself, so rebalance depth afterwards like the OMML case above.
 			if local == "group" || local == "AlternateContent" {
-				imgs, labels, hasGroup, hasRaster := scanDrawingSubtree(d, t)
+				imgs, labels, hasGroup, hasRaster := scanDrawingSubtreeDepth(d, t, drawDepth)
 				depth--
 				if local == "group" {
 					hasGroup = true
@@ -337,12 +349,14 @@ func scanDrawingSubtree(d *xml.Decoder, start xml.StartElement) (imgs []imageRef
 	return scanDrawingSubtreeDepth(d, start, 0)
 }
 
-// maxDrawingDepth bounds scanDrawingSubtree's recursion. Real diagrams nest a
+// maxDrawingDepth bounds scanDrawingSubtree's recursion, both the direct
+// shape-in-shape nesting and the indirect route back through a text box's
+// paragraphs (see parseParagraphFromDecoderDepth). Real diagrams nest a
 // handful of levels; anything deeper is corrupt or hostile input that would
 // otherwise exhaust the stack.
 const maxDrawingDepth = 100
 
-func scanDrawingSubtreeDepth(d *xml.Decoder, _ xml.StartElement, depth int) (imgs []imageRef, labels []string, hasGroup, hasRaster bool) {
+func scanDrawingSubtreeDepth(d *xml.Decoder, _ xml.StartElement, drawDepth int) (imgs []imageRef, labels []string, hasGroup, hasRaster bool) {
 	for {
 		tok, err := d.Token()
 		if err != nil {
@@ -376,16 +390,24 @@ func scanDrawingSubtreeDepth(d *xml.Decoder, _ xml.StartElement, depth int) (img
 				}
 				_ = d.Skip()
 			case "txbxContent":
-				labels = append(labels, scanTextBoxLabels(d)...)
+				// A text box's paragraphs can contain drawings of their own,
+				// which re-enter this function through scanTextBoxLabels; the
+				// depth has to be spent here too, or that cycle escapes the
+				// bound entirely.
+				if drawDepth >= maxDrawingDepth {
+					_ = d.Skip()
+					continue
+				}
+				labels = append(labels, scanTextBoxLabels(d, drawDepth+1)...)
 			default:
 				if t.Name.Local == "group" {
 					hasGroup = true
 				}
-				if depth >= maxDrawingDepth {
+				if drawDepth >= maxDrawingDepth {
 					_ = d.Skip()
 					continue
 				}
-				subImgs, subLabels, subHasGroup, subHasRaster := scanDrawingSubtreeDepth(d, t, depth+1)
+				subImgs, subLabels, subHasGroup, subHasRaster := scanDrawingSubtreeDepth(d, t, drawDepth+1)
 				imgs = append(imgs, subImgs...)
 				labels = append(labels, subLabels...)
 				hasGroup = hasGroup || subHasGroup
@@ -399,8 +421,10 @@ func scanDrawingSubtreeDepth(d *xml.Decoder, _ xml.StartElement, depth int) (img
 
 // scanTextBoxLabels consumes a w:txbxContent element (the start element has
 // already been consumed by the caller) and returns the trimmed text of each
-// paragraph inside it, in document order.
-func scanTextBoxLabels(d *xml.Decoder) []string {
+// paragraph inside it, in document order. drawDepth is the enclosing drawing's
+// recursion depth, passed on to the paragraphs so a drawing nested inside a
+// text box keeps counting against maxDrawingDepth.
+func scanTextBoxLabels(d *xml.Decoder, drawDepth int) []string {
 	var labels []string
 	for {
 		tok, err := d.Token()
@@ -410,7 +434,7 @@ func scanTextBoxLabels(d *xml.Decoder) []string {
 		switch t := tok.(type) {
 		case xml.StartElement:
 			if t.Name.Local == "p" {
-				pInfo := parseParagraphFromDecoder(d, t)
+				pInfo := parseParagraphFromDecoderDepth(d, t, drawDepth)
 				if text := strings.TrimSpace(pInfo.Text); text != "" {
 					labels = append(labels, text)
 				}
