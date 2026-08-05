@@ -81,6 +81,23 @@ func parseParagraphFromDecoderDepth(d *xml.Decoder, _ xml.StartElement, drawDept
 	var runTexts []string
 	var pendingWidthPx, pendingHeightPx int
 
+	// flushRunText moves the text accumulated so far in the current run into
+	// info.Runs, so that an inline image (or other non-text run entry) found
+	// mid-run lands after the text that precedes it instead of before it
+	// (issue #100). The run keeps its formatting for any text that follows
+	// the image within the same w:r.
+	flushRunText := func() {
+		if !inR {
+			return
+		}
+		if text := strings.Join(runTexts, ""); text != "" {
+			r := currentRun
+			r.Text = text
+			info.Runs = append(info.Runs, r)
+		}
+		runTexts = nil
+	}
+
 	depth := 1
 	for depth > 0 {
 		tok, err := d.Token()
@@ -104,6 +121,7 @@ func parseParagraphFromDecoderDepth(d *xml.Decoder, _ xml.StartElement, drawDept
 					if local == "oMathPara" {
 						delim = "$$"
 					}
+					flushRunText()
 					info.Runs = append(info.Runs, runInfo{Text: delim + latex + delim})
 				}
 				continue
@@ -122,6 +140,7 @@ func parseParagraphFromDecoderDepth(d *xml.Decoder, _ xml.StartElement, drawDept
 				if local == "group" {
 					hasGroup = true
 				}
+				flushRunText()
 				info.Images = append(info.Images, imgs...)
 				for i := range imgs {
 					info.Runs = append(info.Runs, runInfo{Image: &imgs[i]})
@@ -244,6 +263,7 @@ func parseParagraphFromDecoderDepth(d *xml.Decoder, _ xml.StartElement, drawDept
 						WidthPx:  pendingWidthPx,
 						HeightPx: pendingHeightPx,
 					}
+					flushRunText()
 					info.Images = append(info.Images, ref)
 					info.Runs = append(info.Runs, runInfo{Image: &ref})
 					pendingWidthPx, pendingHeightPx = 0, 0
@@ -260,6 +280,7 @@ func parseParagraphFromDecoderDepth(d *xml.Decoder, _ xml.StartElement, drawDept
 						WidthPx:  pendingWidthPx,
 						HeightPx: pendingHeightPx,
 					}
+					flushRunText()
 					info.Images = append(info.Images, ref)
 					info.Runs = append(info.Runs, runInfo{Image: &ref})
 					pendingWidthPx, pendingHeightPx = 0, 0
