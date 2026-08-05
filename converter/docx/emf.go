@@ -150,6 +150,23 @@ const (
 // with SIGABRT in EMFPPlusDrawPolygon → B2DPolygon::count(). Since EMF files
 // are dual-format, the legacy EMR records render identically for these
 // diagrams. Microsoft Word handles this gracefully by falling back to EMR.
+// emrRecordEnd returns the end offset of the EMR record that starts at offset
+// and reports whether the record is well-formed and fits inside a buffer of n
+// bytes. recSize comes straight out of the file, so the arithmetic runs in
+// uint64: on a 32-bit build "offset + int(recSize)" wraps to a negative int
+// for a large recSize, slips past a plain "> n" comparison and panics the
+// slice expression that follows.
+func emrRecordEnd(offset int, recSize uint32, n int) (int, bool) {
+	if recSize < emrMinSize {
+		return 0, false
+	}
+	end := uint64(offset) + uint64(recSize)
+	if end > uint64(n) {
+		return 0, false
+	}
+	return int(end), true
+}
+
 func stripEMFPlus(data []byte) []byte {
 	if len(data) < emfHeaderMinSize {
 		return data
@@ -167,7 +184,8 @@ func stripEMFPlus(data []byte) []byte {
 	for offset+emrMinSize <= len(data) {
 		recType := binary.LittleEndian.Uint32(data[offset : offset+4])
 		recSize := binary.LittleEndian.Uint32(data[offset+4 : offset+8])
-		if recSize < emrMinSize || offset+int(recSize) > len(data) {
+		end, ok := emrRecordEnd(offset, recSize, len(data))
+		if !ok {
 			break
 		}
 
@@ -182,10 +200,10 @@ func stripEMFPlus(data []byte) []byte {
 		}
 
 		if !isEMFPlus {
-			out = append(out, data[offset:offset+int(recSize)]...)
+			out = append(out, data[offset:end]...)
 			nRecords++
 		}
-		offset += int(recSize)
+		offset = end
 	}
 
 	if !hasEMFPlus {

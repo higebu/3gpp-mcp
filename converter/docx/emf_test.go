@@ -388,3 +388,48 @@ func TestRunSofficeBatch_Timeout(t *testing.T) {
 		t.Errorf("expected timeout error, got: %v", err)
 	}
 }
+
+func TestEMRRecordEnd(t *testing.T) {
+	tests := []struct {
+		name    string
+		offset  int
+		recSize uint32
+		n       int
+		wantEnd int
+		wantOK  bool
+	}{
+		{"header record", 0, 8, 100, 8, true},
+		{"record fills the buffer", 84, 16, 100, 100, true},
+		{"below the minimum record size", 0, 7, 100, 0, false},
+		{"record longer than the buffer", 0, 200, 100, 0, false},
+		{"record straddles the end", 92, 16, 100, 0, false},
+		// A record size near 2^32 wraps to a negative int on a 32-bit build,
+		// which used to slip past the bounds check and panic the slice
+		// expression in stripEMFPlus.
+		{"size wraps a 32-bit int", 0, 0xFFFFFFF0, 100, 0, false},
+		{"max size at a nonzero offset", 64, 0xFFFFFFFF, 100, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			end, ok := emrRecordEnd(tt.offset, tt.recSize, tt.n)
+			if end != tt.wantEnd || ok != tt.wantOK {
+				t.Errorf("emrRecordEnd(%d, %d, %d) = (%d, %v), want (%d, %v)",
+					tt.offset, tt.recSize, tt.n, end, ok, tt.wantEnd, tt.wantOK)
+			}
+		})
+	}
+}
+
+// A malformed record size must stop the scan, not panic. On a 32-bit build
+// (goreleaser ships 386 binaries) the oversized size wrapped negative and
+// panicked the slice expression.
+func TestStripEMFPlus_OversizedRecordSize(t *testing.T) {
+	data := make([]byte, 64)
+	binary.LittleEndian.PutUint32(data[0:4], 0x01) // EMR_HEADER
+	binary.LittleEndian.PutUint32(data[4:8], 0xFFFFFFF0)
+
+	out := stripEMFPlus(data)
+	if len(out) != len(data) {
+		t.Errorf("len(out) = %d, want %d (input returned unchanged)", len(out), len(data))
+	}
+}
