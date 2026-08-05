@@ -187,6 +187,10 @@ func TestArchivedReadAfterEviction(t *testing.T) {
 	if _, _, err := src.GetSection(context.Background(), "TS 23.501", "19.5.0", "5.1", false); err != nil {
 		t.Fatalf("prime cache: %v", err)
 	}
+	// While cached, the whole-version reads serve the content.
+	if sections, res, err := src.AllSections(context.Background(), "TS 23.501", "19.5.0"); err != nil || !res.Archived || len(sections) != 1 {
+		t.Fatalf("AllSections while cached = %d sections, %+v, %v; want one archived section", len(sections), res, err)
+	}
 
 	// Fetching another version pushes 19.5.0 out of the zero-byte cache.
 	if _, _, err := src.GetSection(context.Background(), "TS 23.501", "20.2.0", "5.1", false); err != nil {
@@ -196,10 +200,11 @@ func TestArchivedReadAfterEviction(t *testing.T) {
 		t.Fatalf("expected 19.5.0 to be evicted (cached=%v, err=%v)", cached, err)
 	}
 
-	// This is what the raced read sees: no rows, no error.
+	// This is what raced whole-version and per-number reads see: no rows,
+	// no error. Both must report a retryable in-progress fetch.
 	res := Resolution{Version: "19.5.0", Archived: true}
 	sections, err := src.archivedSections("TS 23.501", res, func() ([]db.Section, error) {
-		return store.GetSection("TS 23.501", "19.5.0", "5.1", false)
+		return store.AllSections("TS 23.501", "19.5.0")
 	})
 	if len(sections) != 0 {
 		t.Fatalf("read of an evicted version returned %d sections, want none", len(sections))
@@ -211,14 +216,20 @@ func TestArchivedReadAfterEviction(t *testing.T) {
 	if inProgress.Images {
 		t.Error("the error must name the version's text, not its images")
 	}
+
+	if _, err := src.archivedSection("TS 23.501", res, "5.1", false, func() ([]db.Section, error) {
+		return store.GetSection("TS 23.501", "19.5.0", "5.1", false)
+	}); !errors.As(err, &inProgress) {
+		t.Fatalf("archivedSection after eviction = %v, want a FetchInProgressError", err)
+	}
 }
 
-// TestArchivedSectionsRereadsAfterFreshFetch pins the recheck down against the
-// inverse race: the version is evicted (yielding the stale empty read) and a
-// fresh fetch completes before the cache re-check, so the entry is present
-// again. The stale empty result must not be accepted — the read runs once
-// more and returns the fresh content.
-func TestArchivedSectionsRereadsAfterFreshFetch(t *testing.T) {
+// TestArchivedSectionStaleReadRecovers pins the eviction-and-restore race: the
+// per-number read returns a stale empty result because an eviction hit it, but
+// a fetch restored the version before the TOC snapshot. The snapshot proves
+// the section exists, so the read runs again and returns the content instead
+// of a definitive not-found.
+func TestArchivedSectionStaleReadRecovers(t *testing.T) {
 	d := setupTestDB(t)
 	src := sourceWithStore(t, d, cannedFetcher)
 	if _, _, err := src.GetSection(context.Background(), "TS 23.501", "19.5.0", "5.1", false); err != nil {
@@ -226,29 +237,30 @@ func TestArchivedSectionsRereadsAfterFreshFetch(t *testing.T) {
 	}
 
 	res := Resolution{Version: "19.5.0", Archived: true}
-	fresh := []db.Section{{SpecID: "TS 23.501", Version: "19.5.0", Number: "5.1", Content: "refetched"}}
 	reads := 0
-	sections, err := src.archivedSections("TS 23.501", res, func() ([]db.Section, error) {
+	sections, err := src.archivedSection("TS 23.501", res, "5.1", false, func() ([]db.Section, error) {
 		reads++
 		if reads == 1 {
-			// The eviction hit between resolve and this read; the re-fetch
-			// completed before the entry re-check.
+			// The eviction hit this read; the restoring fetch completed
+			// before the snapshot below.
 			return nil, nil
 		}
-		return fresh, nil
+		return src.Store.GetSection("TS 23.501", "19.5.0", "5.1", false)
 	})
 	if err != nil {
-		t.Fatalf("archivedSections: %v", err)
+		t.Fatalf("archivedSection: %v", err)
 	}
-	if reads != 2 || len(sections) != 1 || sections[0].Content != "refetched" {
-		t.Fatalf("got %d reads, sections %+v; want the second read's content", reads, sections)
+	if reads != 2 || len(sections) != 1 || !strings.Contains(sections[0].Content, "Archived text") {
+		t.Fatalf("got %d reads, sections %+v; want the restored content", reads, sections)
 	}
 }
 
-// TestArchivedSectionsEmptyStaysEmpty checks that a version the cache holds
-// but that genuinely lacks the requested sections still reads as empty with
-// no error, so callers keep answering a definitive not-found.
-func TestArchivedSectionsEmptyStaysEmpty(t *testing.T) {
+// TestArchivedSectionRacedTwiceStaysRetryable pins the exhaustion behavior:
+// when evictions and restores race BOTH reads (each returns a stale empty
+// result while the TOC snapshot shows the section exists), the caller gets a
+// retryable fetch-in-progress error — existing content must never be reported
+// as definitively missing.
+func TestArchivedSectionRacedTwiceStaysRetryable(t *testing.T) {
 	d := setupTestDB(t)
 	src := sourceWithStore(t, d, cannedFetcher)
 	if _, _, err := src.GetSection(context.Background(), "TS 23.501", "19.5.0", "5.1", false); err != nil {
@@ -256,42 +268,51 @@ func TestArchivedSectionsEmptyStaysEmpty(t *testing.T) {
 	}
 
 	res := Resolution{Version: "19.5.0", Archived: true}
-	sections, err := src.archivedSections("TS 23.501", res, func() ([]db.Section, error) {
+	// Both reads race an eviction window; the version itself is restored each
+	// time, so the TOC snapshot holds section 5.1 throughout. Also exercises
+	// the subsection match: the read asks for parent section 5 with
+	// subsections, which only 5.1 satisfies.
+	reads := 0
+	sections, err := src.archivedSection("TS 23.501", res, "5", true, func() ([]db.Section, error) {
+		reads++
+		return nil, nil
+	})
+	if reads != 2 || len(sections) != 0 {
+		t.Fatalf("got %d reads, %d sections; want two raced empty reads", reads, len(sections))
+	}
+	var inProgress *FetchInProgressError
+	if !errors.As(err, &inProgress) {
+		t.Fatalf("archivedSection raced twice = %v, want a FetchInProgressError", err)
+	}
+}
+
+// TestArchivedSectionEmptyStaysEmpty checks that a section the cached version
+// genuinely lacks still reads as empty with no error — the TOC snapshot names
+// every section the version has, so callers keep answering a definitive
+// not-found — and that read failures propagate from both helpers.
+func TestArchivedSectionEmptyStaysEmpty(t *testing.T) {
+	d := setupTestDB(t)
+	src := sourceWithStore(t, d, cannedFetcher)
+	if _, _, err := src.GetSection(context.Background(), "TS 23.501", "19.5.0", "5.1", false); err != nil {
+		t.Fatalf("prime cache: %v", err)
+	}
+
+	res := Resolution{Version: "19.5.0", Archived: true}
+	sections, err := src.archivedSection("TS 23.501", res, "99", false, func() ([]db.Section, error) {
 		return src.Store.GetSection("TS 23.501", "19.5.0", "99", false)
 	})
 	if err != nil || len(sections) != 0 {
-		t.Fatalf("archivedSections = %+v, %v; want empty with no error", sections, err)
+		t.Fatalf("archivedSection = %+v, %v; want empty with no error", sections, err)
 	}
 
-	// A read failure propagates as-is.
+	// A read failure propagates as-is from both helpers.
 	readErr := errors.New("cache read blew up")
-	if _, err := src.archivedSections("TS 23.501", res, func() ([]db.Section, error) {
-		return nil, readErr
-	}); !errors.Is(err, readErr) {
+	failing := func() ([]db.Section, error) { return nil, readErr }
+	if _, err := src.archivedSections("TS 23.501", res, failing); !errors.Is(err, readErr) {
 		t.Fatalf("archivedSections with failing read = %v, want %v", err, readErr)
 	}
-}
-
-// TestArchivedSectionsCacheCheckError checks that a failure of the cache
-// re-check itself surfaces instead of being swallowed into a not-found.
-func TestArchivedSectionsCacheCheckError(t *testing.T) {
-	d := setupTestDB(t)
-	src := sourceWithStore(t, d, cannedFetcher)
-	// Closing the store makes Store.Has fail on the next call.
-	if err := src.Store.Close(); err != nil {
-		t.Fatalf("close store: %v", err)
-	}
-
-	res := Resolution{Version: "19.5.0", Archived: true}
-	_, err := src.archivedSections("TS 23.501", res, func() ([]db.Section, error) {
-		return nil, nil
-	})
-	if err == nil {
-		t.Fatal("expected the cache check failure to surface")
-	}
-	var inProgress *FetchInProgressError
-	if errors.As(err, &inProgress) {
-		t.Fatalf("a cache check failure must not read as a fetch in progress: %v", err)
+	if _, err := src.archivedSection("TS 23.501", res, "5.1", false, failing); !errors.Is(err, readErr) {
+		t.Fatalf("archivedSection with failing read = %v, want %v", err, readErr)
 	}
 }
 
