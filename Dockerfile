@@ -20,11 +20,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=go-builder /3gpp-mcp /3gpp-mcp
 RUN if [ "${RELEASE}" = "latest" ] || [ -z "${RELEASE}" ]; then \
-        SELECT="--latest"; \
+        set -- --latest; \
     else \
-        SELECT="--release ${RELEASE}"; \
+        set -- --release "${RELEASE}"; \
     fi \
-    && /3gpp-mcp build ${SELECT} \
+    && /3gpp-mcp build "$@" \
     --db /3gpp.db \
     --convert-doc \
     --convert-image \
@@ -32,10 +32,15 @@ RUN if [ "${RELEASE}" = "latest" ] || [ -z "${RELEASE}" ]; then \
     --scrape-workers 4
 
 # 3) Final image: just the binary, the baked-in database, and CA certificates
-#    (needed for on-demand HTTPS fetches of versions not in the prebuilt DB).
+#    (needed for the HTTPS archive listing behind list_versions). On-demand
+#    fetching of versions not in the prebuilt DB does NOT work out of the box:
+#    it needs a writable cache and temp directory, which scratch lacks. To
+#    enable it, mount a writable volume and set HOME (or XDG_CACHE_HOME) and
+#    TMPDIR to point into it.
 FROM scratch
 COPY --from=db-builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=go-builder /3gpp-mcp /3gpp-mcp
 COPY --from=db-builder /3gpp.db /3gpp.db
+USER 65532:65532
 ENTRYPOINT ["/3gpp-mcp"]
 CMD ["serve", "--db", "/3gpp.db"]
