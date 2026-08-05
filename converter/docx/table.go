@@ -307,8 +307,13 @@ func imageHTML(ctx imageContext, ref imageRef) string {
 	if ref.AltText != "" {
 		alt = ref.AltText
 	}
+	// img.Name comes from a DOCX zip entry name, so it must be escaped before
+	// it is interpolated into the double-quoted src attribute; otherwise a
+	// crafted filename could close the attribute and inject markup. dimSuffix
+	// and dimAttrs are formatted from integers and stay literal, keeping the
+	// "?w=..&h=.." notation byte-identical across conversion paths.
 	return fmt.Sprintf(`<img src="image://%s%s" alt="%s"%s>`,
-		img.Name, dimSuffix, htmlpkg.EscapeString(alt), dimAttrs)
+		htmlpkg.EscapeString(img.Name), dimSuffix, htmlpkg.EscapeString(alt), dimAttrs)
 }
 
 // extractTable parses a w:tbl XML element and returns its parsed structure.

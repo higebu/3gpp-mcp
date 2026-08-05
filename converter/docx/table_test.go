@@ -366,3 +366,51 @@ func TestTableToHTML_NonReadableImageInCell(t *testing.T) {
 		t.Errorf("expected <img> tag with alt=Figure for EMF cell image, got: %s", html)
 	}
 }
+
+// TestTableToHTML_ImageNameEscaped verifies that an image filename containing
+// HTML metacharacters cannot break out of the src attribute and inject extra
+// attributes or markup. The name comes from a DOCX zip entry, so a crafted
+// document must not be able to smuggle e.g. onerror= into the rendered tag
+// (the web viewer renders this HTML unescaped).
+func TestTableToHTML_ImageNameEscaped(t *testing.T) {
+	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+		xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+		xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+		xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+		<w:tr><w:tc>
+			<w:p><w:r>
+				<w:drawing>
+					<wp:inline>
+						<wp:extent cx="952500" cy="952500"/>
+						<a:graphic><a:graphicData>
+							<a:blip r:embed="rId7"/>
+						</a:graphicData></a:graphic>
+					</wp:inline>
+				</w:drawing>
+			</w:r></w:p>
+		</w:tc></w:tr>
+	</w:tbl>`
+	info := extractTable([]byte(xml))
+	const evil = `x" onerror="alert(1)" data-<b>.png`
+	ctx := imageContext{
+		relMap: map[string]string{"rId7": "media/" + evil},
+		images: map[string]*EmbeddedImage{
+			"media/" + evil: {Name: evil, LLMReadable: true},
+		},
+	}
+	html := tableToHTML(info, ctx)
+	if strings.Contains(html, `onerror="`) {
+		t.Errorf("image name must not close src and inject attributes, got: %s", html)
+	}
+	if strings.Contains(html, `<b>`) {
+		t.Errorf("image name must not inject markup, got: %s", html)
+	}
+	if !strings.Contains(html, `&#34;`) || !strings.Contains(html, `&lt;b&gt;`) {
+		t.Errorf("expected image name to be HTML-escaped, got: %s", html)
+	}
+	// The dimension query string keeps its literal separators so the image
+	// reference notation stays byte-identical across conversion paths.
+	if !strings.Contains(html, `?w=100&h=100" alt="Figure" width="100" height="100">`) {
+		t.Errorf("expected unchanged dimension suffix/attrs, got: %s", html)
+	}
+}
