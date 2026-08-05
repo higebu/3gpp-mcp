@@ -46,6 +46,10 @@ func init() {
 			),
 		),
 		goldmark.WithRendererOptions(
+			// WithUnsafe is required because the DOCX converter emits raw HTML
+			// on purpose (tables, <sub>/<sup>, <img>). It is safe only because
+			// renderMarkdown escapes non-allowlisted tags before conversion and
+			// sanitizeHTML allowlists the final output.
 			html.WithUnsafe(),
 		),
 	)
@@ -101,10 +105,11 @@ func renderMarkdown(content, specID, version string, bracketMap map[string]strin
 	// normalized to single HTML-escaping so both raw (paragraph) and
 	// pre-escaped (table cell) math produce correct textContent.
 	//
-	// Math protection applies only to text outside fenced code blocks and
-	// inline code spans: a '$' inside a code fence is code, not math, and
-	// goldmark escapes code content itself. The placeholder token is random
-	// per render so literal text can never collide with a placeholder.
+	// Both math protection and raw-HTML escaping are applied only to text
+	// outside fenced code blocks and inline code spans: a '$' inside a code
+	// fence is code, not math, and goldmark escapes code content itself. The
+	// placeholder token is random per render so literal text can never collide
+	// with a placeholder.
 	token := newMathToken()
 	var mathSpans []string
 	segs := splitCodeSegments(content)
@@ -115,7 +120,8 @@ func renderMarkdown(content, specID, version string, bracketMap map[string]strin
 			sb.WriteString(seg.text)
 			continue
 		}
-		sb.WriteString(protectMath(seg.text, token, &mathSpans))
+		text := protectMath(seg.text, token, &mathSpans)
+		sb.WriteString(escapeUnknownHTML(text))
 	}
 	content = sb.String()
 
@@ -127,7 +133,7 @@ func renderMarkdown(content, specID, version string, bracketMap map[string]strin
 	for i, span := range mathSpans {
 		out = strings.Replace(out, mathPlaceholder(token, i), span, 1)
 	}
-	return out
+	return sanitizeHTML(out)
 }
 
 // newMathToken returns a random alphanumeric token for this render's math
@@ -187,5 +193,7 @@ func highlightYAML(content string) string {
 	if err := formatter.Format(&buf, style, iterator); err != nil {
 		return "<pre><code>" + htmlpkg.EscapeString(content) + "</code></pre>"
 	}
-	return buf.String()
+	// Same defense as renderMarkdown: the YAML comes from third-party spec
+	// archives, so the highlighted HTML is reduced to the allowlist too.
+	return sanitizeHTML(buf.String())
 }

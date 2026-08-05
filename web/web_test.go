@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"fmt"
+	htmlpkg "html"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -349,6 +350,41 @@ func TestHandleSection(t *testing.T) {
 	// matching the "[Source: ...]" line the get_section MCP tool prepends.
 	if !strings.Contains(body, "Source: TS 23.501 v18.6.0 (Rel-18)") {
 		t.Errorf("expected the section to name its spec version, got:\n%s", body)
+	}
+}
+
+// TestHandleSection_RawHTMLEscaped is the end-to-end check for stored XSS: a
+// section whose stored Markdown carries raw HTML must reach the browser with
+// that HTML escaped, while angle-bracket placeholders stay visible.
+func TestHandleSection_RawHTMLEscaped(t *testing.T) {
+	ts, d := setupTestServer(t)
+
+	if err := d.UpsertSection(db.Section{
+		SpecID:  "TS 23.501",
+		Version: "18.6.0",
+		Number:  "9",
+		Title:   "Injected",
+		Level:   1,
+		Content: "The <SUPI> identifier and <script>alert(1)</script> here.",
+	}); err != nil {
+		t.Fatalf("UpsertSection: %v", err)
+	}
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/sections/9")
+	if err != nil {
+		t.Fatalf("GET section error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if strings.Contains(body, "<script>alert(1)</script>") {
+		t.Error("raw script tag from section content must not reach the page")
+	}
+	if !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Errorf("expected the script tag as escaped text, got:\n%s", body)
+	}
+	if !strings.Contains(body, "&lt;SUPI&gt;") {
+		t.Errorf("expected the <SUPI> placeholder to stay visible, got:\n%s", body)
 	}
 }
 
@@ -836,24 +872,73 @@ func TestRenderMarkdown_ImageAltEscaped(t *testing.T) {
 	}
 }
 
-// TestRenderMarkdown_RawHTMLPassthrough pins down the current behaviour of the
-// markdown renderer: goldmark is configured with html.WithUnsafe(), so raw
-// HTML embedded in section content is passed through verbatim. 3GPP specs are
-// officially published documents (not user-controlled input), so this is
-// considered acceptable today, but any change that would start rendering
-// user-controlled content through this path MUST first add HTML sanitization.
-// This test fails if that trust assumption silently changes.
-func TestRenderMarkdown_RawHTMLPassthrough(t *testing.T) {
+// TestRenderMarkdown_RawHTMLEscaped verifies that raw HTML in section content
+// that the pipeline does not itself emit is escaped rather than rendered:
+// spec content comes from third-party DOCX files, so an embedded <script>
+// must reach the browser as visible text, never as markup.
+func TestRenderMarkdown_RawHTMLEscaped(t *testing.T) {
 	content := "Inline <b>bold</b> and <script>alert(1)</script> here."
 	got := renderMarkdown(content, "TS 23.501", "", nil)
-	// Pins the current unsafe behaviour. If this ever starts escaping, it
-	// almost certainly means goldmark's WithUnsafe() was removed — verify the
-	// change is intentional before updating this expectation.
-	if !strings.Contains(got, "<b>bold</b>") {
-		t.Errorf("expected raw <b> to pass through (current behaviour), got:\n%s", got)
+	if strings.Contains(got, "<script>") {
+		t.Errorf("raw <script> must not pass through, got:\n%s", got)
 	}
-	if !strings.Contains(got, "<script>alert(1)</script>") {
-		t.Errorf("expected raw <script> to pass through (current behaviour), got:\n%s", got)
+	if !strings.Contains(got, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Errorf("expected the script tag to survive as escaped text, got:\n%s", got)
+	}
+	// <b> is not in the converter's vocabulary (it emits <strong>), so it is
+	// document text too.
+	if !strings.Contains(got, "&lt;b&gt;bold&lt;/b&gt;") {
+		t.Errorf("expected <b> to survive as escaped text, got:\n%s", got)
+	}
+}
+
+// TestRenderMarkdown_AngleBracketPlaceholderVisible covers the non-malicious
+// half of the same defect: 3GPP prose is full of placeholders like <SUPI>,
+// which browsers silently drop when passed through as unknown raw HTML. They
+// must stay visible as text.
+func TestRenderMarkdown_AngleBracketPlaceholderVisible(t *testing.T) {
+	content := "The identifier <SUPI> is used here."
+	got := renderMarkdown(content, "TS 23.501", "", nil)
+	if !strings.Contains(got, "&lt;SUPI&gt;") {
+		t.Errorf("expected <SUPI> to survive as escaped text, got:\n%s", got)
+	}
+	if strings.Contains(got, "<SUPI>") {
+		t.Errorf("<SUPI> must not reach the page as a raw tag, got:\n%s", got)
+	}
+}
+
+// TestRenderMarkdown_EventHandlerStripped verifies the sanitizer half of the
+// defense: a tag that is in the allowlist (img) still cannot smuggle script
+// through attributes or a non-relative src.
+func TestRenderMarkdown_EventHandlerStripped(t *testing.T) {
+	content := `Before <img src=x onerror=alert(1)> after, and <a href="javascript:alert(2)">link</a>.`
+	got := renderMarkdown(content, "TS 23.501", "", nil)
+	if strings.Contains(got, "onerror") {
+		t.Errorf("event handler attribute must be stripped, got:\n%s", got)
+	}
+	if strings.Contains(got, `src="x"`) {
+		t.Errorf("non-site-relative img src must be stripped, got:\n%s", got)
+	}
+	if strings.Contains(got, "javascript:") {
+		t.Errorf("javascript: URL must be stripped, got:\n%s", got)
+	}
+}
+
+// TestRenderMarkdown_TableMarkupSurvivesSanitizer pins that the converter's
+// legitimate raw HTML — merged table cells and inline images — passes the
+// sanitizer intact.
+func TestRenderMarkdown_TableMarkupSurvivesSanitizer(t *testing.T) {
+	content := `<table><thead><tr><th colspan="2">Head</th></tr></thead>` +
+		`<tbody><tr><td rowspan="2">A</td><td><img src="image://fig.png?w=200&h=100" alt="diag" width="200" height="100"></td></tr></tbody></table>`
+	got := renderMarkdown(content, "TS 23.501", "", nil)
+	if !strings.Contains(got, `colspan="2"`) {
+		t.Errorf("expected colspan to survive, got:\n%s", got)
+	}
+	if !strings.Contains(got, `rowspan="2"`) {
+		t.Errorf("expected rowspan to survive, got:\n%s", got)
+	}
+	if !strings.Contains(got, `src="/specs/TS%2023.501/images/fig.png"`) {
+		t.Errorf("expected the rewritten inline image to survive, got:\n%s", got)
 	}
 }
 
@@ -890,8 +975,10 @@ func TestRenderMarkdown_HTMLImageRewrite(t *testing.T) {
 // for image basenames carrying characters that are legal in a filename but
 // meaningful in HTML. htmlImageRE captures the name straight out of the src
 // attribute and passes it to url.PathEscape without decoding HTML entities, so
-// the converter must not entity-encode "&" or "'": the percent-encoded lookup
-// key has to round-trip back to the basename stored in the database.
+// the converter must not entity-encode "&" or "'". The sanitizer then
+// re-serializes the attribute (HTML-escaping "&" and percent-encoding "'"),
+// which a browser undoes before requesting: HTML-unescape + path-unescape of
+// the served attribute has to round-trip back to the stored basename.
 func TestRenderMarkdown_HTMLImageRewriteSpecialChars(t *testing.T) {
 	content := `<table><tbody><tr><td><img src="image://Figure A&B's diagram.png?w=200&h=100" alt="diag"></td></tr></tbody></table>`
 	got := renderMarkdown(content, "TS 23.501", "", nil)
@@ -904,15 +991,12 @@ func TestRenderMarkdown_HTMLImageRewriteSpecialChars(t *testing.T) {
 	}
 	rest := got[i+len(prefix):]
 	encoded := rest[:strings.IndexByte(rest, '"')]
-	decoded, err := url.PathUnescape(encoded)
+	decoded, err := url.PathUnescape(htmlpkg.UnescapeString(encoded))
 	if err != nil {
 		t.Fatalf("rewritten image URL is not valid percent-encoding (%q): %v", encoded, err)
 	}
 	if decoded != want {
 		t.Errorf("image lookup key = %q, want %q (encoded form was %q)", decoded, want, encoded)
-	}
-	if strings.Contains(encoded, "amp") || strings.Contains(encoded, "%26amp%3B") {
-		t.Errorf("image name reached the lookup key entity-encoded: %q", encoded)
 	}
 }
 
