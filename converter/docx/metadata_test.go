@@ -179,6 +179,40 @@ func TestExtractMetadata_SubjectWithRelease(t *testing.T) {
 	}
 }
 
+// The release marker is not always parenthesised. Cutting the title at a
+// literal "(Release" left the title empty for these subjects, so the spec fell
+// back to whatever its first heading happened to be.
+func TestExtractMetadata_SubjectWithUnparenthesisedRelease(t *testing.T) {
+	for _, tt := range []struct {
+		subject   string
+		wantTitle string
+	}{
+		{"5G System architecture; Release 18", "5G System architecture"},
+		{"5G System architecture, Release 18", "5G System architecture,"},
+		{"5G System architecture (Release 18)", "5G System architecture"},
+	} {
+		meta := extractMetadata("23501-i30.docx", coreProperties{Subject: tt.subject}, nil, nil)
+		if meta.Title != tt.wantTitle {
+			t.Errorf("subject %q: Title = %q, want %q", tt.subject, meta.Title, tt.wantTitle)
+		}
+		if meta.Release != "18" {
+			t.Errorf("subject %q: Release = %q, want 18", tt.subject, meta.Release)
+		}
+	}
+}
+
+// A subject that is nothing but the release marker carries no title, so the
+// usual fallbacks still have to run.
+func TestExtractMetadata_SubjectOnlyRelease(t *testing.T) {
+	meta := extractMetadata("23501-i30.docx", coreProperties{Subject: "(Release 18)"}, nil, nil)
+	if meta.Title != "TS 23.501" {
+		t.Errorf("Title = %q, want fallback to spec ID", meta.Title)
+	}
+	if meta.Release != "18" {
+		t.Errorf("Release = %q, want 18", meta.Release)
+	}
+}
+
 func TestExtractMetadata_TitleFromTitleProperty(t *testing.T) {
 	props := coreProperties{
 		Title: "Network Function Repository Services",
