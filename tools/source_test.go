@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -132,6 +133,84 @@ func TestGetSectionFetchesArchivedVersion(t *testing.T) {
 	}
 	if !res.Archived || len(toc) != 1 {
 		t.Errorf("GetTOC = %+v, %+v; want one archived section", toc, res)
+	}
+}
+
+// TestGetSectionArchivedMissingSection checks that a section the cached
+// version genuinely does not hold stays a definitive versioned not-found —
+// the eviction re-check must not turn it into a retry hint.
+func TestGetSectionArchivedMissingSection(t *testing.T) {
+	d := setupTestDB(t)
+	src := sourceWithStore(t, d, cannedFetcher)
+	handler := HandleGetSection(src)
+
+	result, _, err := handler(context.Background(), nil, GetSectionInput{
+		SpecID:        "TS 23.501",
+		SectionNumber: "99",
+		Version:       "19.5.0",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected an error result for a missing archived section")
+	}
+	text := getTextContent(result)
+	if !strings.Contains(text, "section 99 not found in TS 23.501 v19.5.0") {
+		t.Errorf("expected a versioned not-found message, got: %s", text)
+	}
+}
+
+// TestArchivedReadAfterEviction covers the window between resolve and the
+// store read: a fetch of another version can evict the resolved one there, so
+// an empty read of an evicted version must become a retryable
+// fetch-in-progress error rather than a definitive not-found.
+func TestArchivedReadAfterEviction(t *testing.T) {
+	d := setupTestDB(t)
+	store, err := versionstore.Open(versionstore.Options{
+		Path:    filepath.Join(t.TempDir(), "versions.db"),
+		Fetcher: cannedFetcher,
+		// Zero keeps only the newest fetch, so caching a second version
+		// evicts the first through the real eviction path.
+		LimitBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("versionstore.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	src := NewSource(d)
+	src.Store = store
+	src.Client = archiveClient(t)
+	src.UseCache = false
+	src.Budget = 5 * time.Second
+
+	if _, _, err := src.GetSection(context.Background(), "TS 23.501", "19.5.0", "5.1", false); err != nil {
+		t.Fatalf("prime cache: %v", err)
+	}
+	res := Resolution{Version: "19.5.0", Archived: true}
+	if err := src.textStillCached("TS 23.501", res); err != nil {
+		t.Fatalf("textStillCached while cached: %v", err)
+	}
+
+	// Fetching another version pushes 19.5.0 out of the zero-byte cache.
+	if _, _, err := src.GetSection(context.Background(), "TS 23.501", "20.2.0", "5.1", false); err != nil {
+		t.Fatalf("fetch evicting version: %v", err)
+	}
+	if cached, err := store.Has("TS 23.501", "19.5.0"); err != nil || cached {
+		t.Fatalf("expected 19.5.0 to be evicted (cached=%v, err=%v)", cached, err)
+	}
+
+	// This is what the raced read sees: no rows, no error.
+	sections, err := store.GetSection("TS 23.501", "19.5.0", "5.1", false)
+	if err != nil || len(sections) != 0 {
+		t.Fatalf("read of an evicted version = %d sections, %v; want empty", len(sections), err)
+	}
+	var inProgress *FetchInProgressError
+	if err := src.textStillCached("TS 23.501", res); !errors.As(err, &inProgress) {
+		t.Fatalf("textStillCached after eviction = %v, want a FetchInProgressError", err)
+	}
+	if inProgress.Images {
+		t.Error("the error must name the version's text, not its images")
 	}
 }
 

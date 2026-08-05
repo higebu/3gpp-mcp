@@ -169,6 +169,11 @@ func (s *Source) GetSection(ctx context.Context, specID, version, number string,
 	}
 	if res.Archived {
 		sections, err := s.Store.GetSection(specID, res.Version, number, includeSubsections)
+		if err == nil && len(sections) == 0 {
+			if err := s.textStillCached(specID, res); err != nil {
+				return nil, res, err
+			}
+		}
 		return sections, res, err
 	}
 	sections, err := s.DB.GetSection(specID, res.Version, number, includeSubsections)
@@ -184,6 +189,11 @@ func (s *Source) AllSections(ctx context.Context, specID, version string) ([]db.
 	}
 	if res.Archived {
 		sections, err := s.Store.AllSections(specID, res.Version)
+		if err == nil && len(sections) == 0 {
+			if err := s.textStillCached(specID, res); err != nil {
+				return nil, res, err
+			}
+		}
 		return sections, res, err
 	}
 	sections, err := s.DB.AllSections(specID, res.Version)
@@ -198,6 +208,11 @@ func (s *Source) GetTOC(ctx context.Context, specID, version string) ([]db.Secti
 	}
 	if res.Archived {
 		sections, err := s.Store.GetTOC(specID, res.Version)
+		if err == nil && len(sections) == 0 {
+			if err := s.textStillCached(specID, res); err != nil {
+				return nil, res, err
+			}
+		}
 		return sections, res, err
 	}
 	sections, err := s.DB.GetTOC(specID, res.Version)
@@ -249,6 +264,21 @@ func (s *Source) ListImages(ctx context.Context, specID, version string) ([]db.I
 	}
 	infos, err := s.DB.ListImages(specID, res.Version)
 	return infos, res, err
+}
+
+// textStillCached distinguishes "the version holds no such section" from "the
+// version was evicted between resolve and the read": a concurrent fetch's
+// eviction can drop it in that window, and answering a definitive not-found
+// then would hide content a retry recovers.
+func (s *Source) textStillCached(specID string, res Resolution) error {
+	cached, err := s.Store.Has(specID, res.Version)
+	if err != nil {
+		return err
+	}
+	if !cached {
+		return &FetchInProgressError{SpecID: specID, Version: res.Version}
+	}
+	return nil
 }
 
 // imagesStillCached distinguishes "the version holds no such images" from "the
