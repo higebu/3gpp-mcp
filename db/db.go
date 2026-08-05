@@ -933,6 +933,19 @@ func quoteFTS5String(s string) string {
 	return "\"" + strings.ReplaceAll(s, "\"", "\"\"") + "\""
 }
 
+// quoteFTS5Term quotes a search term, keeping a single trailing "*" outside
+// the quotes so it keeps its prefix-match meaning: inside a quoted string FTS5
+// treats "*" as an ordinary character, so "38.10*" matches nothing while
+// "38.10"* matches every term starting with 38.10. A term that is nothing but
+// stars, or that ends in several of them, has no valid prefix form and is
+// quoted whole ("38.10"** is a syntax error).
+func quoteFTS5Term(s string) string {
+	if stem, ok := strings.CutSuffix(s, "*"); ok && stem != "" && !strings.HasSuffix(stem, "*") {
+		return quoteFTS5String(stem) + "*"
+	}
+	return quoteFTS5String(s)
+}
+
 // classifyToken quotes a bareword or "col:val" column-filter token if it
 // contains a character FTS5 cannot parse in an unquoted bareword.
 func classifyToken(token string) string {
@@ -946,21 +959,22 @@ func classifyToken(token string) string {
 				return quoteFTS5String(token)
 			}
 			if strings.HasPrefix(val, "\"") {
-				// Already phrase-quoted (content:"foo"). Repair it if the
+				// Already phrase-quoted (content:"foo"), optionally with a
+				// prefix "*" after the closing quote. Repair it if the
 				// closing quote is missing.
-				if len(val) >= 2 && strings.HasSuffix(val, "\"") {
+				if body := strings.TrimSuffix(val, "*"); len(body) >= 2 && strings.HasSuffix(body, "\"") {
 					return token
 				}
-				return col + ":" + quoteFTS5String(strings.Trim(val, "\""))
+				return col + ":" + quoteFTS5Term(strings.Trim(val, "\""))
 			}
 			if needsFTS5Quoting(val) {
-				return col + ":" + quoteFTS5String(val)
+				return col + ":" + quoteFTS5Term(val)
 			}
 			return token
 		}
 	}
 	if needsFTS5Quoting(token) {
-		return quoteFTS5String(token)
+		return quoteFTS5Term(token)
 	}
 	return token
 }
