@@ -921,10 +921,13 @@ var fts5Operators = map[string]bool{
 // cannot parse as part of an unquoted bareword: a hyphen (misread as the
 // column-filter/NOT operator), a period (e.g. spec numbers like "38.101",
 // which FTS5 otherwise rejects with "syntax error near \".\""), a stray
-// double quote, or a parenthesis riding along inside the token (an
-// unquoted "(38.331" or "SMF)" is a hard syntax error).
+// double quote, a parenthesis riding along inside the token (an unquoted
+// "(38.331" or "SMF)" is a hard syntax error), or a star (valid only as a
+// trailing prefix operator; quoteFTS5Term keeps that meaning and quotes
+// every other placement, so a bare "*" degrades to no results instead of
+// "unknown special query").
 func needsFTS5Quoting(s string) bool {
-	return strings.ContainsAny(s, `-."()`)
+	return strings.ContainsAny(s, `-."()*`)
 }
 
 // quoteFTS5String wraps s in double quotes, doubling any quote already
@@ -1029,7 +1032,20 @@ func sanitizeFTS5Query(query string) string {
 				}
 				j++
 			}
-			result = append(result, query[i:j])
+			run := query[i:j]
+			if depth > 0 {
+				// An unterminated NEAR( group is a hard syntax error; supply
+				// the missing closing parentheses.
+				run += strings.Repeat(")", depth)
+			}
+			// A NEAR group with no operand inside ("NEAR()") is still a
+			// syntax error, so search for the literal text instead.
+			if inner := strings.TrimFunc(run[len("NEAR("):], func(r rune) bool {
+				return r == '(' || r == ')' || r == ' ' || r == '\t' || r == '\n'
+			}); inner == "" {
+				run = quoteFTS5String(query[i:j])
+			}
+			result = append(result, run)
 			i = j
 			continue
 		}
@@ -1056,7 +1072,15 @@ func sanitizeFTS5Query(query string) string {
 		i = j
 
 		if fts5Operators[token] {
-			result = append(result, token)
+			// An operator keyword needs an operand on its left: at the start
+			// of the query or right after another operator FTS5 rejects it
+			// ("syntax error near AND"), so treat it as a literal term there.
+			// A dangling operator at the end is quoted after the loop.
+			if len(result) == 0 || fts5Operators[result[len(result)-1]] {
+				result = append(result, quoteFTS5String(token))
+			} else {
+				result = append(result, token)
+			}
 			continue
 		}
 
@@ -1079,6 +1103,12 @@ func sanitizeFTS5Query(query string) string {
 		}
 
 		result = append(result, classifyToken(token))
+	}
+
+	// An operator keyword at the end of the query has no right operand, which
+	// FTS5 rejects; demote it to a literal term.
+	if len(result) > 0 && fts5Operators[result[len(result)-1]] {
+		result[len(result)-1] = quoteFTS5String(result[len(result)-1])
 	}
 
 	return strings.Join(result, " ")

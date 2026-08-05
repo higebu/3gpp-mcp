@@ -367,7 +367,7 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"OR operator", "AMF OR SMF", "AMF OR SMF"},
 		{"NOT operator", "AMF NOT SMF", "AMF NOT SMF"},
 		{"quoted phrase preserved", `"service based interface"`, `"service based interface"`},
-		{"prefix wildcard", "handov*", "handov*"},
+		{"prefix wildcard", "handov*", `"handov"*`},
 		{"valid column filter", "content:handover", "content:handover"},
 		{"valid column filter title", "title:authentication", "title:authentication"},
 		{"column filter with hyphen value", "title:IMS-AKA", `title:"IMS-AKA"`},
@@ -401,7 +401,18 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"prefix wildcard on hyphenated stem", "RRCSetup-IEs*", `"RRCSetup-IEs"*`},
 		{"prefix wildcard in column filter", "title:38.10*", `title:"38.10"*`},
 		{"repeated stars quoted whole", "38.10**", `"38.10**"`},
-		{"lone star unchanged", "*", "*"},
+		{"lone star quoted", "*", `"*"`},
+		{"double star quoted", "**", `"**"`},
+		{"bare AND quoted", "AND", `"AND"`},
+		{"bare OR quoted", "OR", `"OR"`},
+		{"bare NOT quoted", "NOT", `"NOT"`},
+		{"leading operator quoted", "AND AMF", `"AND" AMF`},
+		{"trailing operator quoted", "AMF AND", `AMF "AND"`},
+		{"doubled operator quoted", "AMF AND AND SMF", `AMF AND "AND" SMF`},
+		{"unterminated NEAR closed", "NEAR(a b", "NEAR(a b)"},
+		{"unterminated NEAR with distance closed", "NEAR(AMF UE, 5", "NEAR(AMF UE, 5)"},
+		{"empty unterminated NEAR quoted", "NEAR(", `"NEAR("`},
+		{"empty NEAR quoted", "NEAR()", `"NEAR()"`},
 		{"quoted phrase with prefix star kept", `content:"core network"*`, `content:"core network"*`},
 		{"multi-word phrase column filter kept whole", `content:"core network"`, `content:"core network"`},
 		{"multi-word phrase column filter with trailing term", `title:"band requirements" AMF`, `title:"band requirements" AMF`},
@@ -455,6 +466,9 @@ func TestSanitizeFTS5Query_ExecutesWithoutError(t *testing.T) {
 		`AMF"`, `content:"band`, `content:"core network"`, `content:"core network`,
 		"38.10*", "title:38.10*", "RRCSetup-IEs*", "38.10**", "AMF -38.10*",
 		`content:"core network"*`,
+		"*", "**", "handov*",
+		"AND", "OR", "NOT", "AND AMF", "AMF AND", "AMF AND AND SMF",
+		"NEAR(a b", "NEAR(AMF UE, 5", "NEAR(", "NEAR()",
 	}
 	for _, q := range queries {
 		sanitized := sanitizeFTS5Query(q)
@@ -587,6 +601,17 @@ func TestSearch(t *testing.T) {
 		}
 		if len(page.Results) != 2 {
 			t.Fatalf("expected 2 results, got %d", len(page.Results))
+		}
+	})
+
+	t.Run("operator and star queries degrade to no error", func(t *testing.T) {
+		// A bare "*" or operator keyword used to reach FTS5 unquoted and fail
+		// hard; each of these must return a result set (possibly empty), not
+		// an error.
+		for _, q := range []string{"*", "**", "AND", "OR", "NOT", "NEAR(a b", "NEAR("} {
+			if _, err := d.Search(q, nil, 10, 0); err != nil {
+				t.Errorf("Search(%q) returned error: %v", q, err)
+			}
 		}
 	})
 
