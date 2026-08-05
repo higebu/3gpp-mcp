@@ -606,7 +606,13 @@ func cmdUpdate(args []string) {
 		log.Fatalf("Failed to open database: %v", err)
 	}
 	currentResult, err := src.ListSpecs("", "", -1, 0)
-	if err != nil || len(currentResult.Specs) == 0 {
+	if err != nil {
+		// An unreadable database is not an empty one; telling the user to run
+		// 'build' would hide the real failure and still exit 0.
+		_ = src.Close()
+		log.Fatalf("Failed to read specs from %s: %v", *dbPath, err)
+	}
+	if len(currentResult.Specs) == 0 {
 		_ = src.Close()
 		fmt.Println("No specs in database. Use 'build' command first.")
 		return

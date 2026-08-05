@@ -1012,3 +1012,35 @@ func TestFinalizeWorkingCopy_BlockedCheckpointKeepsWAL(t *testing.T) {
 		t.Error("the unmerged WAL was truncated")
 	}
 }
+
+// TestCmdUpdate_UnreadableDB checks that a database that cannot be read is
+// reported as a failure rather than as "No specs in database": the two used to
+// share one branch, so a broken database told the user to run 'build' and
+// exited 0. Run as a subprocess because the failure path calls log.Fatalf.
+func TestCmdUpdate_UnreadableDB(t *testing.T) {
+	if os.Getenv("CMD_UPDATE_UNREADABLE_HELPER") != "" {
+		cmdUpdate([]string{"-db", os.Getenv("CMD_UPDATE_UNREADABLE_HELPER")})
+		return
+	}
+	// A database file with no schema at all: ListSpecs fails with "no such
+	// table" instead of returning zero rows.
+	dbPath := filepath.Join(t.TempDir(), "broken.db")
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	d.Close()
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestCmdUpdate_UnreadableDB")
+	cmd.Env = append(os.Environ(), "CMD_UPDATE_UNREADABLE_HELPER="+dbPath)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected a non-zero exit for an unreadable database, got: %s", out)
+	}
+	if strings.Contains(string(out), "No specs in database") {
+		t.Errorf("an unreadable database was reported as empty: %s", out)
+	}
+	if !strings.Contains(string(out), "Failed to read specs") {
+		t.Errorf("expected the read failure to be reported, got: %s", out)
+	}
+}
