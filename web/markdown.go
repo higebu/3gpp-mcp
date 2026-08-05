@@ -142,12 +142,16 @@ func renderMarkdown(content, specID, version string, bracketMap map[string]strin
 	return sanitizeHTML(out)
 }
 
+// randRead is cryptorand.Read, injectable so tests can exercise the
+// fallback branch.
+var randRead = cryptorand.Read
+
 // newMathToken returns a random alphanumeric token for this render's math
 // placeholders. Randomness guarantees document text cannot contain a
 // placeholder lookalike, so re-injection only ever hits real placeholders.
 func newMathToken() string {
 	var b [12]byte
-	if _, err := cryptorand.Read(b[:]); err != nil {
+	if _, err := randRead(b[:]); err != nil {
 		return fallbackMathToken()
 	}
 	return "katexmath" + hex.EncodeToString(b[:])

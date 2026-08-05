@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	htmlpkg "html"
 	"io"
@@ -1045,6 +1046,26 @@ func TestFallbackMathToken(t *testing.T) {
 	}
 	if !strings.HasPrefix(a, "katexmath") {
 		t.Errorf("fallback token %q must keep the katexmath prefix", a)
+	}
+}
+
+// TestNewMathToken_RandFailure pins that a crypto/rand failure falls back to
+// a unique token and math still renders.
+func TestNewMathToken_RandFailure(t *testing.T) {
+	orig := randRead
+	randRead = func([]byte) (int, error) { return 0, errors.New("no entropy") }
+	defer func() { randRead = orig }()
+
+	a, b := newMathToken(), newMathToken()
+	if a == b {
+		t.Errorf("fallback tokens must be unique, got %q twice", a)
+	}
+	got := renderMarkdown("Inline $x_1$ math.", "TS 23.501", "", nil)
+	if !strings.Contains(got, "katex-math") && !strings.Contains(got, "math") {
+		t.Errorf("math must still render under the fallback token, got:\n%s", got)
+	}
+	if strings.Contains(got, "katexmath") {
+		t.Errorf("no placeholder token may leak into the output, got:\n%s", got)
 	}
 }
 
