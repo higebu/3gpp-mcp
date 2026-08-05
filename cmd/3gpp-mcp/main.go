@@ -252,6 +252,11 @@ func cmdServe(args []string) {
 			IdleTimeout:       120 * time.Second,
 		}
 
+		if *addr == "" {
+			// http.Server.ListenAndServe treated an empty Addr as ":http";
+			// net.Listen would pick an ephemeral port instead.
+			*addr = ":http"
+		}
 		ln, err := net.Listen("tcp", *addr)
 		if err != nil {
 			log.Fatalf("Server error: %v", err)
