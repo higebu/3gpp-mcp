@@ -50,8 +50,8 @@ update-specs: build
 # Show database info
 db-info:
 	@command -v sqlite3 >/dev/null || { echo "sqlite3 CLI not found"; exit 1; }
-	@test -f $(DB_PATH) || { echo "Database not found: $(DB_PATH)"; exit 1; }
-	@sqlite3 $(DB_PATH) "SELECT COUNT(*) || ' specs' FROM specs; SELECT COUNT(*) || ' sections' FROM sections;"
+	@test -f "$(DB_PATH)" || { echo "Database not found: $(DB_PATH)"; exit 1; }
+	@sqlite3 "$(DB_PATH)" "SELECT COUNT(*) || ' specs' FROM specs; SELECT COUNT(*) || ' sections' FROM sections;"
 
 # Start HTTP server with web viewer
 web: build
