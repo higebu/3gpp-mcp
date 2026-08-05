@@ -313,6 +313,7 @@ func (s *Store) CachedVersions(specID string) ([]string, error) {
 
 // GetSpec returns the cached spec record for a version.
 func (s *Store) GetSpec(specID, version string) (*db.Spec, error) {
+	s.touch(specID, version)
 	var spec db.Spec
 	err := s.conn.QueryRow(
 		"SELECT id, version, COALESCE(version_token, ''), title, COALESCE(release, ''), COALESCE(series, '') FROM specs WHERE id = ? AND version = ?",

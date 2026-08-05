@@ -306,6 +306,41 @@ func TestEnsureRecoversFetcherPanic(t *testing.T) {
 	}
 }
 
+// TestGetSpecTouchesLRU checks that reading the spec record refreshes the
+// entry's LRU timestamp like every other cached-read path, so a version read
+// mainly through GetSpec is not evicted ahead of less-recently-used entries.
+func TestGetSpecTouchesLRU(t *testing.T) {
+	s := openStore(t, DefaultLimitBytes, func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		spec, sections := fakeSpec("placeholder", "placeholder", 8)
+		return spec, sections, nil
+	})
+	if err := s.Ensure(context.Background(), "TS 23.501", "18.6.0", entry("23.501"), time.Minute); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	// Age the entry, then read it through GetSpec.
+	if _, err := s.conn.Exec(
+		"UPDATE cache_entries SET last_used_at = 1 WHERE spec_id = ? AND version = ?",
+		"TS 23.501", "18.6.0",
+	); err != nil {
+		t.Fatalf("age entry: %v", err)
+	}
+	if spec, err := s.GetSpec("TS 23.501", "18.6.0"); err != nil || spec == nil {
+		t.Fatalf("GetSpec = %+v, %v", spec, err)
+	}
+
+	var lastUsed int64
+	if err := s.conn.QueryRow(
+		"SELECT last_used_at FROM cache_entries WHERE spec_id = ? AND version = ?",
+		"TS 23.501", "18.6.0",
+	).Scan(&lastUsed); err != nil {
+		t.Fatalf("read last_used_at: %v", err)
+	}
+	if lastUsed == 1 {
+		t.Error("GetSpec did not touch the LRU timestamp")
+	}
+}
+
 // TestEvictionDropsLeastRecentlyUsed fills the cache past its limit and checks
 // that the oldest entry goes and the newest stays.
 func TestEvictionDropsLeastRecentlyUsed(t *testing.T) {
