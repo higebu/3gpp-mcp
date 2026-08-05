@@ -1002,6 +1002,63 @@ func TestSplitInlineCode_Edges(t *testing.T) {
 	}
 }
 
+// TestSplitCodeSegments_Edges pins fence-recognition edges: an unterminated
+// fence runs to end of input, an indented or too-short marker line is not a
+// fence, and a backtick run of a different length inside a span is content.
+func TestSplitCodeSegments_Edges(t *testing.T) {
+	for _, tt := range []struct {
+		name, in     string
+		wantCodeSegs int
+	}{
+		{"unterminated fence runs to EOF", "text\n```\ncode $x$", 1},
+		{"indented marker line is not a fence", "    ```\nnot code $x$\n", 0},
+		// Not a fence (marker too short), but the two-backtick runs form a
+		// valid inline code span per CommonMark.
+		{"two backticks are an inline span, not a fence", "``\ntext\n``\n", 1},
+		{"shorter backtick run inside a span is content", "`a``b`x", 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := 0
+			joined := ""
+			for _, s := range splitCodeSegments(tt.in) {
+				joined += s.text
+				if s.code {
+					got++
+				}
+			}
+			if got != tt.wantCodeSegs {
+				t.Errorf("splitCodeSegments(%q) code segments = %d, want %d", tt.in, got, tt.wantCodeSegs)
+			}
+			if joined != tt.in {
+				t.Errorf("segments do not reproduce input: %q -> %q", tt.in, joined)
+			}
+		})
+	}
+}
+
+// TestFallbackMathToken pins that the no-crypto/rand fallback still mints
+// unique, well-formed tokens.
+func TestFallbackMathToken(t *testing.T) {
+	a, b := fallbackMathToken(), fallbackMathToken()
+	if a == b {
+		t.Errorf("fallback tokens must be unique, got %q twice", a)
+	}
+	if !strings.HasPrefix(a, "katexmath") {
+		t.Errorf("fallback token %q must keep the katexmath prefix", a)
+	}
+}
+
+// TestRenderMarkdown_UnknownLanguageFence pins the chroma fallback lexer path.
+func TestRenderMarkdown_UnknownLanguageFence(t *testing.T) {
+	got := renderMarkdown("```zzznotalanguage\nplain <text>\n```\n", "TS 23.501", "", nil)
+	if !strings.Contains(got, "plain") {
+		t.Errorf("unknown-language fence must still render its content, got:\n%s", got)
+	}
+	if strings.Contains(got, "<text>") {
+		t.Errorf("code content must be escaped, got:\n%s", got)
+	}
+}
+
 // TestRenderMarkdown_TableMarkupSurvivesSanitizer pins that the converter's
 // legitimate raw HTML — merged table cells and inline images — passes the
 // sanitizer intact.

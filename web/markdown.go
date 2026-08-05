@@ -148,12 +148,16 @@ func renderMarkdown(content, specID, version string, bracketMap map[string]strin
 func newMathToken() string {
 	var b [12]byte
 	if _, err := cryptorand.Read(b[:]); err != nil {
-		// Keep the token unpredictable even without crypto/rand: a constant
-		// fallback would let literal document text collide with a
-		// placeholder on every render.
-		return fmt.Sprintf("katexmath%xt%dc", time.Now().UnixNano(), fallbackTokenCount.Add(1))
+		return fallbackMathToken()
 	}
 	return "katexmath" + hex.EncodeToString(b[:])
+}
+
+// fallbackMathToken keeps the token unpredictable even without crypto/rand: a
+// constant fallback would let literal document text collide with a
+// placeholder on every render.
+func fallbackMathToken() string {
+	return fmt.Sprintf("katexmath%xt%dc", time.Now().UnixNano(), fallbackTokenCount.Add(1))
 }
 
 // mathPlaceholder returns an inert token that survives goldmark conversion
