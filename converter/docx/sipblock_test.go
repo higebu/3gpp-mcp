@@ -112,7 +112,7 @@ func TestParseSections_SIPFullMessageBlock(t *testing.T) {
 	}
 }
 
-// TS 23.850 style: a request line with nothing else, ended by prose.
+// TR 23.850 style: a request line with nothing else, ended by prose.
 func TestParseSections_SIPRequestLineOnly(t *testing.T) {
 	elements := []bodyElement{
 		sipHeading("1\tRouting"),
@@ -131,7 +131,7 @@ func TestParseSections_SIPRequestLineOnly(t *testing.T) {
 	}
 }
 
-// TS 23.700-19 style: request and status messages styled bold/italic, with
+// TR 23.700-19 style: request and status messages styled bold/italic, with
 // compact-form headers and an SDP body, ended by an Editor's note.
 func TestParseSections_SIPCompactHeadersAndEmphasis(t *testing.T) {
 	emphaticPara := func(runs ...runInfo) bodyElement {
@@ -209,7 +209,7 @@ func TestParseSections_SIPDashPrefixedRequestLine(t *testing.T) {
 	}
 }
 
-// TS 23.877 style: a standalone SDP description, one field line per
+// TR 23.877 style: a standalone SDP description, one field line per
 // paragraph, no SIP message around it.
 func TestParseSections_SDPBlock(t *testing.T) {
 	elements := []bodyElement{
@@ -321,7 +321,7 @@ func TestParseSections_SDPFalsePositiveProse(t *testing.T) {
 		sipPara("An equation like x=y+1 stays prose."),
 		sipPara("v=0"),
 		sipPara("Only one field line follows nothing, so it stays prose too."),
-		// Prose enumerations of the SDP field types (TS 23.700-19) end each
+		// Prose enumerations of the SDP field types (TR 23.700-19) end each
 		// line with a period, which no real field value does.
 		sipPara("v= (protocol version)."),
 		sipPara("o= (originator and session identifier)."),
