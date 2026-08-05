@@ -109,6 +109,30 @@ func TestOMMLToLaTeX(t *testing.T) {
 			want: "\\sum_{i=1}^{n}i",
 		},
 		{
+			// Without limits to close it, the operator command would run into
+			// the operand and form an undefined control sequence ("\intx").
+			name: "nary without limits separates operator from operand",
+			xml: `<m:oMath ` + mXMLNS + `><m:nary><m:naryPr><m:chr m:val="∫"/></m:naryPr>` +
+				`<m:e>` + mrun("x") + `</m:e></m:nary></m:oMath>`,
+			want: "\\int x",
+		},
+		{
+			name: "nary with both limits hidden separates operator from operand",
+			xml: `<m:oMath ` + mXMLNS + `><m:nary>` +
+				`<m:naryPr><m:chr m:val="∑"/><m:subHide m:val="1"/><m:supHide m:val="1"/></m:naryPr>` +
+				`<m:sub>` + mrun("i") + `</m:sub><m:sup>` + mrun("n") + `</m:sup>` +
+				`<m:e>` + mrun("a") + `</m:e></m:nary></m:oMath>`,
+			want: "\\sum a",
+		},
+		{
+			// naryOp passes an unmapped character through verbatim; it is not
+			// a command, so it needs no separator.
+			name: "nary with literal operator character needs no separator",
+			xml: `<m:oMath ` + mXMLNS + `><m:nary><m:naryPr><m:chr m:val="⨄"/></m:naryPr>` +
+				`<m:e>` + mrun("x") + `</m:e></m:nary></m:oMath>`,
+			want: "⨄x",
+		},
+		{
 			name: "delimiter parens",
 			xml: `<m:oMath ` + mXMLNS + `><m:d>` +
 				`<m:e>` + mrun("x") + `</m:e>` +

@@ -267,11 +267,21 @@ func renderNary(n *ommlNode) string {
 
 	var b strings.Builder
 	b.WriteString(op)
+	limits := false
 	if sub := child(n, "sub"); sub != nil && !isTrue(subHide, sp) {
 		b.WriteString("_{" + renderOMML(sub) + "}")
+		limits = true
 	}
 	if sup := child(n, "sup"); sup != nil && !isTrue(supHide, pp) {
 		b.WriteString("^{" + renderOMML(sup) + "}")
+		limits = true
+	}
+	// With no limits to close the operator, a command runs straight into the
+	// operand and forms an invalid token ("\int" + "x" must not become
+	// "\intx"). Only commands need the separator; a literal operator
+	// character from naryOp's default branch does not.
+	if !limits && strings.HasPrefix(op, "\\") {
+		b.WriteString(" ")
 	}
 	b.WriteString(renderOMML(child(n, "e")))
 	return b.String()
