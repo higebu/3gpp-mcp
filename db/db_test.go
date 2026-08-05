@@ -415,6 +415,11 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"unterminated NEAR with distance closed", "NEAR(AMF UE, 5", "NEAR(AMF UE, 5)"},
 		{"empty unterminated NEAR quoted", "NEAR(", `"NEAR("`},
 		{"empty NEAR quoted", "NEAR()", `"NEAR()"`},
+		{"comma-only NEAR quoted", "NEAR(,)", `"NEAR(,)"`},
+		{"dot-only NEAR quoted", "NEAR(.)", `"NEAR(.)"`},
+		{"spaced comma-only NEAR quoted", "NEAR( , )", `"NEAR( , )"`},
+		{"hyphen-only NEAR quoted", "NEAR(-)", `"NEAR(-)"`},
+		{"unterminated comma-only NEAR quoted", "NEAR(,", `"NEAR(,"`},
 		{"quoted phrase with prefix star kept", `content:"core network"*`, `content:"core network"*`},
 		{"multi-word phrase column filter kept whole", `content:"core network"`, `content:"core network"`},
 		{"multi-word phrase column filter with trailing term", `title:"band requirements" AMF`, `title:"band requirements" AMF`},
@@ -471,6 +476,7 @@ func TestSanitizeFTS5Query_ExecutesWithoutError(t *testing.T) {
 		"*", "**", "handov*",
 		"AND", "OR", "NOT", "AND AMF", "AMF AND", "AMF AND AND SMF",
 		"NEAR(a b", "NEAR(AMF UE, 5", "NEAR(", "NEAR()",
+		"NEAR(,)", "NEAR(.)", "NEAR( , )", "NEAR(-)", "NEAR(,",
 		// FTS5 keywords are uppercase-only: these must run as plain terms.
 		"and AMF", "AMF or", "not", "AMF and and SMF",
 		// Mixed-case NEAR is not a keyword but still a hard syntax error

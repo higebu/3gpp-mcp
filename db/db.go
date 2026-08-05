@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/higebu/3gpp-mcp/internal/specver"
@@ -1039,11 +1040,14 @@ func sanitizeFTS5Query(query string) string {
 				// the missing closing parentheses.
 				run += strings.Repeat(")", depth)
 			}
-			// A NEAR group with no operand inside ("NEAR()") is still a
-			// syntax error, so search for the literal text instead.
-			if inner := strings.TrimFunc(run[len("NEAR("):], func(r rune) bool {
-				return r == '(' || r == ')' || r == ' ' || r == '\t' || r == '\n'
-			}); inner == "" {
+			// A NEAR group needs at least one operand — a bareword or a
+			// quoted phrase — or FTS5 rejects it: "NEAR()" and
+			// punctuation-only groups like "NEAR(,)" are hard syntax
+			// errors. A group without one degrades to searching for the
+			// literal text instead.
+			if !strings.ContainsFunc(run[len("NEAR("):], func(r rune) bool {
+				return r == '"' || unicode.IsLetter(r) || unicode.IsDigit(r)
+			}) {
 				run = quoteFTS5String(query[i:j])
 			}
 			result = append(result, run)
