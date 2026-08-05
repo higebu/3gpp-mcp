@@ -555,6 +555,29 @@ func TestPaginateText(t *testing.T) {
 		}
 	})
 
+	t.Run("max_chars is not exceeded when the window fits it exactly", func(t *testing.T) {
+		// Five 5-char lines fill the 30-char budget without truncation, so
+		// the budget never "decided the cut" — the smart cut must still not
+		// extend to the paragraph boundary at line 6, which would exceed it.
+		exactContent := "11111\n22222\n33333\n44444\n55555\n\nrest here"
+		result := paginateText(exactContent, 0, 5, 30)
+		text := getTextContent(result)
+		if !strings.Contains(text, "[Lines 1-5 of 7]") {
+			t.Errorf("expected the exact-fit budget to hold at 5 lines, got: %s", text)
+		}
+	})
+
+	t.Run("max_chars counts characters, not bytes", func(t *testing.T) {
+		// Each line is 5 runes (15 bytes); a 12-char budget must fit two
+		// lines (2 x (5+1) = 12), not cut after one as byte counting would.
+		runeContent := "あいうえお\nかきくけこ\nさしすせそ"
+		result := paginateText(runeContent, 0, 10, 12)
+		text := getTextContent(result)
+		if !strings.Contains(text, "[Lines 1-2 of 3]") {
+			t.Errorf("expected 2 lines within a 12-character budget, got: %s", text)
+		}
+	})
+
 	t.Run("max_chars is not exceeded by smart cut", func(t *testing.T) {
 		// The char budget cuts at line 5 (5 lines x 6 chars = 30); the
 		// paragraph boundary at line 6 is within the smart-cut lookahead
