@@ -199,7 +199,7 @@ Browse specifications in your browser by adding `--web` to the HTTP transport:
 Features: spec list with filtering, section viewer with TOC sidebar, full-text search with pagination, past-version browsing (versions are listed per spec and downloaded on demand, like the MCP tools), version comparison (structural summary and per-section diffs), embedded images, cross-reference links, OpenAPI definitions with syntax highlighting, LaTeX math rendering, dark mode, responsive design.
 
 Code blocks are syntax-highlighted per notation — ASN.1, Diameter, SIP/RTSP,
-SDP, XML and YAML (see [Code blocks](#code-blocks)). The color theme is
+SDP and XML (see [Code blocks](#code-blocks)). The color theme is
 selectable from the settings popover (gear icon) in the navbar — Catppuccin
 (default), GitHub, Monokai or Xcode/Dracula — and is stored in the browser, so
 it needs no server state. Each theme has a light and a dark variant, picked by
@@ -432,10 +432,13 @@ Download and import specifications into the database (recommended for initial se
 | `--workers` | Number of parallel workers | NumCPU |
 | `--convert-doc` | Convert `.doc` files to `.docx` using LibreOffice | `false` |
 | `--convert-image` | Convert EMF/WMF images to PNG using LibreOffice | `false` |
-| `--spec-list` | Use a spec list file instead of scraping the archive | |
+| `--spec-list` | Read the spec list from a file instead of scraping the archive (a selector is still required) | |
 | `--no-cache` | Disable the spec list cache | `false` |
 | `--scrape-workers` | Concurrency for scraping spec listings (`0` = auto) | `0` |
 | `--timeout` | HTTP timeout | `30s` |
+
+One of `--release`, `--latest`, `--series` or `--spec` must be given, `--spec-list`
+included: the file supplies the candidate entries and the selector filters them.
 
 ### `download`
 
@@ -450,10 +453,13 @@ Download specifications without conversion.
 | `--output-dir` | Output directory | `specs` |
 | `--parallel` | Number of parallel downloads | NumCPU |
 | `--convert-doc` | Convert `.doc` to `.docx` using LibreOffice | `false` |
-| `--spec-list` | Use a spec list file instead of scraping the archive | |
+| `--spec-list` | Read the spec list from a file instead of scraping the archive (a selector is still required) | |
 | `--no-cache` | Disable the spec list cache | `false` |
 | `--scrape-workers` | Concurrency for scraping spec listings (`0` = auto) | `0` |
 | `--timeout` | HTTP timeout | `30s` |
+
+Like `build`, this command requires one of `--release`, `--latest`, `--series` or
+`--spec`, even with `--spec-list`.
 
 ### `import`
 
