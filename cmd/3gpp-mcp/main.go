@@ -254,14 +254,18 @@ func cmdServe(args []string) {
 
 		ln, err := net.Listen("tcp", httpListenAddr(*addr))
 		if err != nil {
-			log.Fatalf("Server error: %v", err)
+			log.Printf("Server error: %v", err)
+			exit(1)
+			return
 		}
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
 		if err := runHTTPServer(ctx, server, ln); err != nil {
-			log.Fatalf("Server error: %v", err)
+			log.Printf("Server error: %v", err)
+			exit(1)
+			return
 		}
 	default:
 		log.Fatalf("Unknown transport: %s", *transport)
@@ -325,7 +329,8 @@ func cmdConvert(args []string) {
 	defer stop()
 
 	if err := runConvert(ctx, *dbPath, docxPath, *convertImage); err != nil {
-		log.Fatalf("Convert failed: %v", err)
+		log.Printf("Convert failed: %v", err)
+		exit(1)
 	}
 }
 
@@ -375,7 +380,8 @@ func cmdConvertDir(args []string) {
 	defer stop()
 
 	if err := runConvertDir(ctx, *dbPath, dirPath, *workers, *convertDoc, *convertImage); err != nil {
-		log.Fatalf("Convert dir failed: %v", err)
+		log.Printf("Convert dir failed: %v", err)
+		exit(1)
 	}
 }
 
@@ -401,8 +407,8 @@ func runConvertDir(ctx context.Context, dbPath, dirPath string, workers int, con
 	return nil
 }
 
-// exit is swapped in tests to cover fatal CLI-argument paths without
-// terminating the test process.
+// exit is swapped in tests to cover fatal error paths without terminating
+// the test process.
 var exit = os.Exit
 
 // requireSelector exits unless at least one spec selector flag was provided.
@@ -522,7 +528,8 @@ func cmdPipeline(args []string) {
 	filtered := resolveSpecs(ctx, client, *specList, *specFlag, *seriesFlag, *release, !*noCache, *scrapeWorkers)
 
 	if err := runPipeline(ctx, *dbPath, client, filtered, *workers, *convertDoc, *convertImage, *timeout); err != nil {
-		log.Fatalf("Pipeline failed: %v", err)
+		log.Printf("Pipeline failed: %v", err)
+		exit(1)
 	}
 }
 

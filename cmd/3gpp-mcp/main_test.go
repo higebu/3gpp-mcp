@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1168,6 +1170,271 @@ func TestRunHelpers_DatabaseErrors(t *testing.T) {
 			}
 			assertNoWALSidecars(t, p)
 		})
+	}
+}
+
+// captureExit swaps the exit hook and returns a pointer to the recorded exit
+// code, -1 until exit is called.
+func captureExit(t *testing.T) *int {
+	t.Helper()
+	code := -1
+	orig := exit
+	exit = func(c int) { code = c }
+	t.Cleanup(func() { exit = orig })
+	return &code
+}
+
+// captureLog runs fn and returns whatever it wrote through the log package.
+func captureLog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	fn()
+	return buf.String()
+}
+
+// TestCmdConvert_FatalError covers cmdConvert's error exit: the run helper's
+// error is reported and the process exits 1 (via the exit hook), after the
+// helper has already closed the database.
+func TestCmdConvert_FatalError(t *testing.T) {
+	code := captureExit(t)
+	dbPath := filepath.Join(t.TempDir(), "out.db")
+	var logged string
+	_ = captureStdout(t, func() {
+		logged = captureLog(t, func() {
+			cmdConvert([]string{"-db", dbPath, filepath.Join(t.TempDir(), "missing.docx")})
+		})
+	})
+	if *code != 1 {
+		t.Errorf("exit code = %d, want 1", *code)
+	}
+	if !strings.Contains(logged, "Convert failed") {
+		t.Errorf("log = %q, want a 'Convert failed' report", logged)
+	}
+	assertNoWALSidecars(t, dbPath)
+}
+
+// TestCmdConvertDir_FatalError is the import-dir counterpart of
+// TestCmdConvert_FatalError.
+func TestCmdConvertDir_FatalError(t *testing.T) {
+	code := captureExit(t)
+	dbPath := filepath.Join(t.TempDir(), "dir.db")
+	logged := captureLog(t, func() {
+		// An empty directory has no .docx files, so the import fails.
+		cmdConvertDir([]string{"-db", dbPath, t.TempDir()})
+	})
+	if *code != 1 {
+		t.Errorf("exit code = %d, want 1", *code)
+	}
+	if !strings.Contains(logged, "Convert dir failed") {
+		t.Errorf("log = %q, want a 'Convert dir failed' report", logged)
+	}
+	assertNoWALSidecars(t, dbPath)
+}
+
+// TestCmdPipeline_FatalError covers cmdPipeline's error exit: the spec list
+// resolves fine, but the database path is a directory so runPipeline fails.
+func TestCmdPipeline_FatalError(t *testing.T) {
+	code := captureExit(t)
+	listPath := filepath.Join(t.TempDir(), "list.txt")
+	if err := os.WriteFile(listPath, []byte("23_series/23.501/23501-k10.zip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var logged string
+	_ = captureStdout(t, func() {
+		logged = captureLog(t, func() {
+			cmdPipeline([]string{"-latest", "-db", t.TempDir(), "-spec-list", listPath, "-no-cache"})
+		})
+	})
+	if *code != 1 {
+		t.Errorf("exit code = %d, want 1", *code)
+	}
+	if !strings.Contains(logged, "Pipeline failed") {
+		t.Errorf("log = %q, want a 'Pipeline failed' report", logged)
+	}
+}
+
+// serveTestDB creates an empty database with the schema so cmdServe's
+// read-only open succeeds.
+func serveTestDB(t *testing.T) string {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "serve.db")
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.InitSchema(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return dbPath
+}
+
+// TestCmdServe_ListenError covers the HTTP transport's listen failure exit:
+// the port is already taken, so cmdServe reports the error and exits 1.
+func TestCmdServe_ListenError(t *testing.T) {
+	code := captureExit(t)
+	taken := listenLocal(t)
+	defer taken.Close()
+
+	logged := captureLog(t, func() {
+		cmdServe([]string{
+			"-db", serveTestDB(t),
+			"-transport", "http",
+			"-addr", taken.Addr().String(),
+			"-no-fetch",
+		})
+	})
+	if *code != 1 {
+		t.Errorf("exit code = %d, want 1", *code)
+	}
+	if !strings.Contains(logged, "Server error") {
+		t.Errorf("log = %q, want a 'Server error' report", logged)
+	}
+}
+
+// TestCmdServe_HTTPGracefulShutdown runs the full serve command over the HTTP
+// transport and shuts it down with SIGTERM, the signal cmdServe registers for.
+// This is the only way to cover cmdServe's serve loop in-process.
+func TestCmdServe_HTTPGracefulShutdown(t *testing.T) {
+	// Safety net: if the port is stolen between Close and cmdServe's bind,
+	// the exit hook keeps the failure inside this test instead of killing
+	// the whole test process.
+	exitCh := make(chan int, 1)
+	orig := exit
+	exit = func(c int) {
+		select {
+		case exitCh <- c:
+		default:
+		}
+	}
+	t.Cleanup(func() { exit = orig })
+
+	dbPath := serveTestDB(t)
+	ln := listenLocal(t)
+	addr := ln.Addr().String()
+	ln.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cmdServe([]string{"-db", dbPath, "-transport", "http", "-addr", addr, "-no-fetch"})
+	}()
+
+	up := false
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		select {
+		case <-done:
+			code := 0
+			select {
+			case code = <-exitCh:
+			default:
+			}
+			t.Fatalf("cmdServe returned before serving (exit code %d)", code)
+		default:
+		}
+		resp, err := http.Get("http://" + addr + "/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				up = true
+			}
+		}
+		if up {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !up {
+		t.Fatal("server did not come up")
+	}
+
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("cmdServe did not shut down on SIGTERM")
+	}
+}
+
+// TestCmdServe_FailedDrainExitsNonZero runs cmdServe end to end, parks a
+// half-sent request so the drain deadline expires, and checks the failed
+// shutdown is reported through the exit hook instead of exiting 0.
+func TestCmdServe_FailedDrainExitsNonZero(t *testing.T) {
+	origTimeout := shutdownTimeout
+	shutdownTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { shutdownTimeout = origTimeout })
+
+	exitCh := make(chan int, 1)
+	orig := exit
+	exit = func(c int) {
+		select {
+		case exitCh <- c:
+		default:
+		}
+	}
+	t.Cleanup(func() { exit = orig })
+
+	dbPath := serveTestDB(t)
+	ln := listenLocal(t)
+	addr := ln.Addr().String()
+	ln.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cmdServe([]string{"-db", dbPath, "-transport", "http", "-addr", addr, "-no-fetch"})
+	}()
+
+	up := false
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		resp, err := http.Get("http://" + addr + "/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				up = true
+			}
+		}
+		if up {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !up {
+		t.Fatal("server did not come up")
+	}
+
+	// A connection with a half-sent request counts as active, so Shutdown
+	// cannot finish within the shortened drain deadline.
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("GET /health HTTP/1.1\r\nHost: x\r\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("cmdServe did not return after the failed drain")
+	}
+	select {
+	case code := <-exitCh:
+		if code != 1 {
+			t.Errorf("exit code = %d, want 1", code)
+		}
+	default:
+		t.Error("expected the failed drain to exit non-zero")
 	}
 }
 
