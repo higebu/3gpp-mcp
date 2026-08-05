@@ -292,7 +292,7 @@ keeps unstemmed search until rebuilt.
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `get_references` | Get cross-references between specs and RFCs | `spec_id` (required), `section_number`, `direction` (`"outgoing"` or `"incoming"`), `include_subsections` |
+| `get_references` | Get cross-references between specs and RFCs | `spec_id` (required), `section_number`, `direction` (`"outgoing"` or `"incoming"`), `include_subsections`, `offset` |
 
 ### OpenAPI definitions
 

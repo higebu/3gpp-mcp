@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -947,8 +948,9 @@ func TestHandleGetOpenAPI_FilteredPagination(t *testing.T) {
 }
 
 // TestHandleGetReferences_Truncation verifies the response cap: a spec-wide
-// incoming query over a heavily-cited spec is cut at MaxReferences with a
-// notice instead of serializing every row.
+// incoming query over a heavily-cited spec is cut at MaxReferences, the JSON
+// payload stays parseable, the truncation notice travels as its own content
+// item, and offset reaches the rows beyond the cap.
 func TestHandleGetReferences_Truncation(t *testing.T) {
 	d := setupTestDB(t)
 	handler := HandleGetReferences(d)
@@ -972,10 +974,73 @@ func TestHandleGetReferences_Truncation(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	text := getTextContent(result)
-	if !strings.Contains(text, fmt.Sprintf("[Truncated: showing %d of %d references", MaxReferences, MaxReferences+10)) {
-		t.Errorf("expected a truncation notice, got tail: %s", text[len(text)-200:])
+	var page []map[string]any
+	if err := json.Unmarshal([]byte(text), &page); err != nil {
+		t.Fatalf("truncated payload is not valid JSON: %v", err)
 	}
-	if got := strings.Count(text, `"source_spec_id"`); got != MaxReferences {
-		t.Errorf("expected %d serialized references, got %d", MaxReferences, got)
+	if len(page) != MaxReferences {
+		t.Errorf("expected %d serialized references, got %d", MaxReferences, len(page))
 	}
+	if len(result.Content) != 2 {
+		t.Fatalf("expected the notice as a second content item, got %d items", len(result.Content))
+	}
+	notice := result.Content[1].(*mcp.TextContent).Text
+	want := fmt.Sprintf("[Showing references 1-%d of %d. Use offset=%d to continue", MaxReferences, MaxReferences+10, MaxReferences)
+	if !strings.Contains(notice, want) {
+		t.Errorf("notice = %q, want it to contain %q", notice, want)
+	}
+
+	t.Run("offset reaches the remaining references", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetReferencesInput{
+			SpecID: "TS 23.501", Direction: "incoming", Offset: MaxReferences,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var rest []map[string]any
+		if err := json.Unmarshal([]byte(getTextContent(result)), &rest); err != nil {
+			t.Fatalf("offset payload is not valid JSON: %v", err)
+		}
+		if len(rest) != 10 {
+			t.Errorf("expected the 10 remaining references, got %d", len(rest))
+		}
+		if len(result.Content) != 2 {
+			t.Fatalf("expected a range notice, got %d content items", len(result.Content))
+		}
+		notice := result.Content[1].(*mcp.TextContent).Text
+		if !strings.Contains(notice, fmt.Sprintf("[Showing references %d-%d of %d.]", MaxReferences+1, MaxReferences+10, MaxReferences+10)) {
+			t.Errorf("notice = %q, want the final range without a continue hint", notice)
+		}
+	})
+
+	t.Run("offset past the end", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetReferencesInput{
+			SpecID: "TS 23.501", Direction: "incoming", Offset: MaxReferences * 10,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if text := getTextContent(result); text != "[]" {
+			t.Errorf("expected an empty JSON array payload, got: %s", text)
+		}
+		if len(result.Content) != 2 || !strings.Contains(result.Content[1].(*mcp.TextContent).Text, "No references at offset") {
+			t.Errorf("expected an out-of-range notice, got: %+v", result.Content)
+		}
+	})
+
+	t.Run("untruncated result has a single JSON content item", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetReferencesInput{
+			SpecID: "TS 33.203", Direction: "incoming",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Content) != 1 {
+			t.Errorf("expected no notice for an untruncated result, got %d content items", len(result.Content))
+		}
+		var page []map[string]any
+		if err := json.Unmarshal([]byte(getTextContent(result)), &page); err != nil {
+			t.Fatalf("payload is not valid JSON: %v", err)
+		}
+	})
 }
