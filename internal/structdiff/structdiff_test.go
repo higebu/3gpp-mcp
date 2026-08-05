@@ -102,21 +102,67 @@ func TestDiffClassifiesRetitleUnchangedAndContentChange(t *testing.T) {
 }
 
 // TestSectionLines checks the join used for diffing: trailing blank lines are
-// trimmed and sections are separated by one empty line.
+// trimmed, sections are separated by one empty line, and empty input or empty
+// sections contribute no phantom or trailing blank lines (#102) — those would
+// surface as spurious added/removed lines in compare_versions diffs.
 func TestSectionLines(t *testing.T) {
-	secs := []db.Section{
-		{Content: "# A\nline1\n\n"},
-		{Content: "# B\nline2"},
+	tests := []struct {
+		name string
+		secs []db.Section
+		want []string
+	}{
+		{
+			name: "two sections joined by one blank line",
+			secs: []db.Section{
+				{Content: "# A\nline1\n\n"},
+				{Content: "# B\nline2"},
+			},
+			want: []string{"# A", "line1", "", "# B", "line2"},
+		},
+		{
+			name: "nil input yields nil, not a phantom blank line",
+			secs: nil,
+			want: nil,
+		},
+		{
+			name: "a single empty section yields nil",
+			secs: []db.Section{{Number: "1", Title: "A"}},
+			want: nil,
+		},
+		{
+			name: "a trailing empty section leaves no trailing blanks",
+			secs: []db.Section{
+				{Number: "1", Content: "x"},
+				{Number: "2"},
+			},
+			want: []string{"x"},
+		},
+		{
+			name: "a leading empty section adds no separator",
+			secs: []db.Section{
+				{Number: "1", Content: "\n"},
+				{Number: "2", Content: "y"},
+			},
+			want: []string{"y"},
+		},
+		{
+			name: "single non-empty section",
+			secs: []db.Section{{Number: "1", Content: "x"}},
+			want: []string{"x"},
+		},
 	}
-	got := SectionLines(secs)
-	want := []string{"# A", "line1", "", "# B", "line2"}
-	if len(got) != len(want) {
-		t.Fatalf("SectionLines = %q, want %q", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("SectionLines[%d] = %q, want %q", i, got[i], want[i])
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SectionLines(tt.secs)
+			if len(got) != len(tt.want) {
+				t.Fatalf("SectionLines = %q, want %q", got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Fatalf("SectionLines[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
 	}
 }
 
