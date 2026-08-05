@@ -12,7 +12,7 @@ release_flag = $(if $(filter latest,$(RELEASE)),--latest,--release $(RELEASE))
 
 # Build the MCP server
 build:
-	mkdir -p $(BIN_DIR)
+	mkdir -p "$(BIN_DIR)"
 	go build -o $(BIN_DIR)/3gpp-mcp ./cmd/3gpp-mcp
 
 # Install the MCP server
@@ -63,5 +63,5 @@ test:
 
 # Clean build artifacts
 clean:
-	rm -rf $(BIN_DIR)
-	rm -f $(DB_PATH)
+	rm -rf "$(BIN_DIR)"
+	rm -f "$(DB_PATH)"
