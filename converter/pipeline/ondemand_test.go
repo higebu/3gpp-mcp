@@ -85,6 +85,44 @@ func TestResolveVersion(t *testing.T) {
 	}
 }
 
+// TestResolveVersionRel27Token checks that an r-prefixed archive token resolves
+// exactly: 'r' is base-36 digit 27, so once Rel-27 archives exist, "r18" names
+// v27.1.8 and must not be read as a "Rel-18" release selector.
+func TestResolveVersionRel27Token(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/", func(w http.ResponseWriter, _ *http.Request) {
+		for _, name := range []string{"23501-i60.zip", "23501-r18.zip", "23501-r20.zip"} {
+			fmt.Fprintf(w, `<a href="%s">%s</a>`+"\n", name, name)
+		}
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	tests := []struct {
+		name    string
+		request string
+		want    string
+	}{
+		{name: "exact r token", request: "r18", want: "r18"},
+		{name: "uppercase r token", request: "R18", want: "r18"},
+		{name: "dotted Rel-27 version", request: "27.1.8", want: "r18"},
+		{name: "release selector picks newest in Rel-27", request: "Rel-27", want: "r20"},
+		{name: "bare release number still selects Rel-18", request: "18", want: "i60"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sv, _, err := ResolveVersion(context.Background(), client, "TS 23.501", tt.request, false)
+			if err != nil {
+				t.Fatalf("ResolveVersion(%q): %v", tt.request, err)
+			}
+			if sv.Version != tt.want {
+				t.Errorf("ResolveVersion(%q) = %q, want %q", tt.request, sv.Version, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveVersionUnknownSpec(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -108,7 +146,7 @@ func TestReleaseRequest(t *testing.T) {
 		{"18", 18, true},
 		{"Rel-18", 18, true},
 		{"rel-18", 18, true},
-		{"R18", 18, true},
+		{"REL-27", 27, true},
 		{"18.6.0", 0, false},
 		{"i60", 0, false},
 		{"", 0, false},
@@ -118,6 +156,10 @@ func TestReleaseRequest(t *testing.T) {
 		{"920", 0, false},
 		{"100", 0, false},
 		{"Rel-920", 920, true},
+		// 'r' is base-36 digit 27, so "r18" is the archive token for v27.1.8;
+		// a bare R/r prefix must not turn it into a Rel-18 selector.
+		{"r18", 0, false},
+		{"R18", 0, false},
 	}
 	for _, tt := range tests {
 		got, ok := releaseRequest(tt.in)

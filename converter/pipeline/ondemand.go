@@ -100,10 +100,14 @@ func ResolveVersion(ctx context.Context, client *http.Client, specID, version st
 // A dotted version is never a release selector, so "18.6.0" does not match.
 // Without a prefix, only one or two digits count: a three-digit string such
 // as "920" is a base-36 archive token (9.2.0), not a request for Rel-920.
+// A bare "R"/"r" prefix is not accepted either: 'r' is base-36 digit 27, so
+// an r-prefixed three-character string such as "r18" is the archive token for
+// v27.1.8, and treating it as "Rel-18" would silently resolve the wrong
+// document. Such strings fall through to exact-token matching instead.
 func releaseRequest(s string) (int, bool) {
 	trimmed := s
 	prefixed := false
-	for _, prefix := range []string{"Rel-", "rel-", "REL-", "R", "r"} {
+	for _, prefix := range []string{"Rel-", "rel-", "REL-"} {
 		if len(trimmed) > len(prefix) && trimmed[:len(prefix)] == prefix {
 			trimmed = trimmed[len(prefix):]
 			prefixed = true
