@@ -2,6 +2,8 @@ package web
 
 import (
 	"bytes"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"fmt"
 	htmlpkg "html"
 	"net/url"
@@ -98,7 +100,24 @@ func renderMarkdown(content, specID, version string, bracketMap map[string]strin
 	// <span> that the client-side KaTeX renderer targets. The inner LaTeX is
 	// normalized to single HTML-escaping so both raw (paragraph) and
 	// pre-escaped (table cell) math produce correct textContent.
-	content, mathSpans := protectMath(content)
+	//
+	// Math protection applies only to text outside fenced code blocks and
+	// inline code spans: a '$' inside a code fence is code, not math, and
+	// goldmark escapes code content itself. The placeholder token is random
+	// per render so literal text can never collide with a placeholder.
+	token := newMathToken()
+	var mathSpans []string
+	segs := splitCodeSegments(content)
+	var sb strings.Builder
+	sb.Grow(len(content))
+	for _, seg := range segs {
+		if seg.code {
+			sb.WriteString(seg.text)
+			continue
+		}
+		sb.WriteString(protectMath(seg.text, token, &mathSpans))
+	}
+	content = sb.String()
 
 	var buf bytes.Buffer
 	if err := md.Convert([]byte(content), &buf); err != nil {
@@ -106,22 +125,35 @@ func renderMarkdown(content, specID, version string, bracketMap map[string]strin
 	}
 	out := buf.String()
 	for i, span := range mathSpans {
-		out = strings.ReplaceAll(out, mathPlaceholder(i), span)
+		out = strings.Replace(out, mathPlaceholder(token, i), span, 1)
 	}
 	return out
 }
 
-// mathPlaceholder returns an inert token that survives goldmark conversion
-// unchanged (plain alphanumerics trigger no Markdown syntax).
-func mathPlaceholder(i int) string {
-	return fmt.Sprintf("xxkatexmathxx%dxxkatexmathxx", i)
+// newMathToken returns a random alphanumeric token for this render's math
+// placeholders. Randomness guarantees document text cannot contain a
+// placeholder lookalike, so re-injection only ever hits real placeholders.
+func newMathToken() string {
+	var b [12]byte
+	if _, err := cryptorand.Read(b[:]); err != nil {
+		// Never happens in practice; a collision here only misrenders math.
+		return "katexmathfallbacktoken"
+	}
+	return "katexmath" + hex.EncodeToString(b[:])
 }
 
-// protectMath extracts LaTeX math spans, replacing each with a placeholder, and
-// returns the rewritten content plus the <span> HTML to re-inject afterwards.
-func protectMath(content string) (string, []string) {
-	var spans []string
-	rewritten := mathRE.ReplaceAllStringFunc(content, func(match string) string {
+// mathPlaceholder returns an inert token that survives goldmark conversion
+// unchanged (plain alphanumerics trigger no Markdown syntax). The trailing
+// "x" delimits the index so no placeholder is a substring of another.
+func mathPlaceholder(token string, i int) string {
+	return fmt.Sprintf("%s%dx", token, i)
+}
+
+// protectMath extracts LaTeX math spans from text, replacing each with a
+// placeholder built from token, and appends the <span> HTML to re-inject
+// after conversion to spans.
+func protectMath(text, token string, spans *[]string) string {
+	return mathRE.ReplaceAllStringFunc(text, func(match string) string {
 		sub := mathRE.FindStringSubmatch(match)
 		display := sub[1] != ""
 		latex, class := sub[2], "math-inline"
@@ -129,11 +161,10 @@ func protectMath(content string) (string, []string) {
 			latex, class = sub[1], "math-display"
 		}
 		latex = htmlpkg.EscapeString(htmlpkg.UnescapeString(latex))
-		i := len(spans)
-		spans = append(spans, fmt.Sprintf(`<span class="%s">%s</span>`, class, latex))
-		return mathPlaceholder(i)
+		i := len(*spans)
+		*spans = append(*spans, fmt.Sprintf(`<span class="%s">%s</span>`, class, latex))
+		return mathPlaceholder(token, i)
 	})
-	return rewritten, spans
 }
 
 // highlightYAML applies Chroma syntax highlighting to YAML content.

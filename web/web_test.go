@@ -108,6 +108,71 @@ func TestRenderMarkdown_MathProtected(t *testing.T) {
 	})
 }
 
+// TestRenderMarkdown_MathSkipsCode verifies that '$' inside fenced code
+// blocks and inline code spans is code, not math: no placeholder may be
+// injected there, and the code must render verbatim.
+func TestRenderMarkdown_MathSkipsCode(t *testing.T) {
+	t.Run("fenced block keeps dollars", func(t *testing.T) {
+		content := "```asn1\nprice ::= $100 and $200\n```\n"
+		got := renderMarkdown(content, "TS 23.501", "", nil)
+		// Chroma may tokenize around the dollars, so assert on the characters
+		// rather than the contiguous string.
+		if strings.Count(got, "$") != 2 {
+			t.Errorf("both dollars must survive in the code block, got:\n%s", got)
+		}
+		if strings.Contains(got, "math-inline") {
+			t.Errorf("no math span may be injected into a code block, got:\n%s", got)
+		}
+		// The asn1 fence must still be syntax-highlighted.
+		if !strings.Contains(got, `class="chroma"`) {
+			t.Errorf("expected Chroma highlighting to survive, got:\n%s", got)
+		}
+	})
+
+	t.Run("inline code keeps dollars, surrounding math still works", func(t *testing.T) {
+		content := "Set `$PATH` and `$HOME` first; the value $x^2$ is math."
+		got := renderMarkdown(content, "TS 23.501", "", nil)
+		if !strings.Contains(got, "<code>$PATH</code>") || !strings.Contains(got, "<code>$HOME</code>") {
+			t.Errorf("inline code must keep its dollars, got:\n%s", got)
+		}
+		if !strings.Contains(got, `<span class="math-inline">x^2</span>`) {
+			t.Errorf("math outside code must still be protected, got:\n%s", got)
+		}
+	})
+
+	t.Run("angle brackets in code stay code", func(t *testing.T) {
+		content := "```\na <SUPI> in code\n```\n\nand `<NSSAI>` inline."
+		got := renderMarkdown(content, "TS 23.501", "", nil)
+		if !strings.Contains(got, "&lt;SUPI&gt;") {
+			t.Errorf("code block angle brackets must be goldmark-escaped, got:\n%s", got)
+		}
+		if !strings.Contains(got, "<code>&lt;NSSAI&gt;</code>") {
+			t.Errorf("inline code angle brackets must be goldmark-escaped, got:\n%s", got)
+		}
+		if strings.Contains(got, "&amp;lt;") {
+			t.Errorf("code content must not be double-escaped, got:\n%s", got)
+		}
+	})
+}
+
+// TestRenderMarkdown_PlaceholderLiteralUntouched verifies that literal text
+// resembling a math placeholder is never hit by re-injection: placeholders
+// are random per render, so only the exact spans protectMath extracted are
+// substituted.
+func TestRenderMarkdown_PlaceholderLiteralUntouched(t *testing.T) {
+	content := "Literal token xxkatexmathxx0xxkatexmathxx in prose.\n\nAnd math $a+b$ after it."
+	got := renderMarkdown(content, "TS 23.501", "", nil)
+	if !strings.Contains(got, "xxkatexmathxx0xxkatexmathxx") {
+		t.Errorf("literal placeholder-lookalike text must survive verbatim, got:\n%s", got)
+	}
+	if want := `<span class="math-inline">a+b</span>`; !strings.Contains(got, want) {
+		t.Errorf("expected the real math span %s, got:\n%s", want, got)
+	}
+	if strings.Count(got, "math-inline") != 1 {
+		t.Errorf("exactly one math span expected, got:\n%s", got)
+	}
+}
+
 func TestRefURL(t *testing.T) {
 	tests := []struct {
 		name string
