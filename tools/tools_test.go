@@ -658,6 +658,22 @@ func TestHandleGetReferences(t *testing.T) {
 		}
 	})
 
+	t.Run("invalid direction", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetReferencesInput{
+			SpecID:    "TS 24.229",
+			Direction: "sideways",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError {
+			t.Error("expected error result for an invalid direction")
+		}
+		if text := getTextContent(result); !strings.Contains(text, "invalid direction") {
+			t.Errorf("expected the direction error, got: %s", text)
+		}
+	})
+
 	t.Run("outgoing without section", func(t *testing.T) {
 		result, _, err := handler(context.Background(), nil, GetReferencesInput{
 			SpecID:    "TS 24.229",
@@ -1010,6 +1026,25 @@ func TestHandleGetReferences_Truncation(t *testing.T) {
 		notice := result.Content[1].(*mcp.TextContent).Text
 		if !strings.Contains(notice, fmt.Sprintf("[Showing references %d-%d of %d.]", MaxReferences+1, MaxReferences+10, MaxReferences+10)) {
 			t.Errorf("notice = %q, want the final range without a continue hint", notice)
+		}
+	})
+
+	t.Run("negative offset treated as zero", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetReferencesInput{
+			SpecID: "TS 23.501", Direction: "incoming", Offset: -7,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var page []map[string]any
+		if err := json.Unmarshal([]byte(getTextContent(result)), &page); err != nil {
+			t.Fatalf("payload is not valid JSON: %v", err)
+		}
+		if len(page) != MaxReferences {
+			t.Errorf("expected the first page of %d references, got %d", MaxReferences, len(page))
+		}
+		if len(result.Content) != 2 || !strings.Contains(result.Content[1].(*mcp.TextContent).Text, "[Showing references 1-") {
+			t.Errorf("expected the first-page notice, got: %+v", result.Content)
 		}
 	})
 
