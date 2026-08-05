@@ -1022,6 +1022,20 @@ func sanitizeFTS5Query(query string) string {
 
 		j := i
 		for j < n && query[j] != ' ' && query[j] != '\t' && query[j] != '\n' {
+			if query[j] == '"' {
+				// A quoted phrase riding inside a token (content:"foo bar")
+				// carries its own spaces. Consume it whole, otherwise the
+				// split on whitespace tears the phrase in two and the halves
+				// end up as separate, unrelated match terms.
+				j++
+				for j < n && query[j] != '"' {
+					j++
+				}
+				if j < n {
+					j++
+				}
+				continue
+			}
 			j++
 		}
 		token := query[i:j]

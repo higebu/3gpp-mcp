@@ -397,6 +397,9 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"empty column filter quoted", "content:", `"content:"`},
 		{"balanced quoted column filter unchanged", `content:"band"`, `content:"band"`},
 		{"unterminated quoted column filter repaired", `content:"band`, `content:"band"`},
+		{"multi-word phrase column filter kept whole", `content:"core network"`, `content:"core network"`},
+		{"multi-word phrase column filter with trailing term", `title:"band requirements" AMF`, `title:"band requirements" AMF`},
+		{"unterminated multi-word phrase column filter repaired", `content:"core network`, `content:"core network"`},
 	}
 
 	for _, tt := range tests {
@@ -443,7 +446,8 @@ func TestSanitizeFTS5Query_ExecutesWithoutError(t *testing.T) {
 		"AMF AND -excluded", "AMF OR -excluded",
 		"-excluded", "-one-two",
 		`Rel-18"`, `"core network`, "(38.331 OR SMF)", "content:",
-		`AMF"`, `content:"band`,
+		`AMF"`, `content:"band`, `content:"core network"`, `content:"core network`,
+		"38.10*", "title:38.10*", "RRCSetup-IEs*", "38.10**",
 	}
 	for _, q := range queries {
 		sanitized := sanitizeFTS5Query(q)
@@ -453,6 +457,40 @@ func TestSanitizeFTS5Query_ExecutesWithoutError(t *testing.T) {
 			continue
 		}
 		rows.Close()
+	}
+}
+
+// TestSanitizeFTS5Query_ColumnFilterPhrase checks that a phrase inside a
+// column filter still matches as a phrase. Splitting the token on whitespace
+// before recognising the quotes turned content:"foo bar" into two independent
+// terms, which matched documents that never contain the phrase at all.
+func TestSanitizeFTS5Query_ColumnFilterPhrase(t *testing.T) {
+	dbConn, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbConn.Close()
+	dbConn.SetMaxOpenConns(1)
+
+	if _, err := dbConn.Exec(`CREATE VIRTUAL TABLE t USING fts5(spec_id, number, title, content)`); err != nil {
+		t.Fatal(err)
+	}
+	// "network" is in the title and "core" is in the content, but the phrase
+	// "core network" appears in neither column.
+	if _, err := dbConn.Exec(
+		`INSERT INTO t(spec_id, number, title, content) VALUES (?, ?, ?, ?)`,
+		"TS 23.501", "4.2", "network architecture", "the core is described here",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	var n int
+	sanitized := sanitizeFTS5Query(`content:"core network"`)
+	if err := dbConn.QueryRow(`SELECT count(*) FROM t WHERE t MATCH ?`, sanitized).Scan(&n); err != nil {
+		t.Fatalf("query sanitized to %q, which FTS5 rejected: %v", sanitized, err)
+	}
+	if n != 0 {
+		t.Errorf("content:%q sanitized to %q and matched %d rows, want 0", "core network", sanitized, n)
 	}
 }
 
