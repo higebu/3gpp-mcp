@@ -495,6 +495,79 @@ func TestParseSections_SIPImageParagraphEndsBlock(t *testing.T) {
 	}
 }
 
+// A backslash-continued line only folds the first line of the next
+// paragraph into the block, and never a sentence: a prose paragraph after a
+// value fold must not be absorbed (issue #101).
+func TestBlockContinues_BackslashContinuation(t *testing.T) {
+	para := func(text string) paragraphInfo {
+		return paragraphInfo{Text: text, Runs: []runInfo{{Text: text}}}
+	}
+	const foldedLast = `a=fmtp:97 mode-set=0,2 \`
+
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{
+			name: "wrapped value remainder continues",
+			text: "sprop-parameter-sets= Z2QAHpWQC0PaAfyQ,aOuOoA==",
+			want: true,
+		},
+		{
+			name: "wrapped remainder followed by field lines continues",
+			text: "mode-change-period=2\na=control:rtsp://example.com/x",
+			want: true,
+		},
+		{
+			name: "prose sentence does not continue",
+			text: "This clause describes how the session is established.",
+			want: false,
+		},
+		{
+			name: "prose after the wrapped remainder does not continue",
+			text: "mode-change-period=2\nThe session is then established as usual",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sipBlockContinues(para(tt.text), foldedLast); got != tt.want {
+				t.Errorf("sipBlockContinues(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+			if got := sdpBlockContinues(para(tt.text), foldedLast); got != tt.want {
+				t.Errorf("sdpBlockContinues(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+		})
+	}
+}
+
+// Full-pipeline shape of issue #101: a backslash-wrapped SDP value followed
+// by a prose paragraph — the prose ends the block instead of being pulled
+// into the fence verbatim.
+func TestParseSections_SDPBackslashDoesNotSwallowProse(t *testing.T) {
+	elements := []bodyElement{
+		sipHeading("1\tSDP"),
+		sipPara("v=0\no=ghost 1 1 IN IP4 10.0.0.1\ns=example\nt=0 0"),
+		sipPara(`a=fmtp:97 mode-set=0,2 \`),
+		sipPara("This clause describes how the session is established."),
+	}
+	sections := sipParse(elements)
+	content := sections[0].Content
+	if len(content) != 2 {
+		t.Fatalf("expected fence + prose, got %v", content)
+	}
+	if !strings.HasPrefix(content[0], "```sdp\n") || !strings.Contains(content[0], `a=fmtp:97 mode-set=0,2 \`) {
+		t.Errorf("expected the folded field line inside the fence, got %q", content[0])
+	}
+	if strings.Contains(content[0], "This clause") {
+		t.Errorf("prose swallowed into the fence: %q", content[0])
+	}
+	if content[1] != "This clause describes how the session is established." {
+		t.Errorf("expected the prose paragraph after the fence, got %q", content[1])
+	}
+}
+
 func TestSDPFieldLineCount(t *testing.T) {
 	tests := []struct {
 		name          string

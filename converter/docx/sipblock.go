@@ -144,7 +144,13 @@ func sdpFieldLine(line string) bool {
 // backslash-continued line counts, e.g. the wrapped a=fmtp value in
 // TS 26.234 A.1).
 func sdpFieldLineCount(text string) (count int, allFields bool) {
-	prevContinued := false
+	return sdpFieldLinesFrom(text, false)
+}
+
+// sdpFieldLinesFrom is sdpFieldLineCount with the initial continuation state
+// supplied: prevContinued reports whether the line preceding text ended with
+// a backslash, exempting text's first line from the field-line check.
+func sdpFieldLinesFrom(text string, prevContinued bool) (count int, allFields bool) {
 	for _, ln := range strings.Split(text, "\n") {
 		ln = strings.TrimSpace(ln)
 		if ln == "" {
@@ -216,12 +222,40 @@ func sdpExampleStart(elements []bodyElement, idx int) (label, text string, ok bo
 	return label, rest, true
 }
 
+// wrappedValueLine reports whether line can be the wrapped remainder of a
+// backslash-folded value. A trailing period marks a sentence, not a value —
+// the same signal sdpFieldLine relies on — so a prose paragraph following a
+// folded value is not mistaken for its continuation (issue #101).
+func wrappedValueLine(line string) bool {
+	return !strings.HasSuffix(strings.TrimSpace(line), ".")
+}
+
+// sipMessageLinesFrom reports whether every non-blank line of text is
+// message-shaped (a SIP start, header or SDP field line), with a line
+// following a backslash-continued one exempt. prevContinued supplies the
+// continuation state of the line preceding text.
+func sipMessageLinesFrom(text string, prevContinued bool) bool {
+	for _, ln := range strings.Split(text, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			prevContinued = false
+			continue
+		}
+		if !prevContinued && !sipStartLine(ln) && !sipHeaderLine(ln) && !sdpFieldLine(ln) {
+			return false
+		}
+		prevContinued = strings.HasSuffix(ln, `\`)
+	}
+	return true
+}
+
 // sipBlockContinues reports whether the paragraph continues a SIP message
 // block: a blank line, another start line (back-to-back messages), a
-// header line, an SDP body line, or any line after a backslash-continued
-// one. Leading whitespace is ignored when matching — TS 23.700-19 indents
-// every message line with a tab — but indentation alone never continues a
-// block, since the surrounding prose is indented the same way.
+// header line, an SDP body line, or the wrapped remainder of a
+// backslash-continued line. Leading whitespace is ignored when matching —
+// TS 23.700-19 indents every message line with a tab — but indentation
+// alone never continues a block, since the surrounding prose is indented
+// the same way.
 func sipBlockContinues(info paragraphInfo, lastLine string) bool {
 	if len(info.Images) > 0 || info.SkippedDiagramLabels != nil {
 		return false
@@ -231,15 +265,22 @@ func sipBlockContinues(info paragraphInfo, lastLine string) bool {
 		return true
 	}
 	if strings.HasSuffix(strings.TrimSpace(lastLine), `\`) {
-		return true
+		// The backslash folds the value onto the first line of this
+		// paragraph only: that line is exempt from the shape check unless it
+		// reads like a sentence, and the remaining lines must still be
+		// message-shaped, so a value fold cannot pull a whole prose
+		// paragraph into the fence (issue #101).
+		first, rest, _ := strings.Cut(t, "\n")
+		return wrappedValueLine(first) &&
+			sipMessageLinesFrom(rest, strings.HasSuffix(strings.TrimSpace(first), `\`))
 	}
 	line := strings.TrimSpace(sipFirstLine(t))
 	return sipStartLine(line) || sipHeaderLine(line) || sdpFieldLine(line)
 }
 
 // sdpBlockContinues reports whether the paragraph continues a standalone
-// SDP block: a blank line, further field lines, or any line after a
-// backslash-continued one. SIP headers deliberately do not continue an
+// SDP block: a blank line, further field lines, or the wrapped remainder of
+// a backslash-continued line. SIP headers deliberately do not continue an
 // SDP-only block.
 func sdpBlockContinues(info paragraphInfo, lastLine string) bool {
 	if len(info.Images) > 0 || info.SkippedDiagramLabels != nil {
@@ -250,7 +291,14 @@ func sdpBlockContinues(info paragraphInfo, lastLine string) bool {
 		return true
 	}
 	if strings.HasSuffix(strings.TrimSpace(lastLine), `\`) {
-		return true
+		// Same first-line-only exemption as sipBlockContinues (issue #101):
+		// the remaining lines must still be SDP field lines.
+		first, rest, _ := strings.Cut(t, "\n")
+		if !wrappedValueLine(first) {
+			return false
+		}
+		_, allFields := sdpFieldLinesFrom(rest, strings.HasSuffix(strings.TrimSpace(first), `\`))
+		return allFields
 	}
 	_, allFields := sdpFieldLineCount(t)
 	return allFields
