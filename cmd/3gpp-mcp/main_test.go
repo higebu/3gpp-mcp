@@ -1095,6 +1095,82 @@ func TestFinalizeWorkingCopy_StatError(t *testing.T) {
 	}
 }
 
+// TestFinalizeWorkingCopy_RemoveError checks that a sidecar that cannot be
+// removed refuses the rename instead of being silently ignored: a stale
+// sidecar next to the next run's working copy would be picked up as its WAL.
+func TestFinalizeWorkingCopy_RemoveError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "3gpp.db.new")
+	// A non-empty directory in the sidecar's place makes os.Remove fail with
+	// ENOTEMPTY, an error that is not os.ErrNotExist.
+	if err := os.MkdirAll(filepath.Join(path+"-shm", "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	d := seedWorkingCopy(t, filepath.Join(dir, "real.db"))
+	err := finalizeWorkingCopy(d, path)
+	if err == nil {
+		t.Fatal("expected an error when a sidecar cannot be removed")
+	}
+	if !strings.Contains(err.Error(), "remove") {
+		t.Errorf("error = %v, want a remove failure report", err)
+	}
+}
+
+// TestHTTPListenAddr covers the ListenAndServe-compatible default for an
+// empty listen address.
+func TestHTTPListenAddr(t *testing.T) {
+	if got := httpListenAddr(""); got != ":http" {
+		t.Errorf("httpListenAddr(\"\") = %q, want \":http\"", got)
+	}
+	if got := httpListenAddr("127.0.0.1:8080"); got != "127.0.0.1:8080" {
+		t.Errorf("httpListenAddr passthrough = %q, want unchanged", got)
+	}
+}
+
+// TestRunHelpers_DatabaseErrors covers the open and init-schema error branches
+// shared by the run helpers extracted for #105.
+func TestRunHelpers_DatabaseErrors(t *testing.T) {
+	ctx := context.Background()
+	helpers := map[string]func(dbPath string) error{
+		"convert": func(p string) error {
+			return runConvert(ctx, p, "unused.docx", false)
+		},
+		"convert-dir": func(p string) error {
+			return runConvertDir(ctx, p, t.TempDir(), 1, false, false)
+		},
+		"pipeline": func(p string) error {
+			return runPipeline(ctx, p, nil, nil, 1, false, false, time.Second)
+		},
+	}
+	for name, run := range helpers {
+		t.Run(name, func(t *testing.T) {
+			// A directory is not a valid database file, so opening fails.
+			if err := run(t.TempDir()); err == nil || !strings.Contains(err.Error(), "open database") {
+				t.Errorf("open error = %v, want an \"open database\" failure", err)
+			}
+
+			// A pre-existing view named "specs" makes InitSchema fail
+			// (its index cannot be created on a view) after a clean open.
+			p := filepath.Join(t.TempDir(), "conflict.db")
+			d, err := db.OpenReadWrite(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := d.Exec("CREATE VIEW specs AS SELECT 1 AS id"); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := run(p); err == nil || !strings.Contains(err.Error(), "init schema") {
+				t.Errorf("schema error = %v, want an \"init schema\" failure", err)
+			}
+			assertNoWALSidecars(t, p)
+		})
+	}
+}
+
 // assertNoWALSidecars fails the test when dbPath has -wal/-shm files left
 // behind — the symptom of exiting without closing a WAL-mode database (#105).
 func assertNoWALSidecars(t *testing.T, dbPath string) {

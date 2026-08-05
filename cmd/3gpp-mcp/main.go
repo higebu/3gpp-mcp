@@ -252,12 +252,7 @@ func cmdServe(args []string) {
 			IdleTimeout:       120 * time.Second,
 		}
 
-		if *addr == "" {
-			// http.Server.ListenAndServe treated an empty Addr as ":http";
-			// net.Listen would pick an ephemeral port instead.
-			*addr = ":http"
-		}
-		ln, err := net.Listen("tcp", *addr)
+		ln, err := net.Listen("tcp", httpListenAddr(*addr))
 		if err != nil {
 			log.Fatalf("Server error: %v", err)
 		}
@@ -271,6 +266,16 @@ func cmdServe(args []string) {
 	default:
 		log.Fatalf("Unknown transport: %s", *transport)
 	}
+}
+
+// httpListenAddr returns the TCP address the HTTP transport binds. An empty
+// addr keeps http.Server.ListenAndServe's historical meaning of ":http";
+// net.Listen alone would pick an ephemeral port instead.
+func httpListenAddr(addr string) string {
+	if addr == "" {
+		return ":http"
+	}
+	return addr
 }
 
 // shutdownTimeout bounds the graceful drain when the HTTP server shuts down.
