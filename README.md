@@ -196,7 +196,14 @@ Browse specifications in your browser by adding `--web` to the HTTP transport:
 # Web viewer:   http://localhost:8080/
 ```
 
-Features: spec list with filtering, section viewer with TOC sidebar, full-text search with pagination, past-version browsing (versions are listed per spec and downloaded on demand, like the MCP tools), version comparison (structural summary and per-section diffs), embedded images, cross-reference links, OpenAPI definitions with syntax highlighting, dark mode, responsive design.
+Features: spec list with filtering, section viewer with TOC sidebar, full-text search with pagination, past-version browsing (versions are listed per spec and downloaded on demand, like the MCP tools), version comparison (structural summary and per-section diffs), embedded images, cross-reference links, OpenAPI definitions with syntax highlighting, LaTeX math rendering, dark mode, responsive design.
+
+Code blocks are syntax-highlighted per notation — ASN.1, Diameter, SIP/RTSP,
+SDP, XML and YAML (see [Code blocks](#code-blocks)). The color theme is
+selectable from the settings popover (gear icon) in the navbar — Catppuccin
+(default), GitHub, Monokai or Xcode/Dracula — and is stored in the browser, so
+it needs no server state. Each theme has a light and a dark variant, picked by
+the site's light/dark mode.
 
 ## MCP Tools
 
@@ -308,6 +315,34 @@ The `build` command extracts images from DOCX files and stores them in the datab
 3gpp-mcp build --latest --db data/3gpp.db --convert-image
 ```
 
+Figures are referenced from the section text in a single notation, whatever the
+image format: `![Figure](image://NAME?w=&h=)` in body text and
+`<img src="image://NAME?w=&h=" ...>` inside table cells. Pass that `NAME` to
+`get_image`; both the original filename (`image3.emf`) and the converted one
+(`image3.png`) resolve.
+
+### Code blocks
+
+Section text carries tagged code fences, so both LLMs and the web viewer can
+tell the notations apart:
+
+| Fence | Content |
+|-------|---------|
+| ` ```asn1 ` | ASN.1 modules between the `-- ASN1START` / `-- ASN1STOP` markers |
+| ` ```diameter ` | Diameter command and grouped-AVP definitions (RFC 6733 CCF) |
+| ` ```xml ` | XML schemas, XML body examples and DTDs |
+| ` ```sip ` | SIP/RTSP message examples |
+| ` ```sdp ` | Standalone SDP session descriptions |
+| ` ``` ` | Anything else the source document styles as code |
+
+Diameter, XML, SIP and SDP blocks carry no code style in the source `.docx`, so
+they are recognized by content during conversion. The web viewer highlights all
+of them.
+
+Tagged fences and the unified image notation are produced at build time, so a
+database built before these changes keeps the old plain output — rebuild it
+with `3gpp-mcp build` (or `make build-db`) to pick them up.
+
 ## Tips
 
 ### Separate databases per release
@@ -397,6 +432,9 @@ Download and import specifications into the database (recommended for initial se
 | `--workers` | Number of parallel workers | NumCPU |
 | `--convert-doc` | Convert `.doc` files to `.docx` using LibreOffice | `false` |
 | `--convert-image` | Convert EMF/WMF images to PNG using LibreOffice | `false` |
+| `--spec-list` | Use a spec list file instead of scraping the archive | |
+| `--no-cache` | Disable the spec list cache | `false` |
+| `--scrape-workers` | Concurrency for scraping spec listings (`0` = auto) | `0` |
 | `--timeout` | HTTP timeout | `30s` |
 
 ### `download`
@@ -412,6 +450,9 @@ Download specifications without conversion.
 | `--output-dir` | Output directory | `specs` |
 | `--parallel` | Number of parallel downloads | NumCPU |
 | `--convert-doc` | Convert `.doc` to `.docx` using LibreOffice | `false` |
+| `--spec-list` | Use a spec list file instead of scraping the archive | |
+| `--no-cache` | Disable the spec list cache | `false` |
+| `--scrape-workers` | Concurrency for scraping spec listings (`0` = auto) | `0` |
 | `--timeout` | HTTP timeout | `30s` |
 
 ### `import`
@@ -452,4 +493,29 @@ Update specifications in the database to latest versions.
 | `--workers` | Number of parallel workers | NumCPU |
 | `--convert-doc` | Convert `.doc` to `.docx` using LibreOffice | `false` |
 | `--convert-image` | Convert EMF/WMF images to PNG using LibreOffice | `false` |
+| `--spec-list` | Use a spec list file instead of scraping the archive | |
+| `--no-cache` | Disable the spec list cache | `false` |
+| `--scrape-workers` | Concurrency for scraping spec listings (`0` = auto) | `0` |
 | `--timeout` | HTTP timeout | `30s` |
+
+### `completion`
+
+Print a shell completion script.
+
+```bash
+3gpp-mcp completion bash    # or zsh, fish
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `THREEGPP_MCP_TRANSPORT` | Transport for `serve` (`stdio` or `http`); overridden by `--transport` |
+| `THREEGPP_MCP_ADDR` | HTTP listen address for `serve`; overridden by `--addr` |
+| `THREEGPP_MCP_BEARER_TOKEN` | Bearer token for HTTP transport auth |
+| `PORT` | PaaS convention (Cloud Run / Heroku); `serve` defaults to HTTP transport on `:$PORT` |
+| `THREEGPP_VERSION_CACHE_MB` | Size limit of the on-demand version cache in MB (default `1024`) |
+| `THREEGPP_FETCH_BUDGET` | How long a tool call waits for an on-demand fetch (default `60s`) |
+| `THREEGPP_MAX_ZIP_SIZE_MB` | Max ZIP download size (default `512`) |
+| `THREEGPP_CACHE_TTL_HOURS` | Spec list cache TTL in hours (default `24`) |
+| `XDG_CACHE_HOME` | Cache directory root, per the XDG Base Directory spec |
