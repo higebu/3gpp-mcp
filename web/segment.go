@@ -141,6 +141,9 @@ func escaped(s string, i int) bool {
 
 // containsBlankLine reports whether s contains a blank line: a line holding
 // nothing but spaces or tabs (CommonMark 2.1), not just a literal "\n\n".
+// Only a line terminated by a newline counts — callers pass the range up to
+// the closing backtick run, whose own line always carries the closer and can
+// therefore never be blank.
 func containsBlankLine(s string) bool {
 	for {
 		i := strings.IndexByte(s, '\n')
@@ -152,7 +155,7 @@ func containsBlankLine(s string) bool {
 		for j < len(rest) && (rest[j] == ' ' || rest[j] == '\t') {
 			j++
 		}
-		if j == len(rest) || rest[j] == '\n' {
+		if j < len(rest) && rest[j] == '\n' {
 			return true
 		}
 		s = rest

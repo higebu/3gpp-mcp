@@ -919,26 +919,55 @@ func TestRenderMarkdown_EventHandlerStripped(t *testing.T) {
 	if strings.Contains(got, `src="x"`) {
 		t.Errorf("non-site-relative img src must be stripped, got:\n%s", got)
 	}
-	if strings.Contains(got, "javascript:") {
-		t.Errorf("javascript: URL must be stripped, got:\n%s", got)
+	if strings.Contains(got, `href="javascript:`) {
+		t.Errorf("no anchor may carry a javascript: URL, got:\n%s", got)
 	}
 }
 
-// TestRenderMarkdown_ExternalHrefStripped pins the anchor policy: only
-// site-relative links and rfc-editor.org RFC links keep their href.
+// TestRenderMarkdown_ExternalHrefStripped pins the anchor policy: a raw <a>
+// in document text is escaped to visible text, no anchor with an external or
+// protocol-relative href reaches the page, and the two link forms the
+// pipeline produces — site-relative spec links and rfc-editor.org RFC links —
+// survive.
 func TestRenderMarkdown_ExternalHrefStripped(t *testing.T) {
 	content := `<a href="https://evil.example/p">x</a> <a href="//evil.example/p">y</a> ` +
 		`<a href="http://evil.example/p">z</a> ` +
 		"See RFC 3748 and TS 23.501 for details."
 	got := renderMarkdown(content, "TS 23.501", "", nil)
-	if strings.Contains(got, "evil.example") {
-		t.Errorf("external hrefs must be stripped, got:\n%s", got)
+	if strings.Contains(got, `href="https://evil`) || strings.Contains(got, `href="//`) ||
+		strings.Contains(got, `href="http://`) {
+		t.Errorf("no anchor may carry an external href, got:\n%s", got)
+	}
+	if !strings.Contains(got, "&lt;a href=") {
+		t.Errorf("raw anchors in document text must be escaped to visible text, got:\n%s", got)
 	}
 	if !strings.Contains(got, `href="https://www.rfc-editor.org/rfc/rfc3748"`) {
 		t.Errorf("rfc-editor link must survive, got:\n%s", got)
 	}
 	if !strings.Contains(got, "/specs/TS%2023.501") {
 		t.Errorf("site-relative spec link must survive, got:\n%s", got)
+	}
+}
+
+// TestSanitizeHTML_HrefPolicy pins the sanitizer's own href gate,
+// independent of escapeUnknownHTML: only site-relative and rfc-editor.org
+// targets keep their href.
+func TestSanitizeHTML_HrefPolicy(t *testing.T) {
+	for _, tt := range []struct {
+		in   string
+		keep bool
+	}{
+		{`<a href="/specs/TS%2023.501">s</a>`, true},
+		{`<a href="https://www.rfc-editor.org/rfc/rfc3748">r</a>`, true},
+		{`<a href="#frag">f</a>`, true},
+		{`<a href="https://evil.example/p">x</a>`, false},
+		{`<a href="//evil.example/p">y</a>`, false},
+		{`<a href="http://evil.example/p">z</a>`, false},
+	} {
+		got := sanitizeHTML(tt.in)
+		if kept := strings.Contains(got, "href="); kept != tt.keep {
+			t.Errorf("sanitizeHTML(%q) href kept = %v, want %v (got %q)", tt.in, kept, tt.keep, got)
+		}
 	}
 }
 
@@ -954,6 +983,8 @@ func TestSplitInlineCode_Edges(t *testing.T) {
 		{"double backslash before backtick still opens", `\\` + "`code`", true},
 		{"whitespace-only line breaks a span", "`foo\n \nbar`", false},
 		{"newline inside a span is fine", "`foo\nbar`", true},
+		{"closer on the next line is a span", "`foo\n`", true},
+		{"trailing spaces before the closer are fine", "`foo   `", true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			segs := splitInlineCode(tt.in)

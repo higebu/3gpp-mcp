@@ -8,13 +8,15 @@ import (
 )
 
 // allowedTagRE matches an HTML tag the rendering pipeline legitimately
-// produces before goldmark runs: the DOCX converter's table and inline markup
-// (converter/docx/table.go, <sub>/<sup> in body text), db.LinkifyRefs anchors
-// and the image:// rewrite's <img>. Any other angle bracket in body text is
-// document text — 3GPP prose is full of placeholders like <SUPI> — and must
-// be escaped so it stays visible instead of being parsed as markup.
+// produces before goldmark runs: the DOCX converter's table markup and list
+// tags inside cells (converter/docx/table.go), <sub>/<sup> in body text, and
+// the image:// rewrite's <img>. db.LinkifyRefs emits Markdown links, not raw
+// anchors, so <a> is document text here. Any other angle bracket in body
+// text is document text too — 3GPP prose is full of placeholders like
+// <SUPI> — and must be escaped so it stays visible instead of being parsed
+// as markup.
 var allowedTagRE = regexp.MustCompile(
-	`(?i)^</?(?:a|blockquote|br|code|del|em|h[1-6]|hr|img|li|ol|p|pre|span|strong|sub|sup|table|tbody|td|th|thead|tr|ul)(?:\s[^<>]*)?/?>`)
+	`(?i)^</?(?:img|li|ol|p|sub|sup|table|tbody|td|th|thead|tr|ul)(?:\s[^<>]*)?/?>`)
 
 // escapeUnknownHTML escapes every '<' in text that does not start a tag the
 // pipeline itself emits, so third-party document content cannot inject raw
