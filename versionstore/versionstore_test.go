@@ -275,6 +275,37 @@ func TestEnsurePropagatesFetchError(t *testing.T) {
 	}
 }
 
+// TestEnsureRecoversFetcherPanic checks that a panic on the detached fetch
+// goroutine is reported as an error instead of killing the process: the
+// pipeline parses untrusted binaries, and no per-request recovery applies to
+// a goroutine deliberately detached from the request.
+func TestEnsureRecoversFetcherPanic(t *testing.T) {
+	var calls atomic.Int32
+	s := openStore(t, DefaultLimitBytes, func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		if calls.Add(1) == 1 {
+			panic("slice bounds out of range")
+		}
+		spec, sections := fakeSpec("TS 23.501", "18.6.0", 8)
+		return spec, sections, nil
+	})
+
+	err := s.Ensure(context.Background(), "TS 23.501", "18.6.0", entry("23.501"), time.Minute)
+	if err == nil || !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("Ensure = %v, want an error reporting the panic", err)
+	}
+	// The panic must not leave a cache entry claiming content that never landed.
+	if has, _ := s.Has("TS 23.501", "18.6.0"); has {
+		t.Error("a panicked fetch left a cache entry")
+	}
+	// The inflight slot must be released so a later call starts a fresh fetch.
+	if err := s.Ensure(context.Background(), "TS 23.501", "18.6.0", entry("23.501"), time.Minute); err != nil {
+		t.Fatalf("Ensure retry after panic: %v", err)
+	}
+	if has, _ := s.Has("TS 23.501", "18.6.0"); !has {
+		t.Error("retry after a panicked fetch did not cache the version")
+	}
+}
+
 // TestEvictionDropsLeastRecentlyUsed fills the cache past its limit and checks
 // that the oldest entry goes and the newest stays.
 func TestEvictionDropsLeastRecentlyUsed(t *testing.T) {
