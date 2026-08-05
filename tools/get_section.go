@@ -39,7 +39,7 @@ func HandleGetSection(src *Source) func(ctx context.Context, req *mcp.CallToolRe
 		}
 
 		if len(sections) == 0 {
-			if parts, partsErr := src.DB.FindSpecIDsByFamily(input.SpecID); partsErr == nil && len(parts) > 0 {
+			if parts, partsErr := src.DB.FindSpecIDsByFamily(ctx, input.SpecID); partsErr == nil && len(parts) > 0 {
 				return errorResult(fmt.Sprintf("%s has multiple parts: %s — specify one", input.SpecID, strings.Join(parts, ", "))), nil, nil
 			}
 			return errorResult(fmt.Sprintf("section %s not found in %s%s", input.SectionNumber, input.SpecID, versionSuffix(res))), nil, nil

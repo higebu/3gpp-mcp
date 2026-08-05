@@ -57,7 +57,7 @@ func compareStructure(ctx context.Context, src *Source, input CompareVersionsInp
 	if r := twoVersionErrorResult(oldErr, newErr); r != nil {
 		return r
 	}
-	if r := checkComparable(src, input.SpecID, oldSecs, newSecs, oldRes, newRes); r != nil {
+	if r := checkComparable(ctx, src, input.SpecID, oldSecs, newSecs, oldRes, newRes); r != nil {
 		return r
 	}
 
@@ -115,7 +115,7 @@ func compareSection(ctx context.Context, src *Source, input CompareVersionsInput
 	if r := twoVersionErrorResult(oldErr, newErr); r != nil {
 		return r
 	}
-	if r := checkComparable(src, input.SpecID, oldSecs, newSecs, oldRes, newRes); r != nil {
+	if r := checkComparable(ctx, src, input.SpecID, oldSecs, newSecs, oldRes, newRes); r != nil {
 		return r
 	}
 
@@ -168,9 +168,9 @@ func twoVersionErrorResult(oldErr, newErr error) *mcp.CallToolResult {
 
 // checkComparable rejects a comparison with nothing on either side or with
 // both requests landing on the same version.
-func checkComparable(src *Source, specID string, oldSecs, newSecs []db.Section, oldRes, newRes Resolution) *mcp.CallToolResult {
+func checkComparable(ctx context.Context, src *Source, specID string, oldSecs, newSecs []db.Section, oldRes, newRes Resolution) *mcp.CallToolResult {
 	if len(oldSecs) == 0 && len(newSecs) == 0 {
-		if parts, err := src.DB.FindSpecIDsByFamily(specID); err == nil && len(parts) > 0 {
+		if parts, err := src.DB.FindSpecIDsByFamily(ctx, specID); err == nil && len(parts) > 0 {
 			return errorResult(fmt.Sprintf("%s has multiple parts: %s — specify one", specID, strings.Join(parts, ", ")))
 		}
 		return errorResult(fmt.Sprintf("no sections found for %s in either version", specID))

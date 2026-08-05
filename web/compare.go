@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -104,7 +105,7 @@ func (h *handler) compareStructurePage(w http.ResponseWriter, r *http.Request, d
 	}
 	data.fillLabels(oldSecs, oldRes, newSecs, newRes)
 
-	if notice := h.compareNotice(data.SpecID, oldSecs, newSecs, oldRes, newRes); notice != "" {
+	if notice := h.compareNotice(r.Context(), data.SpecID, oldSecs, newSecs, oldRes, newRes); notice != "" {
 		data.Notice = notice
 		h.renderCompare(w, data)
 		return
@@ -131,7 +132,7 @@ func (h *handler) compareSectionPage(w http.ResponseWriter, r *http.Request, dat
 	}
 	data.fillLabels(oldSecs, oldRes, newSecs, newRes)
 
-	if notice := h.compareNotice(data.SpecID, oldSecs, newSecs, oldRes, newRes); notice != "" {
+	if notice := h.compareNotice(r.Context(), data.SpecID, oldSecs, newSecs, oldRes, newRes); notice != "" {
 		data.Notice = notice
 		h.renderCompare(w, data)
 		return
@@ -163,9 +164,9 @@ func (h *handler) compareSectionPage(w http.ResponseWriter, r *http.Request, dat
 
 // compareNotice mirrors the compare_versions tool's guards: nothing on either
 // side, or both requests landing on the same version.
-func (h *handler) compareNotice(specID string, oldSecs, newSecs []db.Section, oldRes, newRes tools.Resolution) string {
+func (h *handler) compareNotice(ctx context.Context, specID string, oldSecs, newSecs []db.Section, oldRes, newRes tools.Resolution) string {
 	if len(oldSecs) == 0 && len(newSecs) == 0 {
-		if parts, err := h.db.FindSpecIDsByFamily(specID); err == nil && len(parts) > 0 {
+		if parts, err := h.db.FindSpecIDsByFamily(ctx, specID); err == nil && len(parts) > 0 {
 			return fmt.Sprintf("%s has multiple parts: %s — specify one.", specID, strings.Join(parts, ", "))
 		}
 		return fmt.Sprintf("No sections found for %s in either version.", specID)
