@@ -152,6 +152,7 @@ func FetchVersion(ctx context.Context, client *http.Client, sv *SpecVersion, tim
 
 	var spec db.Spec
 	var sections []db.Section
+	docType := ""
 	// A multi-file spec repeats section numbers across its parts only when a
 	// later part supersedes an earlier one, so last write wins by number.
 	index := map[string]int{}
@@ -164,6 +165,9 @@ func FetchVersion(ctx context.Context, client *http.Client, sv *SpecVersion, tim
 		if err != nil {
 			log.Printf("  on-demand parse error %s: %v", filepath.Base(docxPath), err)
 			continue
+		}
+		if dt := parsed.Metadata.DocType; dt != "" {
+			docType = dt
 		}
 		fileSpec, fileSections, _ := convertToDBRecords(parsed)
 		if fileSpec.Title != "" {
@@ -191,9 +195,13 @@ func FetchVersion(ctx context.Context, client *http.Client, sv *SpecVersion, tim
 
 	if spec.ID == "" {
 		// The archive path carries the bare number; the database form has a
-		// document-type prefix.
+		// document-type prefix, defaulting to "TS" when no document said.
 		spec.ID = "TS " + sv.SpecID
 	}
+	// The type may have been detected in a different file than the one whose
+	// metadata won — a part file carries no cover page — so rewrite the
+	// prefix from whichever file knew.
+	spec.ID = docTypeID(spec.ID, docType)
 	if spec.Title == "" {
 		spec.Title = spec.ID
 	}

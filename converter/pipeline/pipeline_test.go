@@ -100,6 +100,132 @@ func TestConvertDir_Race(t *testing.T) {
 	}
 }
 
+// makeMinimalDocx builds an in-memory .docx containing only word/document.xml
+// with the given body XML. ParseDocx needs nothing else.
+func makeMinimalDocx(t *testing.T, bodyXML string) []byte {
+	t.Helper()
+	doc := `<?xml version="1.0"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:body>` + bodyXML + `</w:body>
+</w:document>`
+	return makeZipWithFile(t, "word/document.xml", []byte(doc))
+}
+
+func TestDocTypeID(t *testing.T) {
+	cases := []struct {
+		id, docType, want string
+	}{
+		{"TS 21.905", "TR", "TR 21.905"},
+		{"TR 21.905", "TS", "TS 21.905"},
+		{"TS 23.501", "TS", "TS 23.501"},
+		{"TS 23.501", "", "TS 23.501"},
+		{"weirdname", "TR", "weirdname"},
+	}
+	for _, tt := range cases {
+		if got := docTypeID(tt.id, tt.docType); got != tt.want {
+			t.Errorf("docTypeID(%q, %q) = %q, want %q", tt.id, tt.docType, got, tt.want)
+		}
+	}
+}
+
+// TestPipelineRun_TRDocType verifies that a Technical Report is stored under a
+// "TR " spec ID, and that the part files of a split spec — which carry no
+// cover page and cannot tell a TS from a TR — follow the cover file's verdict
+// instead of splitting the spec across "TS x" and "TR x" rows (#110).
+func TestPipelineRun_TRDocType(t *testing.T) {
+	partDocx := makeMinimalDocx(t,
+		`<w:p><w:pPr><w:pStyle w:val="Heading 1"/></w:pPr><w:r><w:t>5 Definitions</w:t></w:r></w:p>`+
+			`<w:p><w:r><w:t>Vocabulary body text.</w:t></w:r></w:p>`)
+	coverDocx := makeMinimalDocx(t,
+		`<w:p><w:pPr><w:pStyle w:val="ZA"/></w:pPr><w:r><w:t>3GPP TR 21.905 V17.2.0 (2022-03)</w:t></w:r></w:p>`)
+	zipData := makeZipWithFiles(t, map[string][]byte{
+		"21905-h20_s01.docx":   partDocx,
+		"21905-h20_cover.docx": coverDocx,
+	})
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		_, _ = w.Write(zipData)
+	}))
+	defer ts.Close()
+
+	d := setupTestDB(t)
+
+	specs := []*SpecVersion{{
+		Series:        "21",
+		SpecID:        "21.905",
+		Filename:      "21905-h20.zip",
+		Version:       "h20",
+		VersionLetter: "h",
+		VersionMinor:  20,
+		Release:       17,
+		URL:           ts.URL + "/21905-h20.zip",
+	}}
+
+	p := &Pipeline{DB: d, Client: ts.Client(), Workers: 1, Timeout: 10 * time.Second}
+	if err := p.Run(context.Background(), specs); err != nil {
+		t.Fatalf("Pipeline.Run: %v", err)
+	}
+
+	result, err := d.ListSpecs("", "21.905", -1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Specs) != 1 {
+		t.Fatalf("got %d specs for 21.905, want exactly 1 (no TS/TR split): %+v", len(result.Specs), result.Specs)
+	}
+	if result.Specs[0].ID != "TR 21.905" {
+		t.Errorf("spec ID = %q, want %q", result.Specs[0].ID, "TR 21.905")
+	}
+
+	// The part file's sections must be stored under the cover's TR label.
+	sections, err := d.GetTOC("TR 21.905", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sections) == 0 {
+		t.Error("expected the part file's sections under TR 21.905")
+	}
+}
+
+// TestConvertDir_TRDocType checks the same TS/TR unification for directory
+// imports: the cover file's document type wins for every file of the spec.
+func TestConvertDir_TRDocType(t *testing.T) {
+	partDocx := makeMinimalDocx(t,
+		`<w:p><w:pPr><w:pStyle w:val="Heading 1"/></w:pPr><w:r><w:t>5 Definitions</w:t></w:r></w:p>`+
+			`<w:p><w:r><w:t>Vocabulary body text.</w:t></w:r></w:p>`)
+	coverDocx := makeMinimalDocx(t,
+		`<w:p><w:pPr><w:pStyle w:val="ZA"/></w:pPr><w:r><w:t>3GPP TR 21.905 V17.2.0 (2022-03)</w:t></w:r></w:p>`)
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "21905-h20_s01.docx"), partDocx, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "21905-h20_cover.docx"), coverDocx, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	d := setupTestDB(t)
+	if err := ConvertDir(context.Background(), d, dir, 2, false, false); err != nil {
+		t.Fatalf("ConvertDir: %v", err)
+	}
+
+	result, err := d.ListSpecs("", "21.905", -1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Specs) != 1 || result.Specs[0].ID != "TR 21.905" {
+		t.Fatalf("specs = %+v, want exactly one TR 21.905", result.Specs)
+	}
+	sections, err := d.GetTOC("TR 21.905", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sections) == 0 {
+		t.Error("expected the part file's sections under TR 21.905")
+	}
+}
+
 // TestPipelineRun_MultiFileZip exercises the multi-file split pattern using a
 // real TS 36.133 ZIP downloaded from the 3GPP archive. TS 36.133 ships as
 // multiple DOCX files (_cover + several _sXX content files) in a single ZIP.

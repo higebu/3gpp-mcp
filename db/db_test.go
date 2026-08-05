@@ -1782,6 +1782,62 @@ func TestInsertSpec_DropsSupersededVersions(t *testing.T) {
 	}
 }
 
+// TestInsertSpec_DropsStaleDocTypeLabel: a spec number names either a TS or a
+// TR, never both. Databases built before TR detection stored every spec as
+// "TS ...", so an update that imports the corrected "TR ..." label must drop
+// the rows under the old prefix or the spec would be duplicated under both
+// labels and double every search hit (#110).
+func TestInsertSpec_DropsStaleDocTypeLabel(t *testing.T) {
+	d := setupTestDB(t)
+
+	insert := func(id, version string) {
+		t.Helper()
+		err := d.InsertSpecWithSectionsAndImages(
+			Spec{ID: id, Version: version, Title: "Vocabulary", Series: "21"},
+			[]Section{{
+				SpecID: id, Version: version, Number: "1", Title: "Scope",
+				Level: 1, Content: "relabelprobe vocabulary content",
+			}},
+			[]Image{{SpecID: id, Version: version, Name: "img.png", MIMEType: "image/png", Data: []byte{1}}},
+		)
+		if err != nil {
+			t.Fatalf("insert %s v%s: %v", id, version, err)
+		}
+	}
+
+	insert("TS 21.905", "17.0.0") // pre-detection build's stale label
+	insert("TR 21.905", "18.0.0") // corrected label from an update
+
+	result, err := d.ListSpecs("", "21.905", -1, 0)
+	if err != nil {
+		t.Fatalf("ListSpecs: %v", err)
+	}
+	if len(result.Specs) != 1 || result.Specs[0].ID != "TR 21.905" {
+		t.Fatalf("expected only TR 21.905 to remain, got %+v", result.Specs)
+	}
+
+	// The stale label's sections must be gone from search too.
+	page, err := d.Search("relabelprobe", nil, 10, 0)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(page.Results) != 1 {
+		t.Fatalf("expected exactly 1 search hit after relabel, got %d", len(page.Results))
+	}
+	if page.Results[0].SpecID != "TR 21.905" {
+		t.Errorf("search hit SpecID = %q, want %q", page.Results[0].SpecID, "TR 21.905")
+	}
+
+	// Images follow the same rule.
+	if _, err := d.GetImage("TS 21.905", "17.0.0", "img.png"); err == nil {
+		t.Error("expected the stale label's image to be gone")
+	}
+	img, err := d.GetImage("TR 21.905", "18.0.0", "img.png")
+	if err != nil || img == nil {
+		t.Errorf("expected the relabeled spec's image to exist, got %v", err)
+	}
+}
+
 func TestSearch_HyphenatedIdentifierTokenization(t *testing.T) {
 	// tokenchars '-' in the FTS tokenizer keeps hyphenated ASN.1 identifiers
 	// as single tokens, so quoted and prefix queries match them exactly.

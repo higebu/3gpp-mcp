@@ -473,6 +473,19 @@ func (d *DB) ListImages(specID, version string) ([]ImageInfo, error) {
 	return infos, rows.Err()
 }
 
+// alternateDocTypeID returns the same spec ID under the other document-type
+// prefix ("TS 21.905" -> "TR 21.905" and vice versa), and false when the ID
+// carries no "TS "/"TR " prefix.
+func alternateDocTypeID(id string) (string, bool) {
+	if rest, ok := strings.CutPrefix(id, "TS "); ok {
+		return "TR " + rest, true
+	}
+	if rest, ok := strings.CutPrefix(id, "TR "); ok {
+		return "TS " + rest, true
+	}
+	return "", false
+}
+
 // InsertSpecWithSections inserts a spec and all its sections in a transaction.
 func (d *DB) InsertSpecWithSections(spec Spec, sections []Section) error {
 	return d.InsertSpecWithSectionsAndImages(spec, sections, nil)
@@ -555,6 +568,28 @@ func (d *DB) InsertSpecWithSectionsAndImages(spec Spec, sections []Section, imag
 		}
 		if _, err = tx.Exec("DELETE FROM specs WHERE id = ? AND version <> ?", spec.ID, spec.Version); err != nil {
 			return fmt.Errorf("drop superseded spec versions: %w", err)
+		}
+
+		// A spec number names either a Technical Specification or a Technical
+		// Report, never both, so any rows under the other document-type prefix
+		// are the same spec under a stale label — databases built before TR
+		// detection stored every spec as "TS ...". Drop them, or an update
+		// would leave the spec duplicated under both labels and double every
+		// search hit.
+		if alt, ok := alternateDocTypeID(spec.ID); ok {
+			for _, table := range []string{"sections", "images", "spec_references"} {
+				column := "spec_id"
+				if table == "spec_references" {
+					column = "source_spec_id"
+				}
+				q := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", table, column)
+				if _, err = tx.Exec(q, alt); err != nil {
+					return fmt.Errorf("drop relabeled %s: %w", table, err)
+				}
+			}
+			if _, err = tx.Exec("DELETE FROM specs WHERE id = ?", alt); err != nil {
+				return fmt.Errorf("drop relabeled spec: %w", err)
+			}
 		}
 	}
 
