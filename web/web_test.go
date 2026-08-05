@@ -821,6 +821,36 @@ func TestRenderMarkdown_HTMLImageRewrite(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdown_HTMLImageRewriteSpecialChars pins the end-to-end contract
+// for image basenames carrying characters that are legal in a filename but
+// meaningful in HTML. htmlImageRE captures the name straight out of the src
+// attribute and passes it to url.PathEscape without decoding HTML entities, so
+// the converter must not entity-encode "&" or "'": the percent-encoded lookup
+// key has to round-trip back to the basename stored in the database.
+func TestRenderMarkdown_HTMLImageRewriteSpecialChars(t *testing.T) {
+	content := `<table><tbody><tr><td><img src="image://Figure A&B's diagram.png?w=200&h=100" alt="diag"></td></tr></tbody></table>`
+	got := renderMarkdown(content, "TS 23.501", "", nil)
+
+	const want = "Figure A&B's diagram.png"
+	prefix := `src="/specs/TS%2023.501/images/`
+	i := strings.Index(got, prefix)
+	if i < 0 {
+		t.Fatalf("expected a rewritten image URL, got:\n%s", got)
+	}
+	rest := got[i+len(prefix):]
+	encoded := rest[:strings.IndexByte(rest, '"')]
+	decoded, err := url.PathUnescape(encoded)
+	if err != nil {
+		t.Fatalf("rewritten image URL is not valid percent-encoding (%q): %v", encoded, err)
+	}
+	if decoded != want {
+		t.Errorf("image lookup key = %q, want %q (encoded form was %q)", decoded, want, encoded)
+	}
+	if strings.Contains(encoded, "amp") || strings.Contains(encoded, "%26amp%3B") {
+		t.Errorf("image name reached the lookup key entity-encoded: %q", encoded)
+	}
+}
+
 // TestHandleOpenAPI_NotFound verifies the error path when requesting a missing
 // OpenAPI spec returns 404 rather than 500.
 func TestHandleOpenAPI_NotFound(t *testing.T) {

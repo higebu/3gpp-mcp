@@ -462,6 +462,120 @@ func TestParagraphToMarkdown(t *testing.T) {
 	}
 }
 
+// TestParagraphToMarkdown_ListRunFormatting pins that a list item's runs go
+// through the same renderer as a non-list paragraph's: bold, italic and
+// superscript/subscript formatting used to be dropped because the list branch
+// returned the flattened paragraph text before runsToMarkdown ever ran.
+func TestParagraphToMarkdown_ListRunFormatting(t *testing.T) {
+	tests := []struct {
+		name      string
+		info      paragraphInfo
+		styleName string
+		want      string
+	}{
+		{
+			name: "bullet item keeps bold and italic runs",
+			info: paragraphInfo{
+				Text: "Bold and italic",
+				Runs: []runInfo{
+					{Text: "Bold", Bold: true},
+					{Text: " and "},
+					{Text: "italic", Italic: true},
+				},
+			},
+			styleName: "List Bullet",
+			want:      "- **Bold** and *italic*",
+		},
+		{
+			name: "numbered item keeps superscript and subscript runs",
+			info: paragraphInfo{
+				Text: "Pmax1 for H2O",
+				Runs: []runInfo{
+					{Text: "P"},
+					{Text: "max", VertAlign: "subscript"},
+					{Text: "1", VertAlign: "superscript"},
+					{Text: " for H"},
+					{Text: "2", VertAlign: "subscript"},
+					{Text: "O"},
+				},
+			},
+			styleName: "List Number",
+			want:      "1. P<sub>max</sub><sup>1</sup> for H<sub>2</sub>O",
+		},
+		{
+			name: "nested bullet item keeps indent and formatting",
+			info: paragraphInfo{
+				Text: "nested bold",
+				Runs: []runInfo{
+					{Text: "nested "},
+					{Text: "bold", Bold: true},
+				},
+			},
+			styleName: "List Bullet 2",
+			want:      "    - nested **bold**",
+		},
+		{
+			name: "nested numbered item keeps indent and formatting",
+			info: paragraphInfo{
+				Text: "both",
+				Runs: []runInfo{{Text: "both", Bold: true, Italic: true}},
+			},
+			styleName: "List Number 3",
+			want:      "        1. ***both***",
+		},
+		{
+			name:      "item with no runs falls back to plain text",
+			info:      paragraphInfo{Text: "fallback"},
+			styleName: "List Bullet",
+			want:      "- fallback",
+		},
+		{
+			name: "item whose runs render to nothing falls back to plain text",
+			info: paragraphInfo{
+				Text: "image caption",
+				Runs: []runInfo{{Image: &imageRef{RID: "rId1"}}},
+			},
+			styleName: "List Number 2",
+			want:      "    1. image caption",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := paragraphToMarkdown(tt.info, tt.styleName)
+			if got != tt.want {
+				t.Errorf("paragraphToMarkdown = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParagraphToMarkdownBlocks_ListItemWithImage checks that rendering a list
+// item's runs through runsToMarkdown (which skips images) does not lose the
+// image: paragraphToMarkdownBlocks still emits the placeholder as its own
+// block after the list-item text.
+func TestParagraphToMarkdownBlocks_ListItemWithImage(t *testing.T) {
+	info := paragraphInfo{
+		Text: "see figure",
+		Runs: []runInfo{
+			{Text: "see ", Bold: true},
+			{Image: &imageRef{RID: "rId1"}},
+			{Text: "figure"},
+		},
+	}
+	got := paragraphToMarkdownBlocks(info, "List Bullet", func(ref imageRef) string {
+		return "![Figure](image://" + ref.RID + ")"
+	})
+	want := []string{"- **see** figure", "![Figure](image://rId1)"}
+	if len(got) != len(want) {
+		t.Fatalf("blocks = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("block %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestIsMonospaceFont(t *testing.T) {
 	cases := map[string]bool{
 		"Courier New":     true,
