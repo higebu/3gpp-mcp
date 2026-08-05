@@ -1867,6 +1867,57 @@ func TestInsertSpec_DropsStaleDocTypeLabel(t *testing.T) {
 	}
 }
 
+// TestInsertSpec_RelabelCleanupErrors drives the relabel cleanup's DELETEs
+// into failure via conditional triggers that abort only the stale label's
+// rows, proving the errors surface wrapped instead of being swallowed. The
+// happy path up to the injected statement is untouched, so the failure hits
+// exactly the branch under test.
+func TestInsertSpec_RelabelCleanupErrors(t *testing.T) {
+	newSpec := func(id, version string) (Spec, []Section) {
+		return Spec{ID: id, Version: version, Title: "Vocabulary", Series: "21"},
+			[]Section{{
+				SpecID: id, Version: version, Number: "1", Title: "Scope",
+				Level: 1, Content: "vocabulary content",
+			}}
+	}
+
+	seed := func(t *testing.T) *DB {
+		t.Helper()
+		d := setupTestDB(t)
+		spec, sections := newSpec("TS 21.905", "17.0.0")
+		if err := d.InsertSpecWithSections(spec, sections); err != nil {
+			t.Fatalf("seed stale label: %v", err)
+		}
+		return d
+	}
+
+	t.Run("child table cleanup failure", func(t *testing.T) {
+		d := seed(t)
+		if err := d.ExecScript(`CREATE TRIGGER fail_relabel_sections BEFORE DELETE ON sections
+WHEN old.spec_id = 'TS 21.905' BEGIN SELECT RAISE(ABORT, 'injected'); END;`); err != nil {
+			t.Fatalf("create trigger: %v", err)
+		}
+		spec, sections := newSpec("TR 21.905", "18.0.0")
+		err := d.InsertSpecWithSections(spec, sections)
+		if err == nil || !strings.Contains(err.Error(), "drop relabeled sections") {
+			t.Fatalf("err = %v, want a 'drop relabeled sections' error", err)
+		}
+	})
+
+	t.Run("spec row cleanup failure", func(t *testing.T) {
+		d := seed(t)
+		if err := d.ExecScript(`CREATE TRIGGER fail_relabel_spec BEFORE DELETE ON specs
+WHEN old.id = 'TS 21.905' BEGIN SELECT RAISE(ABORT, 'injected'); END;`); err != nil {
+			t.Fatalf("create trigger: %v", err)
+		}
+		spec, sections := newSpec("TR 21.905", "18.0.0")
+		err := d.InsertSpecWithSections(spec, sections)
+		if err == nil || !strings.Contains(err.Error(), "drop relabeled spec:") {
+			t.Fatalf("err = %v, want a 'drop relabeled spec' error", err)
+		}
+	})
+}
+
 func TestSearch_HyphenatedIdentifierTokenization(t *testing.T) {
 	// tokenchars '-' in the FTS tokenizer keeps hyphenated ASN.1 identifiers
 	// as single tokens, so quoted and prefix queries match them exactly.
