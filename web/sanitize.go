@@ -67,8 +67,13 @@ func newSanitizePolicy() *bluemonday.Policy {
 	// KaTeX math targets.
 	p.AllowElements("strong", "em", "del", "sub", "sup", "span", "pre", "code")
 	p.AllowAttrs("class").Matching(regexp.MustCompile(`^[a-zA-Z0-9 _-]+$`)).OnElements("span", "pre", "code")
-	// Links: spec-relative from db.LinkifyRefs, absolute http(s) for RFCs.
-	p.AllowAttrs("href").OnElements("a")
+	// Links: the pipeline only produces site-relative anchors
+	// (db.LinkifyRefs spec links) and https://www.rfc-editor.org RFC links.
+	// The pattern rejects protocol-relative //host and every other absolute
+	// URL, so document content cannot inject an external link into a spec
+	// page.
+	p.AllowAttrs("href").Matching(regexp.MustCompile(
+		`^(?:#.*|/(?:[^/\\].*)?|https://www\.rfc-editor\.org/.*)$`)).OnElements("a")
 	p.AllowAttrs("rel").Matching(regexp.MustCompile(`^[a-z ]+$`)).OnElements("a")
 	p.AllowAttrs("title").OnElements("a")
 	// Images: only the site-relative URLs the image:// rewrite produces
@@ -77,7 +82,7 @@ func newSanitizePolicy() *bluemonday.Policy {
 	p.AllowAttrs("alt").OnElements("img")
 	p.AllowAttrs("width", "height").Matching(bluemonday.Integer).OnElements("img")
 
-	p.AllowURLSchemes("http", "https")
+	p.AllowURLSchemes("https")
 	p.AllowRelativeURLs(true)
 	p.RequireParseableURLs(true)
 	return p

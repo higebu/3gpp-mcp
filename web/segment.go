@@ -14,6 +14,11 @@ type mdSegment struct {
 // pre-conversion rewrites (math protection, raw-HTML escaping) can skip the
 // regions goldmark treats as literal code. Concatenating the segments in
 // order reproduces content exactly.
+//
+// Only top-level fences and inline code spans are recognized. Fences inside
+// container blocks (block quotes, list items) and indented code blocks are
+// not: the DOCX converter trims every paragraph, so converted content never
+// carries the leading "> " or 4-space indentation those forms require.
 func splitCodeSegments(content string) []mdSegment {
 	var segs []mdSegment
 	var text strings.Builder   // pending chunk outside any fence
@@ -100,8 +105,14 @@ func splitInlineCode(chunk string) []mdSegment {
 			continue
 		}
 		n := backtickRun(chunk, i)
+		// A run preceded by an odd number of backslashes is an escaped
+		// literal backtick (CommonMark 6.1) and cannot open a span.
+		if escaped(chunk, i) {
+			i += n
+			continue
+		}
 		end := findBacktickCloser(chunk, i+n, n)
-		if end < 0 || strings.Contains(chunk[i:end], "\n\n") {
+		if end < 0 || containsBlankLine(chunk[i:end]) {
 			i += n
 			continue
 		}
@@ -116,6 +127,36 @@ func splitInlineCode(chunk string) []mdSegment {
 		segs = append(segs, mdSegment{chunk[textStart:], false})
 	}
 	return segs
+}
+
+// escaped reports whether the byte at i is preceded by an odd number of
+// backslashes.
+func escaped(s string, i int) bool {
+	n := 0
+	for i-n-1 >= 0 && s[i-n-1] == '\\' {
+		n++
+	}
+	return n%2 == 1
+}
+
+// containsBlankLine reports whether s contains a blank line: a line holding
+// nothing but spaces or tabs (CommonMark 2.1), not just a literal "\n\n".
+func containsBlankLine(s string) bool {
+	for {
+		i := strings.IndexByte(s, '\n')
+		if i < 0 {
+			return false
+		}
+		rest := s[i+1:]
+		j := 0
+		for j < len(rest) && (rest[j] == ' ' || rest[j] == '\t') {
+			j++
+		}
+		if j == len(rest) || rest[j] == '\n' {
+			return true
+		}
+		s = rest
+	}
 }
 
 // backtickRun returns the length of the backtick run starting at i.

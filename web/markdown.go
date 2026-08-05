@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/alecthomas/chroma/v2"
 	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
@@ -27,6 +29,10 @@ var (
 	// mathRE matches LaTeX math emitted by the DOCX converter: display
 	// ($$...$$) is tried before inline ($...$). Inline math may not span lines.
 	mathRE = regexp.MustCompile(`\$\$([^$]+)\$\$|\$([^$\n]+)\$`)
+
+	// fallbackTokenCount disambiguates math tokens minted in the same
+	// nanosecond when crypto/rand is unavailable.
+	fallbackTokenCount atomic.Uint64
 )
 
 var md goldmark.Markdown
@@ -142,8 +148,10 @@ func renderMarkdown(content, specID, version string, bracketMap map[string]strin
 func newMathToken() string {
 	var b [12]byte
 	if _, err := cryptorand.Read(b[:]); err != nil {
-		// Never happens in practice; a collision here only misrenders math.
-		return "katexmathfallbacktoken"
+		// Keep the token unpredictable even without crypto/rand: a constant
+		// fallback would let literal document text collide with a
+		// placeholder on every render.
+		return fmt.Sprintf("katexmath%xt%dc", time.Now().UnixNano(), fallbackTokenCount.Add(1))
 	}
 	return "katexmath" + hex.EncodeToString(b[:])
 }

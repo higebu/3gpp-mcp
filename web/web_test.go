@@ -924,6 +924,53 @@ func TestRenderMarkdown_EventHandlerStripped(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdown_ExternalHrefStripped pins the anchor policy: only
+// site-relative links and rfc-editor.org RFC links keep their href.
+func TestRenderMarkdown_ExternalHrefStripped(t *testing.T) {
+	content := `<a href="https://evil.example/p">x</a> <a href="//evil.example/p">y</a> ` +
+		`<a href="http://evil.example/p">z</a> ` +
+		"See RFC 3748 and TS 23.501 for details."
+	got := renderMarkdown(content, "TS 23.501", "", nil)
+	if strings.Contains(got, "evil.example") {
+		t.Errorf("external hrefs must be stripped, got:\n%s", got)
+	}
+	if !strings.Contains(got, `href="https://www.rfc-editor.org/rfc/rfc3748"`) {
+		t.Errorf("rfc-editor link must survive, got:\n%s", got)
+	}
+	if !strings.Contains(got, "/specs/TS%2023.501") {
+		t.Errorf("site-relative spec link must survive, got:\n%s", got)
+	}
+}
+
+// TestSplitInlineCode_Edges pins CommonMark edge cases in code-span
+// detection: an escaped backtick cannot open a span, and a span cannot
+// contain a whitespace-only blank line.
+func TestSplitInlineCode_Edges(t *testing.T) {
+	for _, tt := range []struct {
+		name, in string
+		wantCode bool
+	}{
+		{"escaped backtick is not an opener", `\` + "`$x$" + `\` + "`", false},
+		{"double backslash before backtick still opens", `\\` + "`code`", true},
+		{"whitespace-only line breaks a span", "`foo\n \nbar`", false},
+		{"newline inside a span is fine", "`foo\nbar`", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			segs := splitInlineCode(tt.in)
+			gotCode := false
+			for _, s := range segs {
+				if s.code {
+					gotCode = true
+				}
+			}
+			if gotCode != tt.wantCode {
+				t.Errorf("splitInlineCode(%q) code segment = %v, want %v (segments: %+v)",
+					tt.in, gotCode, tt.wantCode, segs)
+			}
+		})
+	}
+}
+
 // TestRenderMarkdown_TableMarkupSurvivesSanitizer pins that the converter's
 // legitimate raw HTML — merged table cells and inline images — passes the
 // sanitizer intact.
