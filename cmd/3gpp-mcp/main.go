@@ -344,6 +344,9 @@ func runConvert(ctx context.Context, dbPath, docxPath string, convertImage bool)
 	}
 
 	fmt.Printf("Parsing %s...\n", docxPath)
+	// ConvertSingleFile's errors already name the stage and the file
+	// ("parse %s: ..."), and cmdConvert prefixes "Convert failed:" — wrapping
+	// here again would only repeat that context.
 	if err := pipeline.ConvertSingleFile(ctx, d, docxPath, convertImage); err != nil {
 		return err
 	}
@@ -390,7 +393,12 @@ func runConvertDir(ctx context.Context, dbPath, dirPath string, workers int, con
 		return fmt.Errorf("init schema: %w", err)
 	}
 
-	return pipeline.ConvertDir(ctx, d, dirPath, workers, convertDoc, convertImage)
+	// ConvertDir's errors do not all carry the directory (e.g. "all N files
+	// failed to parse"), so name it here.
+	if err := pipeline.ConvertDir(ctx, d, dirPath, workers, convertDoc, convertImage); err != nil {
+		return fmt.Errorf("import %s: %w", dirPath, err)
+	}
+	return nil
 }
 
 // exit is swapped in tests to cover fatal CLI-argument paths without
@@ -548,6 +556,9 @@ func runPipeline(ctx context.Context, dbPath string, client *http.Client, specs 
 		Timeout:      timeout,
 	}
 
+	// Run's errors are self-describing ("all N specs failed", ctx.Err()), and
+	// cmdPipeline prefixes "Pipeline failed:" — wrapping here would only
+	// repeat that context.
 	return p.Run(ctx, specs)
 }
 
