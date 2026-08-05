@@ -425,7 +425,8 @@ func (d *DB) UpsertImage(img Image) error {
 	return err
 }
 
-// GetImage retrieves a single image by spec ID, version and name.
+// GetImage retrieves a single image by spec ID, version and name, or nil when
+// the spec holds no image of that name.
 // An empty version resolves to the version this database holds.
 func (d *DB) GetImage(specID, version, name string) (*Image, error) {
 	version, err := d.ResolveVersion(specID, version)
@@ -437,6 +438,9 @@ func (d *DB) GetImage(specID, version, name string) (*Image, error) {
 		"SELECT spec_id, version, name, mime_type, data, llm_readable FROM images WHERE spec_id = ? AND version = ? AND name = ?",
 		specID, version, name,
 	).Scan(&img.SpecID, &img.Version, &img.Name, &img.MIMEType, &img.Data, &img.LLMReadable)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("get image: %w", err)
 	}
