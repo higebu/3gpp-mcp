@@ -255,8 +255,11 @@ func TestEscapeMathText(t *testing.T) {
 		{"#1", "\\#1"},
 		{`a\b`, "a\\backslash b"},
 		{"{x}", "\\{x\\}"},
-		{"a~b", "a\\textasciitilde b"},
-		{"a^b", "a\\textasciicircum b"},
+		// Callers wrap the result in $...$, so the text-mode escapes for "~"
+		// and "^" need their own \text{} group; bare \textasciitilde is an
+		// undefined control sequence in math mode.
+		{"a~b", "a\\text{\\textasciitilde}b"},
+		{"a^b", "a\\text{\\textasciicircum}b"},
 		{"$x", "\\$x"},
 		{"β≥γ", "\\beta \\geq \\gamma "},
 		{"a×b", "a\\times b"},

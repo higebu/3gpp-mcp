@@ -488,9 +488,12 @@ func escapeMathText(s string) string {
 		case '$':
 			b.WriteString("\\$")
 		case '~':
-			b.WriteString("\\textasciitilde ")
+			// \textasciitilde and \textasciicircum are text-mode commands,
+			// and every caller wraps this output in $...$, so they have to
+			// go back through \text{} to stay defined in math mode.
+			b.WriteString("\\text{\\textasciitilde}")
 		case '^':
-			b.WriteString("\\textasciicircum ")
+			b.WriteString("\\text{\\textasciicircum}")
 		default:
 			b.WriteRune(r)
 		}
