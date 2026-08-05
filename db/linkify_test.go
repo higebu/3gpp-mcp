@@ -253,6 +253,71 @@ func TestLinkifyRefs_MultipleRefs(t *testing.T) {
 	}
 }
 
+// References inside fenced code blocks and inline code spans must stay
+// verbatim: goldmark renders code literally, so a rewritten reference would
+// show up as raw link syntax.
+func TestLinkifyRefs_CodeRegions(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "ref inside tagged fence untouched",
+			input: "Prose about TS 29.228.\n\n```xml\n<!-- see TS 29.228 -->\n```\n\nAfter.",
+			want:  "Prose about [TS 29.228](/specs/TS 29.228).\n\n```xml\n<!-- see TS 29.228 -->\n```\n\nAfter.",
+		},
+		{
+			name:  "ref inside bare fence untouched",
+			input: "```\nTS 23.501 clause 5.1\n```",
+			want:  "```\nTS 23.501 clause 5.1\n```",
+		},
+		{
+			name:  "ref inside unclosed fence untouched",
+			input: "Intro TS 38.300.\n\n```asn1\n-- TS 38.331 defines RRC",
+			want:  "Intro [TS 38.300](/specs/TS 38.300).\n\n```asn1\n-- TS 38.331 defines RRC",
+		},
+		{
+			name:  "ref inside inline code untouched",
+			input: "Inline `see TS 29.228` too.",
+			want:  "Inline `see TS 29.228` too.",
+		},
+		{
+			name:  "ref between inline code spans is linkified",
+			input: "`a` TS 23.501 `b`",
+			want:  "`a` [TS 23.501](/specs/TS 23.501) `b`",
+		},
+		{
+			name:  "unclosed backtick does not swallow the rest",
+			input: "A stray ` here, but TS 23.501 still links.",
+			want:  "A stray ` here, but [TS 23.501](/specs/TS 23.501) still links.",
+		},
+		{
+			name:  "inline span does not cross a blank line",
+			input: "a ` b\n\nTS 23.501 ` c",
+			want:  "a ` b\n\n[TS 23.501](/specs/TS 23.501) ` c",
+		},
+		{
+			name:  "double-backtick span",
+			input: "``TS 23.501`` and TS 23.502",
+			want:  "``TS 23.501`` and [TS 23.502](/specs/TS 23.502)",
+		},
+		{
+			name:  "refs before and after a fence are linkified",
+			input: "TS 23.501 first.\n```diameter\nRFC 6733 AVP\n```\nRFC 6733 last.",
+			want:  "[TS 23.501](/specs/TS 23.501) first.\n```diameter\nRFC 6733 AVP\n```\n[RFC 6733](https://www.rfc-editor.org/rfc/rfc6733) last.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LinkifyRefs(tt.input, nil, urlFor)
+			if got != tt.want {
+				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 // References inside raw HTML table blocks must be rendered as HTML anchors,
 // because goldmark does not process Markdown link syntax inside raw HTML.
 func TestLinkifyRefs_InsideTable(t *testing.T) {
