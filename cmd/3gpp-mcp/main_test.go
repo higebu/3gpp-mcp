@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,8 @@ import (
 	"github.com/higebu/3gpp-mcp/db"
 	"github.com/higebu/3gpp-mcp/internal/testutil"
 	"github.com/higebu/3gpp-mcp/tools"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestHealthHandler(t *testing.T) {
@@ -924,4 +927,88 @@ func TestRunHTTPServer(t *testing.T) {
 			t.Error("expected an error for an unbindable address")
 		}
 	})
+}
+
+// seedWorkingCopy builds a WAL-mode database at path with enough rows to leave
+// a substantial write-ahead log behind.
+func seedWorkingCopy(t *testing.T, path string) *db.DB {
+	t.Helper()
+	d, err := db.OpenReadWrite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Exec("CREATE TABLE t(a)"); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 200 {
+		if err := d.Exec("INSERT INTO t VALUES (?)", i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return d
+}
+
+func TestFinalizeWorkingCopy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "3gpp.db.new")
+	d := seedWorkingCopy(t, path)
+
+	if err := finalizeWorkingCopy(d, path); err != nil {
+		t.Fatalf("finalizeWorkingCopy: %v", err)
+	}
+	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
+		if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+			t.Errorf("%s still exists after finalize (stat err %v)", sidecar, err)
+		}
+	}
+
+	// The rows have to survive in the main file on their own.
+	conn, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var n int
+	if err := conn.QueryRow("SELECT count(*) FROM t").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 200 {
+		t.Errorf("row count = %d, want 200", n)
+	}
+}
+
+// A checkpoint blocked by a concurrent reader reports "busy" in its result row,
+// not as an error: PRAGMA wal_checkpoint and Close both return nil while the
+// whole update is still sitting in the WAL. Deleting the WAL and renaming the
+// file at that point throws the run away and still reports success.
+func TestFinalizeWorkingCopy_BlockedCheckpointKeepsWAL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "3gpp.db.new")
+	d := seedWorkingCopy(t, path)
+
+	reader, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	reader.SetMaxOpenConns(1)
+	// An open read transaction pins the snapshot the WAL still describes.
+	tx, err := reader.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var n int
+	if err := tx.QueryRow("SELECT count(*) FROM t").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := finalizeWorkingCopy(d, path); err == nil {
+		t.Fatal("expected an error when the checkpoint cannot merge the WAL")
+	}
+	fi, statErr := os.Stat(path + "-wal")
+	if statErr != nil {
+		t.Fatalf("the unmerged WAL was deleted: %v", statErr)
+	}
+	if fi.Size() == 0 {
+		t.Error("the unmerged WAL was truncated")
+	}
 }

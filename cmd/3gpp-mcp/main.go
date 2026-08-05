@@ -557,6 +557,33 @@ complete -c 3gpp-mcp -n "not __fish_seen_subcommand_from serve build download im
 	}
 }
 
+// finalizeWorkingCopy merges path's write-ahead log into the main file and
+// closes d, leaving a single self-contained file that can be renamed over the
+// live database.
+//
+// The sidecar files are only removed once the merge is known to have happened.
+// PRAGMA wal_checkpoint reports a blocked checkpoint in its result row rather
+// than as an error, so a checkpoint can leave the whole update sitting in the
+// WAL while both Exec and Close return nil; deleting the WAL at that point
+// discards every change the run just made. A clean close unlinks the WAL, so a
+// surviving non-empty one means the merge did not complete.
+func finalizeWorkingCopy(d *db.DB, path string) error {
+	checkpointErr := d.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	closeErr := d.Close()
+	if checkpointErr != nil {
+		return fmt.Errorf("checkpoint working copy: %w", checkpointErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close working copy: %w", closeErr)
+	}
+	if fi, err := os.Stat(path + "-wal"); err == nil && fi.Size() > 0 {
+		return fmt.Errorf("working copy still has a %d-byte write-ahead log after checkpoint", fi.Size())
+	}
+	_ = os.Remove(path + "-wal")
+	_ = os.Remove(path + "-shm")
+	return nil
+}
+
 func cmdUpdate(args []string) {
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
 	dbPath := fs.String("db", "3gpp.db", "SQLite database path")
@@ -685,10 +712,9 @@ func cmdUpdate(args []string) {
 	}
 
 	// Checkpoint WAL into the main file so the renamed DB is self-contained.
-	_ = d.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
-	_ = d.Close()
-	_ = os.Remove(newPath + "-wal")
-	_ = os.Remove(newPath + "-shm")
+	if err := finalizeWorkingCopy(d, newPath); err != nil {
+		log.Fatalf("Failed to finalize working copy: %v\nThe updated database is left at %s; %s was not replaced.", err, newPath, *dbPath)
+	}
 
 	// Atomically replace the live database. The serve process retains its old
 	// inode until restarted; ExecStartPost in the systemd unit handles that.
