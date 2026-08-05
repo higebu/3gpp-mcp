@@ -1,10 +1,13 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,6 +21,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/higebu/3gpp-mcp/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/db"
 	"github.com/higebu/3gpp-mcp/internal/testutil"
 	"github.com/higebu/3gpp-mcp/tools"
@@ -898,16 +902,28 @@ func TestBuildHTTPHandler_WebViewerAuth(t *testing.T) {
 	})
 }
 
+// listenLocal binds a listener on a free loopback port for runHTTPServer tests.
+func listenLocal(t *testing.T) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	return ln
+}
+
 // TestRunHTTPServer covers the serve loop extracted from cmdServe: graceful
-// shutdown on context cancellation and error propagation on listen failure.
+// shutdown on context cancellation, error propagation on serve failure, and a
+// non-nil error when the drain deadline expires with requests in flight — the
+// process must not exit 0 after cutting requests off (#105).
 func TestRunHTTPServer(t *testing.T) {
 	t.Run("graceful shutdown on cancel", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
-		server := &http.Server{Addr: "127.0.0.1:0", Handler: http.HandlerFunc(healthHandler)}
+		server := &http.Server{Handler: http.HandlerFunc(healthHandler)}
 
 		done := make(chan error, 1)
-		go func() { done <- runHTTPServer(ctx, server) }()
-		// Give ListenAndServe a moment to bind, then cancel.
+		go func() { done <- runHTTPServer(ctx, server, listenLocal(t)) }()
+		// Give Serve a moment to start, then cancel.
 		time.Sleep(100 * time.Millisecond)
 		cancel()
 
@@ -921,10 +937,53 @@ func TestRunHTTPServer(t *testing.T) {
 		}
 	})
 
-	t.Run("listen error propagates", func(t *testing.T) {
-		server := &http.Server{Addr: "256.256.256.256:0", Handler: http.HandlerFunc(healthHandler)}
-		if err := runHTTPServer(context.Background(), server); err == nil {
-			t.Error("expected an error for an unbindable address")
+	t.Run("serve error propagates", func(t *testing.T) {
+		ln := listenLocal(t)
+		ln.Close()
+		server := &http.Server{Handler: http.HandlerFunc(healthHandler)}
+		if err := runHTTPServer(context.Background(), server, ln); err == nil {
+			t.Error("expected an error for a closed listener")
+		}
+	})
+
+	t.Run("failed drain returns an error", func(t *testing.T) {
+		origTimeout := shutdownTimeout
+		shutdownTimeout = 50 * time.Millisecond
+		t.Cleanup(func() { shutdownTimeout = origTimeout })
+
+		release := make(chan struct{})
+		defer close(release)
+		started := make(chan struct{})
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			close(started)
+			<-release
+		})}
+		defer server.Close()
+
+		ln := listenLocal(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		done := make(chan error, 1)
+		go func() { done <- runHTTPServer(ctx, server, ln) }()
+
+		// Park a request inside the handler so Shutdown cannot drain.
+		go func() {
+			resp, err := http.Get("http://" + ln.Addr().String())
+			if err == nil {
+				resp.Body.Close()
+			}
+		}()
+		<-started
+		cancel()
+
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Error("expected an error when the drain deadline expires with a request in flight")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("runHTTPServer did not return after the drain deadline")
 		}
 	})
 }
@@ -1011,6 +1070,104 @@ func TestFinalizeWorkingCopy_BlockedCheckpointKeepsWAL(t *testing.T) {
 	if fi.Size() == 0 {
 		t.Error("the unmerged WAL was truncated")
 	}
+}
+
+// TestFinalizeWorkingCopy_StatError checks that a stat failure on the WAL
+// sidecar is reported instead of being treated as "no WAL": an unreadable
+// sidecar is exactly the unknown-merge-state the check exists to catch (#105).
+func TestFinalizeWorkingCopy_StatError(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A path whose parent is a regular file: os.Stat(path+"-wal") fails with
+	// ENOTDIR, which is a stat error but not os.ErrNotExist.
+	path := filepath.Join(blocker, "3gpp.db.new")
+
+	d := seedWorkingCopy(t, filepath.Join(dir, "real.db"))
+	err := finalizeWorkingCopy(d, path)
+	if err == nil {
+		t.Fatal("expected an error when the WAL sidecar cannot be stat'ed")
+	}
+	if !strings.Contains(err.Error(), "write-ahead log") {
+		t.Errorf("error = %v, want a WAL stat failure report", err)
+	}
+}
+
+// assertNoWALSidecars fails the test when dbPath has -wal/-shm files left
+// behind — the symptom of exiting without closing a WAL-mode database (#105).
+func assertNoWALSidecars(t *testing.T, dbPath string) {
+	t.Helper()
+	for _, sidecar := range []string{dbPath + "-wal", dbPath + "-shm"} {
+		if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+			t.Errorf("%s left behind (stat err: %v)", sidecar, err)
+		}
+	}
+}
+
+// TestRunConvert_ErrorClosesDatabase verifies that a failed import still
+// closes the database: before #105, cmdConvert exited via log.Fatalf and the
+// skipped deferred Close left uncheckpointed WAL sidecars behind.
+func TestRunConvert_ErrorClosesDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "out.db")
+	_ = captureStdout(t, func() {
+		err := runConvert(context.Background(), dbPath, filepath.Join(t.TempDir(), "missing.docx"), false)
+		if err == nil {
+			t.Error("expected an error for a missing .docx")
+		}
+	})
+	assertNoWALSidecars(t, dbPath)
+}
+
+// TestRunConvertDir_ErrorClosesDatabase is the import-dir counterpart of
+// TestRunConvert_ErrorClosesDatabase (#105).
+func TestRunConvertDir_ErrorClosesDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "dir.db")
+	// An empty directory makes ConvertDir fail with "no .docx files found".
+	err := runConvertDir(context.Background(), dbPath, t.TempDir(), 1, false, false)
+	if err == nil {
+		t.Error("expected an error for a directory without .docx files")
+	}
+	assertNoWALSidecars(t, dbPath)
+}
+
+// TestRunPipeline_ErrorClosesDatabase verifies the build pipeline closes the
+// database when the run fails (#105). The mock server returns a valid zip
+// whose only .docx cannot be parsed, so every spec fails quickly without the
+// download retry backoff.
+func TestRunPipeline_ErrorClosesDatabase(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	f, err := zw.Create("bad.docx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("not a docx")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		_, _ = w.Write(buf.Bytes())
+	}))
+	defer ts.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "pipeline.db")
+	specs := []*pipeline.SpecVersion{
+		{SpecID: "23.501", Filename: "23501-i60.zip", URL: ts.URL + "/23501-i60.zip"},
+	}
+
+	_ = captureStdout(t, func() {
+		err := runPipeline(context.Background(), dbPath, ts.Client(), specs, 1, false, false, 10*time.Second)
+		if err == nil {
+			t.Error("expected an error when every spec failed")
+		}
+	})
+	assertNoWALSidecars(t, dbPath)
 }
 
 // TestCmdUpdate_UnreadableDB checks that a database that cannot be read is

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -243,7 +244,6 @@ func cmdServe(args []string) {
 		}
 
 		server := &http.Server{
-			Addr:    *addr,
 			Handler: buildHTTPHandler(src, s, *bearerToken, *enableWeb),
 			// Bound header reads and idle keep-alives so stalled connections
 			// (slowloris) cannot pile up. No overall write timeout: MCP
@@ -252,10 +252,15 @@ func cmdServe(args []string) {
 			IdleTimeout:       120 * time.Second,
 		}
 
+		ln, err := net.Listen("tcp", *addr)
+		if err != nil {
+			log.Fatalf("Server error: %v", err)
+		}
+
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
-		if err := runHTTPServer(ctx, server); err != nil {
+		if err := runHTTPServer(ctx, server, ln); err != nil {
 			log.Fatalf("Server error: %v", err)
 		}
 	default:
@@ -263,12 +268,18 @@ func cmdServe(args []string) {
 	}
 }
 
-// runHTTPServer serves until the listener fails or ctx is cancelled. On
+// shutdownTimeout bounds the graceful drain when the HTTP server shuts down.
+// It is a variable so tests can shorten it.
+var shutdownTimeout = 10 * time.Second
+
+// runHTTPServer serves on ln until serving fails or ctx is cancelled. On
 // cancellation it drains in-flight requests and returns nil, so the caller's
-// deferred database and version cache closes actually run.
-func runHTTPServer(ctx context.Context, server *http.Server) error {
+// deferred database and version cache closes actually run. A failed drain —
+// the deadline expired with requests still in flight — is returned as an
+// error: requests were cut off, so the process must not exit 0.
+func runHTTPServer(ctx context.Context, server *http.Server, ln net.Listener) error {
 	errCh := make(chan error, 1)
-	go func() { errCh <- server.ListenAndServe() }()
+	go func() { errCh <- server.Serve(ln) }()
 	select {
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -276,10 +287,10 @@ func runHTTPServer(ctx context.Context, server *http.Server) error {
 		}
 	case <-ctx.Done():
 		log.Println("Shutting down...")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("Shutdown error: %v", err)
+			return fmt.Errorf("shutdown: %w", err)
 		}
 	}
 	return nil
@@ -300,24 +311,34 @@ func cmdConvert(args []string) {
 	}
 	docxPath := fs.Arg(0)
 
-	d, err := db.OpenReadWrite(*dbPath)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if err := runConvert(ctx, *dbPath, docxPath, *convertImage); err != nil {
+		log.Fatalf("Convert failed: %v", err)
+	}
+}
+
+// runConvert opens the database, imports a single .docx and closes the
+// database again — also on failure, where log.Fatalf in the caller would skip
+// deferred closes and leave uncheckpointed WAL sidecars behind.
+func runConvert(ctx context.Context, dbPath, docxPath string, convertImage bool) error {
+	d, err := db.OpenReadWrite(dbPath)
 	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
+		return fmt.Errorf("open database: %w", err)
 	}
 	defer d.Close()
 
 	if err := d.InitSchema(); err != nil {
-		log.Fatalf("Failed to init schema: %v", err)
+		return fmt.Errorf("init schema: %w", err)
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 
 	fmt.Printf("Parsing %s...\n", docxPath)
-	if err := pipeline.ConvertSingleFile(ctx, d, docxPath, *convertImage); err != nil {
-		log.Fatalf("Convert failed: %v", err)
+	if err := pipeline.ConvertSingleFile(ctx, d, docxPath, convertImage); err != nil {
+		return err
 	}
-	fmt.Printf("Written to %s\n", *dbPath)
+	fmt.Printf("Written to %s\n", dbPath)
+	return nil
 }
 
 func cmdConvertDir(args []string) {
@@ -337,22 +358,29 @@ func cmdConvertDir(args []string) {
 	}
 	dirPath := fs.Arg(0)
 
-	d, err := db.OpenReadWrite(*dbPath)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if err := runConvertDir(ctx, *dbPath, dirPath, *workers, *convertDoc, *convertImage); err != nil {
+		log.Fatalf("Convert dir failed: %v", err)
+	}
+}
+
+// runConvertDir opens the database, imports a directory of .docx files and
+// closes the database again — also on failure, so no WAL sidecars are left
+// behind when the caller exits via log.Fatalf.
+func runConvertDir(ctx context.Context, dbPath, dirPath string, workers int, convertDoc, convertImage bool) error {
+	d, err := db.OpenReadWrite(dbPath)
 	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
+		return fmt.Errorf("open database: %w", err)
 	}
 	defer d.Close()
 
 	if err := d.InitSchema(); err != nil {
-		log.Fatalf("Failed to init schema: %v", err)
+		return fmt.Errorf("init schema: %w", err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	if err := pipeline.ConvertDir(ctx, d, dirPath, *workers, *convertDoc, *convertImage); err != nil {
-		log.Fatalf("Convert dir failed: %v", err)
-	}
+	return pipeline.ConvertDir(ctx, d, dirPath, workers, convertDoc, convertImage)
 }
 
 // exit is swapped in tests to cover fatal CLI-argument paths without
@@ -468,40 +496,49 @@ func cmdPipeline(args []string) {
 
 	requireSelector(*release, *latest, *specFlag, *seriesFlag)
 
-	d, err := db.OpenReadWrite(*dbPath)
-	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
-	}
-	defer d.Close()
-
-	if err := d.InitSchema(); err != nil {
-		log.Fatalf("Failed to init schema: %v", err)
-	}
-
+	// Resolve specs before opening the database: resolveSpecs exits via
+	// log.Fatalf on failure, which must not strand an open WAL-mode database.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	client := &http.Client{Timeout: *timeout}
 	filtered := resolveSpecs(ctx, client, *specList, *specFlag, *seriesFlag, *release, !*noCache, *scrapeWorkers)
 
-	if len(filtered) == 0 {
-		fmt.Println("No specs matched the filters.")
-		return
+	if err := runPipeline(ctx, *dbPath, client, filtered, *workers, *convertDoc, *convertImage, *timeout); err != nil {
+		log.Fatalf("Pipeline failed: %v", err)
+	}
+}
+
+// runPipeline opens the database and feeds specs through the download +
+// convert pipeline, closing the database again — also on failure, so no WAL
+// sidecars are left behind when the caller exits via log.Fatalf.
+func runPipeline(ctx context.Context, dbPath string, client *http.Client, specs []*pipeline.SpecVersion, workers int, convertDoc, convertImage bool, timeout time.Duration) error {
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer d.Close()
+
+	if err := d.InitSchema(); err != nil {
+		return fmt.Errorf("init schema: %w", err)
 	}
 
-	fmt.Printf("Processing %d specs with %d workers...\n", len(filtered), *workers)
+	if len(specs) == 0 {
+		fmt.Println("No specs matched the filters.")
+		return nil
+	}
+
+	fmt.Printf("Processing %d specs with %d workers...\n", len(specs), workers)
 
 	p := &pipeline.Pipeline{
 		DB:           d,
 		Client:       client,
-		Workers:      *workers,
-		ConvertDoc:   *convertDoc,
-		ConvertImage: *convertImage,
-		Timeout:      *timeout,
+		Workers:      workers,
+		ConvertDoc:   convertDoc,
+		ConvertImage: convertImage,
+		Timeout:      timeout,
 	}
 
-	if err := p.Run(ctx, filtered); err != nil {
-		log.Fatalf("Pipeline failed: %v", err)
-	}
+	return p.Run(ctx, specs)
 }
 
 func cmdCompletion(args []string) {
@@ -576,11 +613,24 @@ func finalizeWorkingCopy(d *db.DB, path string) error {
 	if closeErr != nil {
 		return fmt.Errorf("close working copy: %w", closeErr)
 	}
-	if fi, err := os.Stat(path + "-wal"); err == nil && fi.Size() > 0 {
-		return fmt.Errorf("working copy still has a %d-byte write-ahead log after checkpoint", fi.Size())
+	fi, err := os.Stat(path + "-wal")
+	switch {
+	case err == nil:
+		if fi.Size() > 0 {
+			return fmt.Errorf("working copy still has a %d-byte write-ahead log after checkpoint", fi.Size())
+		}
+	case !errors.Is(err, os.ErrNotExist):
+		// A stat failure is not proof the WAL is gone — treating it as "no
+		// WAL" is exactly the unknown-merge-state this check exists to catch.
+		return fmt.Errorf("stat working copy write-ahead log: %w", err)
 	}
-	_ = os.Remove(path + "-wal")
-	_ = os.Remove(path + "-shm")
+	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
+		if err := os.Remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
+			// A sidecar that survives next to the renamed database would be
+			// picked up by the next run's working copy, so refuse the rename.
+			return fmt.Errorf("remove %s: %w", sidecar, err)
+		}
+	}
 	return nil
 }
 
