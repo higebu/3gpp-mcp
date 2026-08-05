@@ -651,3 +651,29 @@ func TestYAMLVersionRE(t *testing.T) {
 		})
 	}
 }
+
+// TestConvertDir_DBErrorPropagates verifies that a failing database write is
+// surfaced as a non-nil error instead of being logged and forgotten. Without
+// it, an import that stored nothing at all still exited 0.
+func TestConvertDir_DBErrorPropagates(t *testing.T) {
+	docxData, err := os.ReadFile(testdataDocxPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "spec.docx"), docxData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A database with no schema: every insert fails with "no such table".
+	d, err := db.OpenReadWrite(filepath.Join(t.TempDir(), "empty.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	if err := ConvertDir(context.Background(), d, dir, 1, false, false); err == nil {
+		t.Fatal("expected an error when the database write fails")
+	}
+}

@@ -461,17 +461,28 @@ func ConvertDir(ctx context.Context, d *db.DB, dirPath string, workers int, conv
 		return fmt.Errorf("all %d files failed to parse", len(files))
 	}
 
-	// Write to DB in cover-last order
+	// Write to DB in cover-last order. A failing file does not abort the rest,
+	// but the caller has to hear about it: a silently empty database must not
+	// look like a successful import to cron/CI.
+	var dbErr error
+	dbErrors := 0
 	for _, f := range files {
 		if r, ok := parsed[f]; ok {
 			if err := d.InsertSpecWithSectionsAndImages(r.spec, r.sections, r.images); err != nil {
 				log.Printf("  DB error for %s: %v", r.spec.ID, err)
+				dbErrors++
+				if dbErr == nil {
+					dbErr = fmt.Errorf("store %s: %w", r.spec.ID, err)
+				}
 			}
 		}
 	}
 
 	if parseErrors > 0 {
 		log.Printf("  %d of %d files failed to parse", parseErrors, len(files))
+	}
+	if dbErrors > 0 {
+		return fmt.Errorf("%d of %d files failed to store: %w", dbErrors, len(parsed), dbErr)
 	}
 
 	return docConvertErr
