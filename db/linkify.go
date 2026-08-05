@@ -15,12 +15,15 @@ type region struct{ start, end int }
 
 // fencedCodeRegions returns the byte ranges of fenced code blocks: from a line
 // whose first non-blank characters open a backtick or tilde fence through the
-// line that closes it with the same marker. An unclosed fence runs to the end
-// of the content.
+// line that closes it, CommonMark style: the closer uses the same marker, is
+// at least as long as the opener, and carries nothing but trailing whitespace
+// (so "```go" inside an open fence is content, not a closer, and a ```` fence
+// is not closed by ```). An unclosed fence runs to the end of the content.
 func fencedCodeRegions(content string) []region {
 	var regions []region
 	fenceStart := -1
-	var fenceMarker string
+	var fenceChar byte
+	fenceLen := 0
 	for lineStart := 0; lineStart < len(content); {
 		lineEnd := strings.IndexByte(content[lineStart:], '\n')
 		if lineEnd < 0 {
@@ -32,8 +35,10 @@ func fencedCodeRegions(content string) []region {
 		switch {
 		case fenceStart < 0 && (strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~")):
 			fenceStart = lineStart
-			fenceMarker = line[:3]
-		case fenceStart >= 0 && strings.HasPrefix(line, fenceMarker):
+			fenceChar = line[0]
+			fenceLen = markerRunLen(line, fenceChar)
+		case fenceStart >= 0 && markerRunLen(line, fenceChar) >= fenceLen &&
+			strings.TrimRight(line[markerRunLen(line, fenceChar):], " \t") == "":
 			regions = append(regions, region{fenceStart, lineEnd})
 			fenceStart = -1
 		}
@@ -43,6 +48,16 @@ func fencedCodeRegions(content string) []region {
 		regions = append(regions, region{fenceStart, len(content)})
 	}
 	return regions
+}
+
+// markerRunLen returns the length of the run of marker bytes at the start of
+// line.
+func markerRunLen(line string, marker byte) int {
+	n := 0
+	for n < len(line) && line[n] == marker {
+		n++
+	}
+	return n
 }
 
 // inlineCodeRegions returns the byte ranges of inline code spans outside the

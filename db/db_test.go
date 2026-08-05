@@ -471,6 +471,11 @@ func TestSanitizeFTS5Query_ExecutesWithoutError(t *testing.T) {
 		"*", "**", "handov*",
 		"AND", "OR", "NOT", "AND AMF", "AMF AND", "AMF AND AND SMF",
 		"NEAR(a b", "NEAR(AMF UE, 5", "NEAR(", "NEAR()",
+		// FTS5 keywords are uppercase-only: these must run as plain terms.
+		"and AMF", "AMF or", "not", "AMF and and SMF",
+		// Mixed-case NEAR is not a keyword but still a hard syntax error
+		// when left bare.
+		"Near(a b)", "near(AMF UE)",
 	}
 	for _, q := range queries {
 		sanitized := sanitizeFTS5Query(q)

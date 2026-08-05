@@ -278,6 +278,24 @@ func TestLinkifyRefs_CodeRegions(t *testing.T) {
 			want:  "Intro [TS 38.300](/specs/TS 38.300).\n\n```asn1\n-- TS 38.331 defines RRC",
 		},
 		{
+			// CommonMark: the closer must be at least as long as the opener.
+			name:  "four-backtick fence is not closed by three backticks",
+			input: "````\n```\nTS 23.501\n````\nAfter TS 38.300.",
+			want:  "````\n```\nTS 23.501\n````\nAfter [TS 38.300](/specs/TS 38.300).",
+		},
+		{
+			// CommonMark: a closer carries no info string, so "```go" inside
+			// an open fence is content.
+			name:  "info-string line inside an open fence is not a closer",
+			input: "```\n```go\nTS 23.501\n```\nAfter TS 38.300.",
+			want:  "```\n```go\nTS 23.501\n```\nAfter [TS 38.300](/specs/TS 38.300).",
+		},
+		{
+			name:  "closer with trailing spaces still closes",
+			input: "```\nTS 23.501\n```  \nAfter TS 38.300.",
+			want:  "```\nTS 23.501\n```  \nAfter [TS 38.300](/specs/TS 38.300).",
+		},
+		{
 			name:  "ref inside inline code untouched",
 			input: "Inline `see TS 29.228` too.",
 			want:  "Inline `see TS 29.228` too.",
