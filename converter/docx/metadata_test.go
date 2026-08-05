@@ -94,6 +94,15 @@ func TestExtractMetadata_FilenameVariants(t *testing.T) {
 			wantToken:   "",
 		},
 		{
+			// The stem pattern stays permissive: a type token glued to the
+			// preceding word still normalizes.
+			name:        "spec token glued to a word in the stem",
+			filename:    "draftTS23.501.docx",
+			wantSpecID:  "TS 23.501",
+			wantVersion: "",
+			wantToken:   "",
+		},
+		{
 			name:        "split multi-file spec body chunk",
 			filename:    "38101-1-k00_s00-05.docx",
 			wantSpecID:  "TS 38.101-1",
@@ -214,6 +223,13 @@ func TestExtractMetadata_DocTypeDetection(t *testing.T) {
 			name:       "standalone Technical Report line",
 			filename:   "21905-h20.docx",
 			body:       []bodyElement{coverPara("ZB", "Technical Report")},
+			wantSpecID: "TR 21.905",
+			wantType:   "TR",
+		},
+		{
+			name:       "standalone type line with punctuation and casing",
+			filename:   "21905-h20.docx",
+			body:       []bodyElement{coverPara("ZB", "technical report.")},
 			wantSpecID: "TR 21.905",
 			wantType:   "TR",
 		},

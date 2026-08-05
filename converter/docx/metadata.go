@@ -25,11 +25,15 @@ var (
 	// characters, each a digit or letter. Legacy releases 1-9 have tokens
 	// that start with a digit ("920" is 9.2.0), so the first character must
 	// not be restricted to letters.
-	filenameRE    = regexp.MustCompile(`^(\d{2})(\d{3})(?:-(\d{1,2}))?-?([0-9a-z]{3})`)
-	specPatternRE = regexp.MustCompile(`(?i)\b(TS|TR)\s*(\d+)\.(\d+)`)
-	versionRE     = regexp.MustCompile(`V(\d+\.\d+\.\d+)`)
-	releaseRE     = regexp.MustCompile(`Release\s+(\d+)`)
-	sectionPartRE = regexp.MustCompile(`_s[A-Z0-9]`)
+	filenameRE = regexp.MustCompile(`^(\d{2})(\d{3})(?:-(\d{1,2}))?-?([0-9a-z]{3})`)
+	// The word boundary keeps document-text scans from matching a token
+	// glued to the end of another word; filename stems keep the old
+	// permissive pattern so names like "draftTS23.501" still normalize.
+	specPatternRE     = regexp.MustCompile(`(?i)\b(TS|TR)\s*(\d+)\.(\d+)`)
+	stemSpecPatternRE = regexp.MustCompile(`(?i)(TS|TR)\s*(\d+)\.(\d+)`)
+	versionRE         = regexp.MustCompile(`V(\d+\.\d+\.\d+)`)
+	releaseRE         = regexp.MustCompile(`Release\s+(\d+)`)
+	sectionPartRE     = regexp.MustCompile(`_s[A-Z0-9]`)
 )
 
 // coreProperties represents docProps/core.xml.
@@ -119,7 +123,7 @@ func extractMetadata(filename string, props coreProperties, bodyElements []bodyE
 		if dotted, ok := specver.TokenToDotted(versionToken); ok {
 			version = dotted
 		}
-	} else if match := specPatternRE.FindStringSubmatch(stem); match != nil {
+	} else if match := stemSpecPatternRE.FindStringSubmatch(stem); match != nil {
 		docType = strings.ToUpper(match[1])
 		specID = docType + " " + match[2] + "." + match[3]
 	} else {
@@ -245,10 +249,11 @@ func detectDocType(series, num string, props coreProperties, coverParas []coverP
 		}
 	}
 	for _, cp := range coverParas {
-		switch strings.TrimRight(strings.TrimSpace(cp.text), ";") {
-		case "Technical Specification":
+		line := strings.Trim(cp.text, " \t;:.,")
+		switch {
+		case strings.EqualFold(line, "Technical Specification"):
 			return "TS"
-		case "Technical Report":
+		case strings.EqualFold(line, "Technical Report"):
 			return "TR"
 		}
 	}
