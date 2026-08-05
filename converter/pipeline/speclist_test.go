@@ -399,6 +399,9 @@ func TestFetchSpecList_PartialNotCached(t *testing.T) {
 	if partial.FailedListings != 1 {
 		t.Errorf("FailedListings = %d, want 1", partial.FailedListings)
 	}
+	if msg := partial.Error(); !strings.Contains(msg, "1 directory listing(s)") {
+		t.Errorf("Error() = %q, want it to name the failed listing count", msg)
+	}
 	// The healthy entries still come back so a caller may choose to proceed.
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry from the healthy spec, got %d", len(entries))
@@ -407,6 +410,47 @@ func TestFetchSpecList_PartialNotCached(t *testing.T) {
 	cachePath := filepath.Join(cacheHome, "3gpp-mcp", CacheKey("speclist"))
 	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
 		t.Errorf("partial spec list must not be cached; stat err = %v", err)
+	}
+}
+
+// TestFetchSpecList_CompleteListIsCached verifies that a scrape with no
+// failed listings still saves its result to the cache: only a partial list is
+// barred from it.
+func TestFetchSpecList_CompleteListIsCached(t *testing.T) {
+	cacheHome := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+
+	archivePath := "/ftp/Specs/archive/"
+	mux := http.NewServeMux()
+	mux.HandleFunc(archivePath, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != archivePath {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `<a href="23_series/">23_series</a>`+"\n")
+	})
+	mux.HandleFunc(archivePath+"23_series/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="23.001/">23.001</a>`+"\n")
+	})
+	mux.HandleFunc(archivePath+"23_series/23.001/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="23001-a00.zip">23001-a00.zip</a>`+"\n")
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	entries, err := FetchSpecList(context.Background(), client, nil, true, 2)
+	if err != nil {
+		t.Fatalf("FetchSpecList: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+
+	cachePath := filepath.Join(cacheHome, "3gpp-mcp", CacheKey("speclist"))
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Errorf("complete spec list should be cached; stat err = %v", err)
 	}
 }
 

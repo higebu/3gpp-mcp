@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -702,6 +704,117 @@ func TestCmdUpdate_AllUpToDate(t *testing.T) {
 	})
 	if !strings.Contains(out, "All specs are up to date") {
 		t.Errorf("expected 'All specs are up to date' message, got: %s", out)
+	}
+}
+
+// partialArchive serves a mock archive where 23.501 lists one zip and 23.502
+// fails, so a full scrape assembles a partial spec list.
+func partialArchive(t *testing.T, healthyZip string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ftp/Specs/archive/" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `<a href="23_series/">23_series</a>`+"\n")
+	})
+	mux.HandleFunc("/ftp/Specs/archive/23_series/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="23.501/">23.501</a>`+"\n"+`<a href="23.502/">23.502</a>`+"\n")
+	})
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `<a href="%s">%s</a>`+"\n", healthyZip, healthyZip)
+	})
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.502/", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// captureLog runs fn and returns whatever it wrote through the log package.
+func captureLog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	fn()
+	return buf.String()
+}
+
+// TestResolveSpecs_PartialSpecListAborts verifies that a scrape which lost
+// some directory listings aborts the command instead of quietly producing an
+// incomplete database from the partial list.
+func TestResolveSpecs_PartialSpecListAborts(t *testing.T) {
+	ts := partialArchive(t, "23501-k10.zip")
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	exitCode := -1
+	orig := exit
+	exit = func(code int) { exitCode = code }
+	t.Cleanup(func() { exit = orig })
+
+	logged := captureLog(t, func() {
+		_ = captureStdout(t, func() {
+			specs := resolveSpecs(context.Background(), client, "", "", "23", 0, false, 0)
+			if specs != nil {
+				t.Errorf("expected nil specs after an abort, got %d", len(specs))
+			}
+		})
+	})
+	if exitCode != 1 {
+		t.Errorf("exit code = %d, want 1", exitCode)
+	}
+	if !strings.Contains(logged, "spec list is incomplete") {
+		t.Errorf("log = %q, want the incomplete-list abort message", logged)
+	}
+}
+
+// TestCmdUpdate_PartialSpecListWarns verifies that update survives a partial
+// spec list with a warning: a spec missing from the list is merely skipped,
+// so aborting the whole run would be needlessly strict.
+func TestCmdUpdate_PartialSpecListWarns(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "update.db")
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := d.InitSchema(); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	if err := d.UpsertSpec(db.Spec{
+		ID:           "TS 23.501",
+		Title:        "System architecture",
+		Version:      "20.1.0",
+		VersionToken: "k10",
+		Release:      "20",
+		Series:       "23",
+	}); err != nil {
+		t.Fatalf("upsert spec: %v", err)
+	}
+	d.Close()
+
+	// The healthy listing offers an OLDER version (j60 = v19.6.0), so the run
+	// finds nothing to update and finishes without downloading anything.
+	ts := partialArchive(t, "23501-j60.zip")
+	origClient := newHTTPClient
+	newHTTPClient = func(timeout time.Duration) *http.Client {
+		return &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+	}
+	t.Cleanup(func() { newHTTPClient = origClient })
+
+	var out string
+	logged := captureLog(t, func() {
+		out = captureStdout(t, func() {
+			cmdUpdate([]string{"-db", dbPath, "-no-cache"})
+		})
+	})
+	if !strings.Contains(logged, "will not be updated this run") {
+		t.Errorf("log = %q, want the partial-list warning", logged)
+	}
+	if !strings.Contains(out, "All specs are up to date") {
+		t.Errorf("output = %q, want the run to continue to completion", out)
 	}
 }
 
