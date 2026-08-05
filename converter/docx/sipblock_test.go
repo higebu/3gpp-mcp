@@ -525,6 +525,23 @@ func TestBlockContinues_BackslashContinuation(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "single-line prose without a trailing period does not continue",
+			text: "The above example shows the session setup",
+			want: false,
+		},
+		{
+			name: "folded QoE-metrics style remainder continues",
+			text: "metrics={Initial_Buffering_Duration|Rebuffering_Duration };rate=End",
+			want: true,
+		},
+		{
+			// Bare-word runs shorter than three, broken up by value tokens,
+			// stay accepted: only sentence-length word runs mark prose.
+			name: "value tokens interleaved with words continue",
+			text: "codec mode 0,2 change AMR",
+			want: true,
+		},
+		{
 			name: "prose after the wrapped remainder does not continue",
 			text: "mode-change-period=2\nThe session is then established as usual",
 			want: false,
@@ -539,6 +556,14 @@ func TestBlockContinues_BackslashContinuation(t *testing.T) {
 				t.Errorf("sdpBlockContinues(%q) = %v, want %v", tt.text, got, tt.want)
 			}
 		})
+	}
+
+	img := paragraphInfo{
+		Text: "v=0", Runs: []runInfo{{Text: "v=0"}},
+		Images: []imageRef{{RID: "rId1"}},
+	}
+	if sipBlockContinues(img, foldedLast) || sdpBlockContinues(img, foldedLast) {
+		t.Error("expected an image paragraph never to continue a block")
 	}
 }
 
@@ -565,6 +590,52 @@ func TestParseSections_SDPBackslashDoesNotSwallowProse(t *testing.T) {
 	}
 	if content[1] != "This clause describes how the session is established." {
 		t.Errorf("expected the prose paragraph after the fence, got %q", content[1])
+	}
+}
+
+// A one-line prose paragraph with no trailing period after a value fold has
+// no "remaining lines" for the shape check to reject, so the wrapped-line
+// test itself must spot the prose (PR #122 review finding on issue #101).
+func TestParseSections_SDPBackslashDoesNotSwallowUnpunctuatedProse(t *testing.T) {
+	elements := []bodyElement{
+		sipHeading("1\tSDP"),
+		sipPara("v=0\no=ghost 1 1 IN IP4 10.0.0.1\ns=example\nt=0 0"),
+		sipPara(`a=fmtp:97 mode-set=0,2 \`),
+		sipPara("The above example shows the session setup"),
+	}
+	sections := sipParse(elements)
+	content := sections[0].Content
+	if len(content) != 2 {
+		t.Fatalf("expected fence + prose, got %v", content)
+	}
+	if strings.Contains(content[0], "The above example") {
+		t.Errorf("prose swallowed into the fence: %q", content[0])
+	}
+	if content[1] != "The above example shows the session setup" {
+		t.Errorf("expected the prose paragraph after the fence, got %q", content[1])
+	}
+}
+
+// The genuine TS 26.234 A.1 shape keeps working end to end: the wrapped
+// base64 remainder of a folded a=fmtp value stays inside the fence.
+func TestParseSections_SDPBackslashKeepsWrappedValue(t *testing.T) {
+	elements := []bodyElement{
+		sipHeading("1\tSDP"),
+		sipPara("v=0\no=ghost 1 1 IN IP4 10.0.0.1\ns=example\nt=0 0"),
+		sipPara(`a=fmtp:96 packetization-mode=1; profile-level-id=64001e; \`),
+		sipPara("sprop-parameter-sets= Z2QAHpWQC0PaAfyQ,aOuOoA=="),
+		sipPara("The example is explained below."),
+	}
+	sections := sipParse(elements)
+	content := sections[0].Content
+	if len(content) != 2 {
+		t.Fatalf("expected fence + prose, got %v", content)
+	}
+	if !strings.Contains(content[0], "sprop-parameter-sets= Z2QAHpWQC0PaAfyQ,aOuOoA==") {
+		t.Errorf("expected the wrapped value inside the fence, got %q", content[0])
+	}
+	if content[1] != "The example is explained below." {
+		t.Errorf("expected trailing prose after the fence, got %q", content[1])
 	}
 }
 

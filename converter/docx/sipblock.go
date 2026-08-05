@@ -19,6 +19,7 @@ package docx
 import (
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // sipMethodsPat lists the SIP request methods that may open an example
@@ -223,11 +224,40 @@ func sdpExampleStart(elements []bodyElement, idx int) (label, text string, ok bo
 }
 
 // wrappedValueLine reports whether line can be the wrapped remainder of a
-// backslash-folded value. A trailing period marks a sentence, not a value —
-// the same signal sdpFieldLine relies on — so a prose paragraph following a
-// folded value is not mistaken for its continuation (issue #101).
+// backslash-folded value, so a prose paragraph following a folded value is
+// not mistaken for its continuation (issue #101). Two signals mark prose: a
+// trailing period (a sentence end — the same signal sdpFieldLine relies on)
+// and a run of three or more consecutive purely-alphabetic words. Real
+// wrapped values are parameter tokens — "sprop-parameter-sets=" plus a
+// base64 blob (TS 26.234 A.1), "mode-change-period=2", folded
+// 3GPP-QoE-Metrics values like "metrics={…};rate=End" — whose tokens carry
+// '=', ';', digits, hyphens or braces, so three bare words in a row never
+// occur in them, while a natural-language sentence almost always has such a
+// run even without its final period.
 func wrappedValueLine(line string) bool {
-	return !strings.HasSuffix(strings.TrimSpace(line), ".")
+	line = strings.TrimSpace(line)
+	if strings.HasSuffix(line, ".") {
+		return false
+	}
+	bareRun := 0
+	for _, tok := range strings.Fields(line) {
+		bare := true
+		for _, r := range tok {
+			if !unicode.IsLetter(r) {
+				bare = false
+				break
+			}
+		}
+		if !bare {
+			bareRun = 0
+			continue
+		}
+		bareRun++
+		if bareRun >= 3 {
+			return false
+		}
+	}
+	return true
 }
 
 // sipMessageLinesFrom reports whether every non-blank line of text is
