@@ -1940,6 +1940,24 @@ func TestExtractContext(t *testing.T) {
 	}
 }
 
+// TestResolveVersion_ExplicitVersion pins the explicit-version lookup path:
+// a stored version resolves to itself, an absent one reports ErrNoVersion.
+func TestResolveVersion_ExplicitVersion(t *testing.T) {
+	d := setupTestDB(t)
+
+	v, err := d.ResolveVersion(t.Context(), "TS 23.501", "18.6.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v != "18.6.0" {
+		t.Errorf("ResolveVersion = %q, want 18.6.0", v)
+	}
+
+	if _, err := d.ResolveVersion(t.Context(), "TS 23.501", "1.0.0"); !errors.Is(err, ErrNoVersion) {
+		t.Errorf("ResolveVersion for an absent version: err = %v, want ErrNoVersion", err)
+	}
+}
+
 // TestQueryMethodsHonorContext verifies that the read paths abort when the
 // caller's context is already cancelled, so a cancelled MCP request does not
 // keep querying (issue #106).

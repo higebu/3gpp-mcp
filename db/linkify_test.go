@@ -321,6 +321,16 @@ func TestLinkifyRefs_CodeRegions(t *testing.T) {
 			want:  "``TS 23.501`` and [TS 23.502](/specs/TS 23.502)",
 		},
 		{
+			name:  "unclosed backtick before a fence does not swallow it",
+			input: "a ` b\n```\nTS 23.501\n```\nTS 23.502 end",
+			want:  "a ` b\n```\nTS 23.501\n```\n[TS 23.502](/specs/TS 23.502) end",
+		},
+		{
+			name:  "inline span after a fence still closes",
+			input: "```\nfenced\n```\n` a b ` TS 23.501",
+			want:  "```\nfenced\n```\n` a b ` [TS 23.501](/specs/TS 23.501)",
+		},
+		{
 			name:  "refs before and after a fence are linkified",
 			input: "TS 23.501 first.\n```diameter\nRFC 6733 AVP\n```\nRFC 6733 last.",
 			want:  "[TS 23.501](/specs/TS 23.501) first.\n```diameter\nRFC 6733 AVP\n```\n[RFC 6733](https://www.rfc-editor.org/rfc/rfc6733) last.",
@@ -372,5 +382,28 @@ func TestLinkifyRefs_InsideTable(t *testing.T) {
 				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestRegionHelpers pins the region lookup helpers, including regionEnd's
+// defensive fallback for a position outside every region, which LinkifyRefs
+// itself never reaches (it only calls regionEnd after inRegion says true).
+func TestRegionHelpers(t *testing.T) {
+	regs := []region{{start: 5, end: 10}}
+
+	if inRegion(regs, 4) {
+		t.Error("inRegion(4) = true, want false")
+	}
+	if !inRegion(regs, 5) {
+		t.Error("inRegion(5) = false, want true")
+	}
+	if inRegion(regs, 10) {
+		t.Error("inRegion(10) = true, want false (end is exclusive)")
+	}
+	if got := regionEnd(regs, 7); got != 10 {
+		t.Errorf("regionEnd(7) = %d, want 10", got)
+	}
+	if got := regionEnd(regs, 3); got != 4 {
+		t.Errorf("regionEnd(3) = %d, want 4 (pos+1 fallback)", got)
 	}
 }
