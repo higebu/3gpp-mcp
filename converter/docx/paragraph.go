@@ -547,16 +547,23 @@ func paragraphToMarkdown(info paragraphInfo, styleName string) string {
 		// level, which CommonMark/GFM recognizes as nested under both "- "
 		// and "1. " parent markers.
 		indent := strings.Repeat("    ", listStyleLevel(styleName)-1)
-		if strings.Contains(styleName, "Bullet") {
-			return indent + "- " + text
+		marker := "- " // default to bullet for unknown list styles
+		if !strings.Contains(styleName, "Bullet") && strings.Contains(styleName, "Number") {
+			marker = "1. "
 		}
-		if strings.Contains(styleName, "Number") {
-			return indent + "1. " + text
-		}
-		return indent + "- " + text // default to bullet for unknown list styles
+		// The item's runs go through the same renderer as a non-list
+		// paragraph's, so bold/italic/<sup>/<sub> survive inside list items;
+		// fall back to the plain text when the runs render to nothing (e.g. a
+		// paragraphInfo carrying Text but no Runs) so an item is never empty.
+		return indent + marker + runsOrText(info, text)
 	}
 
-	// Handle bold/italic at run level
+	return runsOrText(info, text)
+}
+
+// runsOrText renders info's runs to markdown, falling back to the given
+// already-trimmed plain text when they produce nothing.
+func runsOrText(info paragraphInfo, text string) string {
 	if len(info.Runs) > 0 {
 		if md := runsToMarkdown(info.Runs); md != "" {
 			return md
