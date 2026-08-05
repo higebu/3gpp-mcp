@@ -128,6 +128,73 @@ func TestDocTypeID(t *testing.T) {
 	}
 }
 
+// TestApplyDocType covers the record rewrite: the spec row, every section and
+// every image must move to the new label together, and a matching or unknown
+// type leaves everything alone.
+func TestApplyDocType(t *testing.T) {
+	spec := db.Spec{ID: "TS 21.905"}
+	sections := []db.Section{{SpecID: "TS 21.905", Number: "1"}}
+	images := []db.Image{{SpecID: "TS 21.905", Name: "img.png"}}
+
+	applyDocType(&spec, sections, images, "TR")
+	if spec.ID != "TR 21.905" {
+		t.Errorf("spec.ID = %q, want %q", spec.ID, "TR 21.905")
+	}
+	if sections[0].SpecID != "TR 21.905" {
+		t.Errorf("section SpecID = %q, want %q", sections[0].SpecID, "TR 21.905")
+	}
+	if images[0].SpecID != "TR 21.905" {
+		t.Errorf("image SpecID = %q, want %q", images[0].SpecID, "TR 21.905")
+	}
+
+	// A type that already matches is a no-op.
+	applyDocType(&spec, sections, images, "TR")
+	if spec.ID != "TR 21.905" || sections[0].SpecID != "TR 21.905" || images[0].SpecID != "TR 21.905" {
+		t.Errorf("matching type must not change records: %q %q %q", spec.ID, sections[0].SpecID, images[0].SpecID)
+	}
+
+	// An unknown type keeps whatever was parsed.
+	applyDocType(&spec, sections, images, "")
+	if spec.ID != "TR 21.905" {
+		t.Errorf("empty type must not change records, got %q", spec.ID)
+	}
+}
+
+// TestPipelineRun_DBInsertError verifies that a failing database write makes
+// the spec fail instead of reporting OK. The database has no schema, so the
+// insert after a successful download and parse cannot succeed.
+func TestPipelineRun_DBInsertError(t *testing.T) {
+	docxData := makeMinimalDocx(t,
+		`<w:p><w:pPr><w:pStyle w:val="Heading 1"/></w:pPr><w:r><w:t>5 Definitions</w:t></w:r></w:p>`)
+	zipData := makeZipWithFile(t, "21905-h20.docx", docxData)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		_, _ = w.Write(zipData)
+	}))
+	defer ts.Close()
+
+	// A database with no schema: every insert fails with "no such table".
+	d, err := db.OpenReadWrite(filepath.Join(t.TempDir(), "empty.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	specs := []*SpecVersion{{
+		Series:   "21",
+		SpecID:   "21.905",
+		Filename: "21905-h20.zip",
+		Version:  "h20",
+		Release:  17,
+		URL:      ts.URL + "/21905-h20.zip",
+	}}
+	p := &Pipeline{DB: d, Client: ts.Client(), Workers: 1, Timeout: 10 * time.Second}
+	if err := p.Run(context.Background(), specs); err == nil {
+		t.Error("expected an error when the database write fails")
+	}
+}
+
 // TestPipelineRun_TRDocType verifies that a Technical Report is stored under a
 // "TR " spec ID, and that the part files of a split spec — which carry no
 // cover page and cannot tell a TS from a TR — follow the cover file's verdict

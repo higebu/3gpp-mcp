@@ -1782,6 +1782,28 @@ func TestInsertSpec_DropsSupersededVersions(t *testing.T) {
 	}
 }
 
+// TestAlternateDocTypeID pins the prefix swap the relabel cleanup relies on:
+// both document types map to each other, and an ID without a type prefix has
+// no alternate label to clean up.
+func TestAlternateDocTypeID(t *testing.T) {
+	cases := []struct {
+		id, want string
+		ok       bool
+	}{
+		{"TS 21.905", "TR 21.905", true},
+		{"TR 21.905", "TS 21.905", true},
+		{"TS 38.101-1", "TR 38.101-1", true},
+		{"weirdname", "", false},
+		{"", "", false},
+	}
+	for _, tt := range cases {
+		got, ok := alternateDocTypeID(tt.id)
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("alternateDocTypeID(%q) = %q, %v; want %q, %v", tt.id, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
 // TestInsertSpec_DropsStaleDocTypeLabel: a spec number names either a TS or a
 // TR, never both. Databases built before TR detection stored every spec as
 // "TS ...", so an update that imports the corrected "TR ..." label must drop
@@ -1835,6 +1857,13 @@ func TestInsertSpec_DropsStaleDocTypeLabel(t *testing.T) {
 	img, err := d.GetImage("TR 21.905", "18.0.0", "img.png")
 	if err != nil || img == nil {
 		t.Errorf("expected the relabeled spec's image to exist, got %v", err)
+	}
+
+	// An ID without a type prefix has no alternate label to clean up and
+	// must insert unharmed.
+	insert("weirdname", "1.0.0")
+	if _, err := d.GetImage("weirdname", "1.0.0", "img.png"); err != nil {
+		t.Errorf("expected the unprefixed spec to insert cleanly, got %v", err)
 	}
 }
 

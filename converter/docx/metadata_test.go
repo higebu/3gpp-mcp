@@ -227,6 +227,13 @@ func TestExtractMetadata_DocTypeDetection(t *testing.T) {
 			wantType:   "TR",
 		},
 		{
+			name:       "standalone Technical Specification line with punctuation",
+			filename:   "23501-i30.docx",
+			body:       []bodyElement{coverPara("ZB", "technical specification.")},
+			wantSpecID: "TS 23.501",
+			wantType:   "TS",
+		},
+		{
 			name:       "standalone type line with punctuation and casing",
 			filename:   "21905-h20.docx",
 			body:       []bodyElement{coverPara("ZB", "technical report.")},
