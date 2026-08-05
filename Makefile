@@ -12,6 +12,7 @@ release_flag = $(if $(filter latest,$(RELEASE)),--latest,--release $(RELEASE))
 
 # Build the MCP server
 build:
+	mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/3gpp-mcp ./cmd/3gpp-mcp
 
 # Install the MCP server
@@ -20,6 +21,7 @@ install:
 
 # Import a single .docx file (usage: make import FILE=path/to/spec.docx)
 import: build
+	@test -n "$(FILE)" || { echo "usage: make import FILE=path/to/spec.docx"; exit 1; }
 	./$(BIN_DIR)/3gpp-mcp import --db $(DB_PATH) $(FILE)
 
 # Import all .docx files in SPECS_DIR
@@ -31,8 +33,9 @@ import-dir: build
 build-db: build
 	./$(BIN_DIR)/3gpp-mcp build $(release_flag) --db $(DB_PATH) --convert-doc
 
-# Download specs (download only, no conversion). Latest of every spec by
-# default; pass RELEASE=19 to restrict to a single release.
+# Download specs (no database import; legacy .doc files are converted to
+# .docx). Latest of every spec by default; pass RELEASE=19 to restrict to a
+# single release.
 download-specs: build
 	./$(BIN_DIR)/3gpp-mcp download $(release_flag) --output-dir $(SPECS_DIR) --convert-doc
 
@@ -46,7 +49,9 @@ update-specs: build
 
 # Show database info
 db-info:
-	@sqlite3 $(DB_PATH) "SELECT COUNT(*) || ' specs' FROM specs; SELECT COUNT(*) || ' sections' FROM sections;" 2>/dev/null || echo "Database not found: $(DB_PATH)"
+	@command -v sqlite3 >/dev/null || { echo "sqlite3 CLI not found"; exit 1; }
+	@test -f $(DB_PATH) || { echo "Database not found: $(DB_PATH)"; exit 1; }
+	@sqlite3 $(DB_PATH) "SELECT COUNT(*) || ' specs' FROM specs; SELECT COUNT(*) || ' sections' FROM sections;"
 
 # Start HTTP server with web viewer
 web: build
@@ -59,4 +64,4 @@ test:
 # Clean build artifacts
 clean:
 	rm -rf $(BIN_DIR)
-	rm -f data/3gpp.db
+	rm -f $(DB_PATH)
