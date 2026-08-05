@@ -532,6 +532,9 @@ func (s *Store) run(ctx context.Context, key, specID, version string, sv *pipeli
 		// never cached.
 		if r := recover(); r != nil {
 			f.err = fmt.Errorf("version fetch for %s v%s panicked: %v", specID, version, r)
+			// The fetch is detached, so the last waiter is often gone by
+			// the time a panic fires; log it or it is lost entirely.
+			log.Printf("warning: %v", f.err)
 		}
 		s.mu.Lock()
 		delete(s.inflight, key)
@@ -684,6 +687,7 @@ func (s *Store) runImages(ctx context.Context, key, specID, version string, sv *
 		// set f.err before close(f.done) publishes the outcome.
 		if r := recover(); r != nil {
 			f.err = fmt.Errorf("image fetch for %s v%s panicked: %v", specID, version, r)
+			log.Printf("warning: %v", f.err)
 		}
 		s.mu.Lock()
 		delete(s.inflight, key)
