@@ -117,12 +117,14 @@ func extractMetadata(filename string, props coreProperties, bodyElements []bodyE
 
 	// Try to get title from document properties
 	if props.Subject != "" && !isTemplateValue(props.Subject) {
-		if relMatch := releaseRE.FindStringSubmatch(props.Subject); relMatch != nil {
-			release = relMatch[1]
-			idx := strings.Index(props.Subject, "(Release")
-			if idx >= 0 {
-				title = strings.TrimRight(props.Subject[:idx], "; ")
-			}
+		// The release marker is usually parenthesised ("...; (Release 18)"),
+		// but releaseRE does not require the parenthesis. Cut the title at
+		// wherever the marker actually starts, otherwise a subject that spells
+		// the release without parentheses yields no title at all and the spec
+		// falls back to its first heading.
+		if relMatch := releaseRE.FindStringSubmatchIndex(props.Subject); relMatch != nil {
+			release = props.Subject[relMatch[2]:relMatch[3]]
+			title = strings.TrimRight(props.Subject[:relMatch[0]], "; (")
 		} else {
 			title = props.Subject
 		}

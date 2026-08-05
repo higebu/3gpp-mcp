@@ -494,3 +494,48 @@ func TestParseSections_SIPImageParagraphEndsBlock(t *testing.T) {
 		}
 	}
 }
+
+func TestSDPFieldLineCount(t *testing.T) {
+	tests := []struct {
+		name          string
+		text          string
+		wantCount     int
+		wantAllFields bool
+	}{
+		{
+			name:          "plain field lines",
+			text:          "v=0\nm=audio 49170 RTP/AVP 0",
+			wantCount:     2,
+			wantAllFields: true,
+		},
+		{
+			name:          "backslash continuation covers the next line",
+			text:          "m=audio 49170 RTP/AVP 96\na=fmtp:96 mode-set=0,2,4,7; \\\n         mode-change-period=2",
+			wantCount:     3,
+			wantAllFields: true,
+		},
+		{
+			name:          "prose line is rejected",
+			text:          "v=0\nThis paragraph explains the fields.",
+			wantCount:     1,
+			wantAllFields: false,
+		},
+		{
+			// A blank line ends the continuation, so the prose after it has to
+			// be checked like any other line instead of being waved through.
+			name:          "continuation does not survive a blank line",
+			text:          "a=fmtp:96 mode-set=0,2,4,7; \\\n\nThis paragraph explains the fields.",
+			wantCount:     1,
+			wantAllFields: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			count, allFields := sdpFieldLineCount(tt.text)
+			if count != tt.wantCount || allFields != tt.wantAllFields {
+				t.Errorf("sdpFieldLineCount(%q) = (%d, %v), want (%d, %v)",
+					tt.text, count, allFields, tt.wantCount, tt.wantAllFields)
+			}
+		})
+	}
+}

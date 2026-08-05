@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,8 @@ import (
 	"github.com/higebu/3gpp-mcp/db"
 	"github.com/higebu/3gpp-mcp/internal/testutil"
 	"github.com/higebu/3gpp-mcp/tools"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestHealthHandler(t *testing.T) {
@@ -924,4 +927,120 @@ func TestRunHTTPServer(t *testing.T) {
 			t.Error("expected an error for an unbindable address")
 		}
 	})
+}
+
+// seedWorkingCopy builds a WAL-mode database at path with enough rows to leave
+// a substantial write-ahead log behind.
+func seedWorkingCopy(t *testing.T, path string) *db.DB {
+	t.Helper()
+	d, err := db.OpenReadWrite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Exec("CREATE TABLE t(a)"); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 200 {
+		if err := d.Exec("INSERT INTO t VALUES (?)", i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return d
+}
+
+func TestFinalizeWorkingCopy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "3gpp.db.new")
+	d := seedWorkingCopy(t, path)
+
+	if err := finalizeWorkingCopy(d, path); err != nil {
+		t.Fatalf("finalizeWorkingCopy: %v", err)
+	}
+	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
+		if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+			t.Errorf("%s still exists after finalize (stat err %v)", sidecar, err)
+		}
+	}
+
+	// The rows have to survive in the main file on their own.
+	conn, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var n int
+	if err := conn.QueryRow("SELECT count(*) FROM t").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 200 {
+		t.Errorf("row count = %d, want 200", n)
+	}
+}
+
+// A checkpoint blocked by a concurrent reader reports "busy" in its result row,
+// not as an error: PRAGMA wal_checkpoint and Close both return nil while the
+// whole update is still sitting in the WAL. Deleting the WAL and renaming the
+// file at that point throws the run away and still reports success.
+func TestFinalizeWorkingCopy_BlockedCheckpointKeepsWAL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "3gpp.db.new")
+	d := seedWorkingCopy(t, path)
+
+	reader, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	reader.SetMaxOpenConns(1)
+	// An open read transaction pins the snapshot the WAL still describes.
+	tx, err := reader.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var n int
+	if err := tx.QueryRow("SELECT count(*) FROM t").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := finalizeWorkingCopy(d, path); err == nil {
+		t.Fatal("expected an error when the checkpoint cannot merge the WAL")
+	}
+	fi, statErr := os.Stat(path + "-wal")
+	if statErr != nil {
+		t.Fatalf("the unmerged WAL was deleted: %v", statErr)
+	}
+	if fi.Size() == 0 {
+		t.Error("the unmerged WAL was truncated")
+	}
+}
+
+// TestCmdUpdate_UnreadableDB checks that a database that cannot be read is
+// reported as a failure rather than as "No specs in database": the two used to
+// share one branch, so a broken database told the user to run 'build' and
+// exited 0. Run as a subprocess because the failure path calls log.Fatalf.
+func TestCmdUpdate_UnreadableDB(t *testing.T) {
+	if os.Getenv("CMD_UPDATE_UNREADABLE_HELPER") != "" {
+		cmdUpdate([]string{"-db", os.Getenv("CMD_UPDATE_UNREADABLE_HELPER")})
+		return
+	}
+	// A database file with no schema at all: ListSpecs fails with "no such
+	// table" instead of returning zero rows.
+	dbPath := filepath.Join(t.TempDir(), "broken.db")
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	d.Close()
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestCmdUpdate_UnreadableDB")
+	cmd.Env = append(os.Environ(), "CMD_UPDATE_UNREADABLE_HELPER="+dbPath)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected a non-zero exit for an unreadable database, got: %s", out)
+	}
+	if strings.Contains(string(out), "No specs in database") {
+		t.Errorf("an unreadable database was reported as empty: %s", out)
+	}
+	if !strings.Contains(string(out), "Failed to read specs") {
+		t.Errorf("expected the read failure to be reported, got: %s", out)
+	}
 }

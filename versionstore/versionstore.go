@@ -55,8 +55,11 @@ const DefaultFileName = "versions.db"
 // fences Diameter command/AVP definitions (```diameter), generation 4 fences
 // SIP/RTSP message and SDP examples by content detection, generation 5
 // fences content-detected XML/DTD blocks (```xml), generation 6 tags the
-// SIP/SDP fences (```sip / ```sdp) for syntax highlighting.
-const cacheSchemaVersion = 6
+// SIP/SDP fences (```sip / ```sdp) for syntax highlighting, generation 7
+// makes OMML math render in math mode (n-ary operators separated from their
+// operand, "~" and "^" escaped through \text{}) and stops a backslash
+// continuation from pulling prose after a blank line into an SDP fence.
+const cacheSchemaVersion = 7
 
 // schema mirrors the spec, section and image tables of the main database,
 // without the full-text index: cached versions must never appear in search

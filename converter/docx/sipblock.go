@@ -148,6 +148,11 @@ func sdpFieldLineCount(text string) (count int, allFields bool) {
 	for _, ln := range strings.Split(text, "\n") {
 		ln = strings.TrimSpace(ln)
 		if ln == "" {
+			// A blank line ends the continuation: the wrapped remainder of a
+			// value has to follow its backslash immediately. Carrying the flag
+			// across the gap would waive the field-line check for whatever
+			// prose comes next and pull it into the block.
+			prevContinued = false
 			continue
 		}
 		if !prevContinued && !sdpFieldLine(ln) {
