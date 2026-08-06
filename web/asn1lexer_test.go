@@ -119,7 +119,7 @@ func TestASN1LexerHyphenatedIdentifierNotSplit(t *testing.T) {
 
 func TestRenderMarkdownHighlightsASN1(t *testing.T) {
 	content := "```asn1\nRRCSetup ::= SEQUENCE {}\n```"
-	got := renderMarkdown(content, "TS 38.331", "", nil)
+	got := renderMarkdown(content, "TS 38.331", "", nil, nil)
 	if !strings.Contains(got, "chroma") {
 		t.Errorf("renderMarkdown() = %q, want chroma-highlighted output", got)
 	}

@@ -146,10 +146,15 @@ func htmlLink(text, url string) string {
 // LinkifyRefs replaces spec/RFC/bracket references in Markdown content with Markdown links.
 // bracketMap maps bracket numbers (e.g. "19") to spec IDs (e.g. "TS 33.203"); pass nil to skip.
 // urlFor is called with (targetSpec, targetSection) and returns a URL string.
+// sectionExists enables bare same-document references ("clause 4.2" with no
+// spec designator): a bare reference is linkified only when sectionExists
+// reports its section number present in the current document, and urlFor is
+// then called with an empty targetSpec meaning "the current spec". Pass nil
+// to skip bare references.
 // References inside existing Markdown links, fenced code blocks and inline
 // code spans are not replaced: goldmark renders code verbatim, so a rewritten
 // reference there would show up as literal link syntax.
-func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec, section string) string) string {
+func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec, section string) string, sectionExists func(section string) bool) string {
 	// Build list of excluded regions: existing Markdown links, fenced code
 	// blocks and inline code spans.
 	var excluded []region
@@ -267,13 +272,81 @@ func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec,
 		}
 	}
 
+	// Bare same-document references, lowest priority: only where no qualified
+	// candidate matched and the context does not tie the reference to another
+	// document.
+	if sectionExists != nil {
+		overlapsAny := func(start, end int) bool {
+			for _, c := range candidates {
+				if start < c.end && c.start < end {
+					return true
+				}
+			}
+			return false
+		}
+		qualifiedElsewhere := func(start, end int) bool {
+			tail := content[end:]
+			if bareTrailingQualRE.MatchString(tail) && !barePresentDocRE.MatchString(tail) {
+				return true
+			}
+			head := content[:start]
+			// bareLeadingSpecRE is anchored at $; a short tail keeps the scan
+			// cheap. A cut-off leading rune can only lose a match, and only
+			// for a designator further away than any it would ever match.
+			if len(head) > 48 {
+				head = head[len(head)-48:]
+			}
+			return bareLeadingSpecRE.MatchString(head)
+		}
+		for _, m := range bareMultiRefRE.FindAllStringSubmatchIndex(content, -1) {
+			if isExcluded(m[0], m[1]) || overlapsAny(m[0], m[1]) || qualifiedElsewhere(m[0], m[1]) {
+				continue
+			}
+			mkLink := linkFor(m[0], m[1])
+			linkedAny := false
+			linked := secNumListRE.ReplaceAllStringFunc(content[m[2]:m[3]], func(sec string) string {
+				if !sectionExists(sec) {
+					return sec
+				}
+				linkedAny = true
+				return mkLink(sec, urlFor("", sec))
+			})
+			if !linkedAny {
+				continue
+			}
+			candidates = append(candidates, candidate{
+				start: m[0],
+				end:   m[1],
+				text:  content[m[0]:m[2]] + linked,
+			})
+		}
+		for _, m := range bareRefRE.FindAllStringSubmatchIndex(content, -1) {
+			sec := content[m[2]:m[3]]
+			if !sectionExists(sec) {
+				continue
+			}
+			if isExcluded(m[0], m[1]) || overlapsAny(m[0], m[1]) || qualifiedElsewhere(m[0], m[1]) {
+				continue
+			}
+			matchText := content[m[0]:m[1]]
+			candidates = append(candidates, candidate{
+				start: m[0],
+				end:   m[1],
+				text:  linkFor(m[0], m[1])(matchText, urlFor("", sec)),
+			})
+		}
+	}
+
 	if len(candidates) == 0 {
 		return content
 	}
 
-	// Sort by start position.
+	// Sort by start position; on a tie the longer match wins deterministically.
 	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].start < candidates[j].start
+		if candidates[i].start != candidates[j].start {
+			return candidates[i].start < candidates[j].start
+		}
+		return candidates[i].end > candidates[j].end
 	})
 
 	// Remove overlapping candidates (keep first/earliest).

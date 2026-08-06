@@ -344,7 +344,15 @@ func (h *handler) renderSpecPage(w http.ResponseWriter, r *http.Request, specID,
 		openAPIs, _ = h.db.ListOpenAPI(r.Context(), specID)
 		refs, _ = h.db.GetReferences(r.Context(), specID, "", number, db.DirectionOutgoing, false)
 	}
-	rendered := renderSections(sections, specID, urlVersion, bracketMap)
+	// Bare "clause 4.2"-style references linkify only to sections this spec
+	// (and version) actually has; the TOC is already in hand.
+	secNums := make(map[string]bool, len(toc))
+	for _, s := range toc {
+		secNums[s.Number] = true
+	}
+	rendered := renderSections(sections, specID, urlVersion, bracketMap, func(number string) bool {
+		return secNums[number]
+	})
 	prev, next := adjacentSections(toc, number)
 
 	data := specData{
@@ -573,14 +581,14 @@ func (h *handler) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 
 // Helper functions
 
-func renderSections(sections []db.Section, specID, version string, bracketMap map[string]string) []sectionRendered {
+func renderSections(sections []db.Section, specID, version string, bracketMap map[string]string, sectionExists func(string) bool) []sectionRendered {
 	rendered := make([]sectionRendered, len(sections))
 	for i, s := range sections {
 		rendered[i] = sectionRendered{
 			Number:  s.Number,
 			Title:   s.Title,
 			Level:   s.Level,
-			Content: template.HTML(renderMarkdown(s.Content, specID, version, bracketMap)), //nolint:gosec
+			Content: template.HTML(renderMarkdown(s.Content, specID, version, bracketMap, sectionExists)), //nolint:gosec
 		}
 	}
 	return rendered

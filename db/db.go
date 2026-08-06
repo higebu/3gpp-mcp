@@ -1279,6 +1279,39 @@ var (
 
 	// secNumListRE extracts individual section numbers from a comma/and-separated list.
 	secNumListRE = regexp.MustCompile(secNumRaw)
+
+	// bareRefRE matches a reference with no spec designator: "clause 4.2",
+	// "Subclause 5.15.2", "Annex B". Such a reference means the current
+	// document, so it is linkified only when it does not overlap a qualified
+	// match and the surrounding context does not tie it to another document
+	// (bareLeadingSpecRE, bareTrailingQualRE). Sentence-initial capitals are
+	// common in this form, so both cases are accepted.
+	bareRefRE = regexp.MustCompile(`\b(?:[Cc]lause|[Ss]ection|[Ss]ubclause|[Aa]nnex)` + sp + `+` + secNum)
+
+	// bareMultiRefRE matches a bare multi-section list: "clauses 4.2, 4.3 and 4.4".
+	// Groups: 1=section-list.
+	bareMultiRefRE = regexp.MustCompile(
+		`\b(?:[Cc]lauses|[Ss]ubclauses|[Ss]ections|[Aa]nnexe?s)` + sp + `+` +
+			`(` + secNumRaw + `(?:,` + sp + `*` + secNumRaw + `)*` + sp + `+and` + sp + `+` + secNumRaw + `)\b`)
+
+	// bareTrailingQualRE matches an "of"/"in" continuation after a bare
+	// reference, which usually names another document ("clause 5.1 of
+	// TS 23.402", "clause 4.2 of [26]", "clause 4 of ITU-T Recommendation
+	// X.509"). RE2 has no lookahead, so it is applied to the text after a
+	// bare match instead of being part of bareRefRE.
+	bareTrailingQualRE = regexp.MustCompile(`^` + sp + `+(?:of|in)` + sp + `+`)
+
+	// barePresentDocRE matches the continuations that still mean the current
+	// document, re-allowing a bare reference bareTrailingQualRE would reject.
+	barePresentDocRE = regexp.MustCompile(`^` + sp + `+(?:of|in)` + sp +
+		`+(?:the` + sp + `+present` + sp + `+document|this` + sp + `+(?:specification|document))`)
+
+	// bareLeadingSpecRE matches a spec designator or bracket reference just
+	// before a bare reference ("TS 23.402 Clause 5.1", "[19] Clause 6") —
+	// qualified territory even when capitalization keeps the lowercase-only
+	// qualified patterns (and thus the overlap gate) from covering it.
+	bareLeadingSpecRE = regexp.MustCompile(
+		`(?:(?:TS|TR)` + sp + `+\d+\.\d+|\[\d+[A-Za-z]*\])` + sp + `*[,;]?` + sp + `*$`)
 )
 
 // refExtractor converts regex submatch indices into (targetSpec, targetSection, ok).
