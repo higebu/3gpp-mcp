@@ -62,6 +62,33 @@ func TestSaveAndLoadCache(t *testing.T) {
 	}
 }
 
+// TestLoadCache_EmptyResultIsCacheHit verifies that a cache file saved with
+// zero entries (a filter that legitimately matched nothing) is loaded back as
+// a hit within its TTL, not a miss (#144). Before the fix, LoadCache returned
+// nil for both an empty-but-present cache and an actual miss, so callers that
+// check for a nil result to decide whether to hit the network re-fetched on
+// every call even inside the TTL window.
+func TestLoadCache_EmptyResultIsCacheHit(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	key := CacheKey("empty-result")
+	if err := SaveCache(key, nil); err != nil {
+		t.Fatalf("SaveCache: %v", err)
+	}
+
+	loaded, err := LoadCache(key, time.Hour)
+	if err != nil {
+		t.Fatalf("LoadCache: %v", err)
+	}
+	if loaded == nil {
+		t.Fatal("expected a non-nil empty slice for a fresh, empty cache file, got nil (indistinguishable from a miss)")
+	}
+	if len(loaded) != 0 {
+		t.Errorf("loaded = %v, want empty", loaded)
+	}
+}
+
 func TestLoadCache_Expired(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", tmpDir)

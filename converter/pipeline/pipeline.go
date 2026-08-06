@@ -21,8 +21,12 @@ import (
 )
 
 // docxVersionRE matches 3GPP docx filenames like "21900-j10.docx" or
-// "38101-1-j50.docx" to capture the base-36 version token.
-var docxVersionRE = regexp.MustCompile(`(?i)-([0-9a-z]{2,})\.docx$`)
+// "38101-1-j50.docx" to capture the base-36 version token. It anchors on the
+// leading 5-digit spec number (series+number) and optional multi-part suffix
+// instead of matching the last "-xxx" before ".docx", so a split-spec chunk
+// suffix appended after the token (e.g. "36133-920_s00-11.docx") is never
+// mistaken for the version token itself.
+var docxVersionRE = regexp.MustCompile(`(?i)^\d{2}\d{3}(?:-\d{1,2})?-?([0-9a-z]{3})`)
 
 // releaseFromDocxFilename extracts the release number from a 3GPP docx filename.
 // The release is encoded in the first character of the version token (base-36:

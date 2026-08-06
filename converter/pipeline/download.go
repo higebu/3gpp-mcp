@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +43,10 @@ type DownloadResult struct {
 	Status    string // "OK", "DOC_ONLY", "NO_DOC", "FAILED"
 	DocxFiles []string
 	YAMLFiles []string
+	// DocFiles holds the extracted .doc file paths when Status is DOC_ONLY,
+	// so callers that later run LibreOffice conversion on a shared directory
+	// can tell which converted .docx (if any) belongs to this spec.
+	DocFiles []string
 }
 
 // DownloadAndExtract downloads a spec zip and extracts .docx files to a temp directory.
@@ -150,15 +155,28 @@ func DownloadAndExtract(ctx context.Context, client *http.Client, spec *SpecVers
 			if err := os.MkdirAll(docDir, 0o700); err != nil {
 				log.Printf("  %s: failed to create doc dir: %v", spec.SpecID, err)
 			}
+			var extracted []string
 			for _, f := range r.File {
 				name := filepath.Base(f.Name)
 				if strings.HasSuffix(strings.ToLower(name), ".doc") && !strings.HasPrefix(name, ".") {
-					if err := extractFile(f, filepath.Join(docDir, name)); err != nil {
+					outPath := filepath.Join(docDir, name)
+					if err := extractFile(f, outPath); err != nil {
 						log.Printf("  %s: failed to extract %s: %v", spec.SpecID, name, err)
+					} else {
+						extracted = append(extracted, outPath)
 					}
 				}
 			}
+			// As with the .docx branch above, the archive listing .doc
+			// entries does not mean any of them actually landed on disk.
+			// Reporting DOC_ONLY here would tell the caller "install
+			// LibreOffice and retry" for a spec that has nothing to convert.
+			if len(extracted) == 0 {
+				result.Status = "FAILED"
+				return result, fmt.Errorf("extracted none of the %d .doc file(s) in the archive", len(docFiles))
+			}
 			result.Status = "DOC_ONLY"
+			result.DocFiles = extracted
 			return result, nil
 		}
 
@@ -239,8 +257,9 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 
 	sem := make(chan struct{}, parallel)
 	type result struct {
-		specID string
-		status string
+		specID   string
+		status   string
+		docFiles []string
 	}
 	results := make(chan result, total)
 	var wg sync.WaitGroup
@@ -262,10 +281,12 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 				log.Printf("  %s: download error: %v", spec.SpecID, err)
 			}
 			status := "FAILED"
+			var docFiles []string
 			if r != nil {
 				status = r.Status
+				docFiles = r.DocFiles
 			}
-			results <- result{spec.SpecID, status}
+			results <- result{spec.SpecID, status, docFiles}
 		}()
 	}
 
@@ -274,34 +295,232 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 		close(results)
 	}()
 
+	// docFilesBySpec remembers, per DOC_ONLY spec, which .doc files were
+	// extracted for it into the shared docDir below, so a later conversion
+	// pass can attribute success or failure back to the right spec.
+	docFilesBySpec := make(map[string][]string)
 	i := 0
 	for r := range results {
 		i++
 		stats[r.status]++
 		log.Printf("[%d/%d] %s: %s", i, total, r.specID, r.status)
+		if r.status == "DOC_ONLY" && len(r.docFiles) > 0 {
+			docFilesBySpec[r.specID] = r.docFiles
+		}
+	}
+
+	// _doc_files (holding every DOC_ONLY spec's extracted .doc files) and
+	// outputDir (holding every direct .docx and every published conversion
+	// result) are both flat and shared across the whole batch, and
+	// outputDir persists across separate invocations of this command too.
+	// That flatness makes a basename collision possible in several distinct
+	// shapes; each is called out below with how it's handled or why it
+	// doesn't need to be, since review has surfaced a new one on each of
+	// several passes and the reasoning needs to live somewhere durable:
+	//
+	//  1. direct .docx x direct .docx (two different specs' archives each
+	//     already ship a .docx with the same basename): NOT specially
+	//     handled. DownloadAndExtract writes straight into outputDir with a
+	//     plain overwrite, same as it always has -- including on a second
+	//     invocation of this command, where overwriting previously
+	//     downloaded specs to refresh them is the intended behavior.
+	//     Guarding this would either break that refresh or require
+	//     namespacing outputDir per spec, both bigger changes than this
+	//     collision-handling pass is scoped to. It also cannot occur in
+	//     practice: every 3GPP archive filename is prefixed with that
+	//     spec's own series+number (e.g. "23501-i30.docx"), so two
+	//     *different* specs never produce the same basename.
+	//  2. direct .docx x converted .doc->.docx (one spec's archive ships a
+	//     .docx directly; a different DOC_ONLY spec's .doc converts to that
+	//     same basename): handled by the no-clobber publish below -- a
+	//     converted file is never allowed to overwrite an existing file in
+	//     outputDir. The spec that lost the race stays DOC_ONLY with a
+	//     logged warning instead of destroying the other spec's real
+	//     output.
+	//  3. converted .doc x converted .doc, different specs (two DOC_ONLY
+	//     specs' .doc files share a basename): handled below via
+	//     unattributable -- both extract into the same _doc_files path, so
+	//     only one spec's content survives extraction to be converted, and
+	//     an existence check on the result can't tell whose it was. Neither
+	//     spec is promoted.
+	//  4. duplicate basenames within one spec's OWN archive (e.g. two zip
+	//     entries under different subfolders that both flatten to the same
+	//     name): handled by deduplicating each spec's own doc-file list
+	//     before counting claimants below, so a spec doesn't collide with
+	//     itself and get wrongly excluded as "shared with another spec".
+	//     Only one of the duplicate contents survives extraction (same
+	//     flat-directory constraint as case 3), but that's the existing
+	//     "partial success still counts as OK" rule already used elsewhere
+	//     in this file, not a new attribution risk: the survivor still
+	//     definitely belongs to this spec, since no other spec claims it.
+	//  5. this run's converted output vs. a stale file already sitting at
+	//     the same outputDir path (a leftover from an earlier invocation,
+	//     since outputDir is never cleared between runs): handled by the
+	//     same no-clobber publish as case 2; a spec is only promoted when
+	//     its own file actually lands in outputDir this run.
+	//
+	// docPathClaimants maps each shared docDir path to the set of distinct
+	// DOC_ONLY specs that recorded it (case 3), after deduplicating each
+	// spec's own list first (case 4) so a spec's repeated claim on its own
+	// path never inflates the count past 1.
+	docPathClaimants := make(map[string]map[string]bool)
+	for specID, docFiles := range docFilesBySpec {
+		claimedByThisSpec := make(map[string]bool)
+		for _, docPath := range docFiles {
+			if claimedByThisSpec[docPath] {
+				continue
+			}
+			claimedByThisSpec[docPath] = true
+			if docPathClaimants[docPath] == nil {
+				docPathClaimants[docPath] = make(map[string]bool)
+			}
+			docPathClaimants[docPath][specID] = true
+		}
+	}
+	// unattributableBasenames is the set of converted .docx basenames whose
+	// source .doc path is unattributable: not just excluded from
+	// promotion, but never even published into outputDir. The publish loop
+	// below can't tell which spec's content the surviving .doc physically
+	// held (see case 3), so any file it converts to is an ownerless
+	// .docx that no spec should be credited for -- and its content may
+	// itself be a jumble of a racy write to a path two specs both
+	// extracted into. Skipping the publish, not just the promotion, keeps
+	// that ambiguous file out of outputDir entirely rather than leaving it
+	// there unowned.
+	unattributable := make(map[string]bool)
+	unattributableBasenames := make(map[string]bool)
+	for docPath, specIDSet := range docPathClaimants {
+		if len(specIDSet) <= 1 {
+			continue
+		}
+		unattributable[docPath] = true
+		unattributableBasenames[filepath.Base(convertedDocxPath(docPath, ""))] = true
+		specIDs := make([]string, 0, len(specIDSet))
+		for specID := range specIDSet {
+			specIDs = append(specIDs, specID)
+		}
+		sort.Strings(specIDs)
+		log.Printf("  warning: %s share a same-named .doc file (%s); none will be promoted from it", strings.Join(specIDs, ", "), filepath.Base(docPath))
 	}
 
 	if convertDoc {
 		docDir := filepath.Join(outputDir, "_doc_files")
 		if entries, err := os.ReadDir(docDir); err == nil && len(entries) > 0 {
-			log.Println("Converting .doc files to .docx...")
-			n, err := ConvertDocFiles(ctx, docDir, outputDir)
-			if err != nil {
-				log.Printf("ConvertDocFiles error: %v", err)
-			}
-			log.Printf("Converted %d files", n)
-			if n > 0 && stats["DOC_ONLY"] > 0 {
-				converted := n
-				if converted > stats["DOC_ONLY"] {
-					converted = stats["DOC_ONLY"]
+			// Convert into a fresh, run-scoped scratch directory instead of
+			// outputDir directly. outputDir is the caller's persistent
+			// --output-dir (never cleared between runs, see cmdDownload)
+			// and can already hold a .docx at a spec's expected output path
+			// before conversion even starts this time — either a stale
+			// leftover from an earlier invocation, or, within this very
+			// run, another spec's own .docx that its download already
+			// extracted directly into outputDir (every spec's download and
+			// extraction completes before this block runs). A wall-clock
+			// "written since conversion started" check was tried and
+			// discarded: under load, this environment's file mtimes were
+			// observed landing before the in-process marker that preceded
+			// the write, so mtime cannot be trusted here either. Converting
+			// into an empty directory sidesteps all of that: any file
+			// appearing in it is unambiguously this run's output, no
+			// timing assumptions required. The results are moved into
+			// outputDir afterward to keep the flat layout other commands
+			// (e.g. import-dir) expect.
+			convDir, mkErr := os.MkdirTemp(outputDir, ".doc-convert-*")
+			if mkErr != nil {
+				log.Printf("doc conversion scratch dir error: %v", mkErr)
+			} else {
+				log.Println("Converting .doc files to .docx...")
+				n, err := ConvertDocFiles(ctx, docDir, convDir)
+				if err != nil {
+					log.Printf("ConvertDocFiles error: %v", err)
 				}
-				stats["DOC_ONLY"] -= converted
-				stats["OK"] += converted
+				log.Printf("Converted %d files", n)
+
+				// Publish every converted file into outputDir before
+				// deciding any promotion, and track which basenames
+				// actually made it there. Deciding OK from mere existence
+				// in convDir (as an earlier version of this fix did) could
+				// report a spec OK and then have the evidence vanish: if
+				// publishing failed for that file, the .docx never reached
+				// outputDir, yet the scratch-dir cleanup at the end of this
+				// block would delete the only copy that had ever existed,
+				// leaving the reported OK status orphaned from any real
+				// file. Only a file that is confirmed published counts as
+				// evidence a spec's conversion succeeded.
+				//
+				// Publishing uses os.Link (not os.Rename) so it fails
+				// closed on an existing destination instead of silently
+				// overwriting it (collision cases 2 and 5 in the survey
+				// above): a converted file may not be the only thing that
+				// ever wanted that outputDir path -- another spec's own
+				// .docx may already be sitting there from this very run, or
+				// from an earlier invocation of this command. Since convDir
+				// is a subdirectory of outputDir (same filesystem), the
+				// hard link always succeeds or fails atomically; there is
+				// no separate existence check to race against.
+				published := make(map[string]bool)
+				if convEntries, err := os.ReadDir(convDir); err == nil {
+					for _, e := range convEntries {
+						if unattributableBasenames[e.Name()] {
+							log.Printf("  publish converted %s: skipped, ambiguous ownership (shared .doc basename, see warning above)", e.Name())
+							continue
+						}
+						src := filepath.Join(convDir, e.Name())
+						dst := filepath.Join(outputDir, e.Name())
+						if err := os.Link(src, dst); err != nil {
+							if os.IsExist(err) {
+								log.Printf("  publish converted %s: skipped, %s already exists in outputDir", e.Name(), e.Name())
+							} else {
+								log.Printf("  publish converted %s: %v", e.Name(), err)
+							}
+							continue
+						}
+						published[e.Name()] = true
+					}
+				}
+
+				// A spec is promoted from DOC_ONLY to OK only when one of
+				// its own .doc files was both converted and successfully
+				// published into outputDir this run (partial success still
+				// counts, matching the .docx branch above). The old code
+				// used min(convertedFileCount, docOnlySpecCount), which
+				// conflates a file count with a spec count: a spec with
+				// several .doc files could absorb the whole converted-file
+				// budget and drag an unrelated, fully-failed spec's status
+				// up to OK along with it.
+				for _, docFiles := range docFilesBySpec {
+					for _, docPath := range docFiles {
+						if unattributable[docPath] {
+							continue
+						}
+						base := filepath.Base(convertedDocxPath(docPath, ""))
+						if !published[base] {
+							continue
+						}
+						stats["DOC_ONLY"]--
+						stats["OK"]++
+						break
+					}
+				}
+
+				if err := os.RemoveAll(convDir); err != nil {
+					log.Printf("  cleanup doc conversion scratch dir: %v", err)
+				}
 			}
 		}
 	}
 
 	return stats
+}
+
+// convertedDocxPath returns the .docx path ConvertDocFiles would produce in
+// outputDir for a .doc file extracted at docPath: LibreOffice's --convert-to
+// keeps the input's basename and swaps the extension.
+func convertedDocxPath(docPath, outputDir string) string {
+	base := filepath.Base(docPath)
+	if ext := filepath.Ext(base); strings.EqualFold(ext, ".doc") {
+		base = base[:len(base)-len(ext)]
+	}
+	return filepath.Join(outputDir, base+".docx")
 }
 
 func downloadZip(ctx context.Context, client *http.Client, url string) ([]byte, error) {

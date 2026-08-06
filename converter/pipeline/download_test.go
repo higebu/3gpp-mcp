@@ -138,6 +138,33 @@ func TestDownloadAndExtract_DocOnly(t *testing.T) {
 	}
 }
 
+// TestDownloadAndExtract_AllDocExtractionsFail verifies that a ZIP whose only
+// .doc entry cannot be extracted is reported FAILED, not DOC_ONLY (#143): a
+// DOC_ONLY status with nothing on disk to convert misdirects the operator
+// toward "install LibreOffice and retry" for a spec that has nothing to
+// retry.
+func TestDownloadAndExtract_AllDocExtractionsFail(t *testing.T) {
+	zipBytes := makeRawZipEntry(t, "../evil.doc", []byte("pwned"))
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipBytes)
+	}))
+	defer ts.Close()
+
+	outDir := t.TempDir()
+	spec := &SpecVersion{SpecID: "TS 99.005", URL: ts.URL + "/z2.zip"}
+	result, err := DownloadAndExtract(context.Background(), ts.Client(), spec, outDir, 5*time.Second)
+	if err == nil {
+		t.Fatal("expected an error when no .doc could be extracted")
+	}
+	if result.Status != "FAILED" {
+		t.Errorf("status = %q, want FAILED", result.Status)
+	}
+	if len(result.DocFiles) != 0 {
+		t.Errorf("DocFiles = %v, want none", result.DocFiles)
+	}
+}
+
 // TestDownloadAndExtract_NoDoc verifies the NO_DOC status when the ZIP holds
 // only irrelevant files.
 func TestDownloadAndExtract_NoDoc(t *testing.T) {
@@ -248,6 +275,328 @@ func TestDownloadZip_HTTPError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "HTTP 500") {
 		t.Errorf("error = %v, want 'HTTP 500'", err)
+	}
+}
+
+// writeFakeLibreOffice installs a fake "libreoffice" executable on PATH that
+// mimics --convert-to docx --outdir DIR FILE without needing real
+// LibreOffice: any input whose basename contains "fail" exits non-zero and
+// writes nothing; every other input writes an empty same-name .docx into the
+// --outdir directory, exactly where the real conversion would.
+func writeFakeLibreOffice(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := `#!/bin/sh
+# PATH is overridden to just this directory for the test, so this script
+# must not rely on external utilities like basename -- pure shell parameter
+# expansion only.
+outdir=""
+prev=""
+last=""
+for arg in "$@"; do
+  if [ "$prev" = "--outdir" ]; then
+    outdir="$arg"
+  fi
+  last="$arg"
+  prev="$arg"
+done
+base="${last##*/}"
+case "$base" in
+  *fail*) exit 1 ;;
+esac
+name="${base%.*}"
+echo "converted" > "$outdir/$name.docx"
+exit 0
+`
+	path := filepath.Join(dir, "libreoffice")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+}
+
+// TestDownloadSpecs_ConvertDocPerSpec verifies DOC_ONLY->OK promotion is
+// attributed per spec instead of by a blind min(convertedFileCount,
+// docOnlySpecCount) (#143). SpecA ships two .doc files that both convert
+// (partial success still counts as OK); SpecB ships a single .doc file whose
+// conversion fails outright and must stay DOC_ONLY. The old min()-based logic
+// would promote both specs to OK here, because two files convert overall
+// while only two specs are DOC_ONLY.
+func TestDownloadSpecs_ConvertDocPerSpec(t *testing.T) {
+	writeFakeLibreOffice(t)
+
+	zipA := makeZipWithFiles(t, map[string][]byte{
+		"specA-part1.doc": []byte("a1"),
+		"specA-part2.doc": []byte("a2"),
+	})
+	zipB := makeZipWithFiles(t, map[string][]byte{
+		"specB-fail.doc": []byte("b1"),
+	})
+
+	tsA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipA)
+	}))
+	defer tsA.Close()
+	tsB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipB)
+	}))
+	defer tsB.Close()
+
+	specs := []*SpecVersion{
+		{SpecID: "TS 88.001", URL: tsA.URL + "/a.zip"},
+		{SpecID: "TS 88.002", URL: tsB.URL + "/b.zip"},
+	}
+
+	outputDir := t.TempDir()
+	stats := DownloadSpecs(context.Background(), &http.Client{}, specs, outputDir, 2, true, 10*time.Second)
+
+	if stats["OK"] != 1 {
+		t.Errorf("OK = %d, want 1 (only SpecA converted)", stats["OK"])
+	}
+	if stats["DOC_ONLY"] != 1 {
+		t.Errorf("DOC_ONLY = %d, want 1 (SpecB's conversion failed)", stats["DOC_ONLY"])
+	}
+}
+
+// TestDownloadSpecs_ConvertDocIgnoresStaleOutput covers collision matrix
+// case 5 (this run's converted output vs. a stale leftover from an earlier
+// invocation): a leftover .docx from an earlier invocation of this command
+// does not get mistaken for evidence that this run's conversion succeeded
+// (ocr review finding on #143's fix). outputDir is the caller's persistent
+// --output-dir and is never cleared between runs, so a stale file can
+// already sit at a spec's expected output path before conversion even
+// starts this time.
+func TestDownloadSpecs_ConvertDocIgnoresStaleOutput(t *testing.T) {
+	writeFakeLibreOffice(t)
+
+	zip := makeZipWithFiles(t, map[string][]byte{
+		"specC-fail.doc": []byte("c1"),
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zip)
+	}))
+	defer ts.Close()
+
+	specs := []*SpecVersion{
+		{SpecID: "TS 88.003", URL: ts.URL + "/c.zip"},
+	}
+
+	outputDir := t.TempDir()
+	// Plant a stale .docx at the exact path this spec's .doc file would
+	// convert to, simulating leftover output from an earlier run.
+	if err := os.WriteFile(filepath.Join(outputDir, "specC-fail.docx"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := DownloadSpecs(context.Background(), &http.Client{}, specs, outputDir, 2, true, 10*time.Second)
+
+	if stats["OK"] != 0 {
+		t.Errorf("OK = %d, want 0 (this run's conversion failed; the stale .docx must not count)", stats["OK"])
+	}
+	if stats["DOC_ONLY"] != 1 {
+		t.Errorf("DOC_ONLY = %d, want 1", stats["DOC_ONLY"])
+	}
+}
+
+// TestDownloadSpecs_ConvertDocDirectVsConvertedCollision_PreservesExisting
+// covers collision matrix case 2 (direct .docx vs. converted .doc->.docx,
+// same batch): a converted file must never overwrite another spec's real
+// output that happens to share its basename (Greptile review finding on an
+// earlier version of this fix, which let the rename through as long as it
+// happened "this run" -- landing at the right path wasn't enough, it also
+// must not destroy someone else's file already there). SpecD's archive
+// ships an already-converted "shared.docx" directly (its DownloadAndExtract
+// call returns OK), landing in outputDir before SpecE's .doc conversion
+// runs. SpecE's own .doc file happens to convert to that very path
+// ("shared.doc" -> "shared.docx"); SpecE must lose that race and stay
+// DOC_ONLY, and SpecD's original content must survive untouched.
+func TestDownloadSpecs_ConvertDocDirectVsConvertedCollision_PreservesExisting(t *testing.T) {
+	writeFakeLibreOffice(t)
+
+	zipD := makeZipWithFiles(t, map[string][]byte{
+		"shared.docx": []byte("already a docx"),
+	})
+	zipE := makeZipWithFiles(t, map[string][]byte{
+		"shared.doc": []byte("needs conversion"),
+	})
+
+	tsD := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipD)
+	}))
+	defer tsD.Close()
+	tsE := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipE)
+	}))
+	defer tsE.Close()
+
+	specs := []*SpecVersion{
+		{SpecID: "TS 88.004", URL: tsD.URL + "/d.zip"},
+		{SpecID: "TS 88.005", URL: tsE.URL + "/e.zip"},
+	}
+
+	outputDir := t.TempDir()
+	stats := DownloadSpecs(context.Background(), &http.Client{}, specs, outputDir, 2, true, 10*time.Second)
+
+	if stats["OK"] != 1 {
+		t.Errorf("OK = %d, want 1 (only SpecD's own direct .docx)", stats["OK"])
+	}
+	if stats["DOC_ONLY"] != 1 {
+		t.Errorf("DOC_ONLY = %d, want 1 (SpecE loses the publish race and stays DOC_ONLY)", stats["DOC_ONLY"])
+	}
+
+	got, err := os.ReadFile(filepath.Join(outputDir, "shared.docx"))
+	if err != nil {
+		t.Fatalf("read shared.docx: %v", err)
+	}
+	if string(got) != "already a docx" {
+		t.Errorf("shared.docx content = %q, want %q (SpecE's conversion must not have overwritten it)", got, "already a docx")
+	}
+}
+
+// TestDownloadSpecs_ConvertDocConvertedVsConvertedCollision_NeitherPromoted
+// covers collision matrix case 3 (converted .doc vs. converted .doc, two
+// different specs): two DOC_ONLY specs whose .doc files share a basename
+// must never both be promoted to OK (Greptile review finding). Both extract
+// into the same path in the shared, flat _doc_files directory, so one
+// extraction silently overwrites the other and only one spec's content
+// survives to be converted; an existence check on the single resulting
+// .docx cannot tell which spec it actually belongs to, so neither should be
+// credited. The converted file must also never reach outputDir at all: an
+// earlier version of this fix skipped promotion but still published the
+// ambiguous result, leaving an ownerless .docx that neither spec was
+// credited for (a later Greptile review finding on this same test).
+func TestDownloadSpecs_ConvertDocConvertedVsConvertedCollision_NeitherPromoted(t *testing.T) {
+	writeFakeLibreOffice(t)
+
+	zipF := makeZipWithFiles(t, map[string][]byte{
+		"collide.doc": []byte("from spec F"),
+	})
+	zipG := makeZipWithFiles(t, map[string][]byte{
+		"collide.doc": []byte("from spec G"),
+	})
+
+	tsF := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipF)
+	}))
+	defer tsF.Close()
+	tsG := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipG)
+	}))
+	defer tsG.Close()
+
+	specs := []*SpecVersion{
+		{SpecID: "TS 88.006", URL: tsF.URL + "/f.zip"},
+		{SpecID: "TS 88.007", URL: tsG.URL + "/g.zip"},
+	}
+
+	outputDir := t.TempDir()
+	stats := DownloadSpecs(context.Background(), &http.Client{}, specs, outputDir, 2, true, 10*time.Second)
+
+	if stats["OK"] != 0 {
+		t.Errorf("OK = %d, want 0 (the surviving .doc can't be safely attributed to either spec)", stats["OK"])
+	}
+	if stats["DOC_ONLY"] != 2 {
+		t.Errorf("DOC_ONLY = %d, want 2 (both specs stay DOC_ONLY rather than risk a false OK)", stats["DOC_ONLY"])
+	}
+
+	if _, err := os.Stat(filepath.Join(outputDir, "collide.docx")); !os.IsNotExist(err) {
+		t.Errorf("collide.docx stat = %v, want it absent from outputDir (ambiguous ownership must not be published)", err)
+	}
+}
+
+// TestDownloadSpecs_ConvertDocDuplicateBasenameWithinOneSpec covers
+// collision matrix case 4 (duplicate basenames within one spec's OWN
+// archive): a single spec's zip has two different .doc entries under
+// different subfolders that both flatten to the same basename on
+// extraction ("partA/dup.doc" and "partB/dup.doc" both become "dup.doc").
+// Before this fix, docPathClaimants counted the spec's own repeated claim
+// on that one path as if two different specs had claimed it, wrongly
+// treating the spec as colliding with itself and leaving it at DOC_ONLY
+// even though its own (single surviving) .doc file converts and publishes
+// cleanly with no other spec involved at all.
+func TestDownloadSpecs_ConvertDocDuplicateBasenameWithinOneSpec(t *testing.T) {
+	writeFakeLibreOffice(t)
+
+	zip := makeZipWithFiles(t, map[string][]byte{
+		"partA/dup.doc": []byte("from partA"),
+		"partB/dup.doc": []byte("from partB"),
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zip)
+	}))
+	defer ts.Close()
+
+	specs := []*SpecVersion{
+		{SpecID: "TS 88.009", URL: ts.URL + "/i.zip"},
+	}
+
+	outputDir := t.TempDir()
+	stats := DownloadSpecs(context.Background(), &http.Client{}, specs, outputDir, 2, true, 10*time.Second)
+
+	if stats["OK"] != 1 {
+		t.Errorf("OK = %d, want 1 (the spec's own duplicate .doc basenames must not look like a cross-spec collision)", stats["OK"])
+	}
+	if stats["DOC_ONLY"] != 0 {
+		t.Errorf("DOC_ONLY = %d, want 0", stats["DOC_ONLY"])
+	}
+}
+
+// TestDownloadSpecs_ConvertDocPublishFailureStaysDocOnly verifies that a spec
+// is never reported OK when its converted .docx fails to publish into
+// outputDir (3rd Greptile review finding). Before this fix, promotion was
+// decided from mere existence in the scratch conversion directory: if the
+// subsequent os.Rename into outputDir then failed, the spec had already been
+// counted OK, and the scratch-dir cleanup that follows would delete the only
+// copy of the file that had ever existed -- leaving an "OK" spec with no
+// .docx anywhere. This plants a directory at the exact path the converted
+// .docx would publish to, which makes os.Rename fail deterministically
+// (renaming a regular file onto a directory always errors), and checks the
+// spec stays DOC_ONLY with the scratch file gone rather than orphaned.
+func TestDownloadSpecs_ConvertDocPublishFailureStaysDocOnly(t *testing.T) {
+	writeFakeLibreOffice(t)
+
+	zip := makeZipWithFiles(t, map[string][]byte{
+		"blocked.doc": []byte("h1"),
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zip)
+	}))
+	defer ts.Close()
+
+	specs := []*SpecVersion{
+		{SpecID: "TS 88.008", URL: ts.URL + "/h.zip"},
+	}
+
+	outputDir := t.TempDir()
+	// A directory at the expected publish path makes the rename fail: you
+	// cannot rename a regular file onto an existing directory.
+	if err := os.MkdirAll(filepath.Join(outputDir, "blocked.docx"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := DownloadSpecs(context.Background(), &http.Client{}, specs, outputDir, 2, true, 10*time.Second)
+
+	if stats["OK"] != 0 {
+		t.Errorf("OK = %d, want 0 (the converted .docx never published into outputDir)", stats["OK"])
+	}
+	if stats["DOC_ONLY"] != 1 {
+		t.Errorf("DOC_ONLY = %d, want 1", stats["DOC_ONLY"])
+	}
+
+	// The blocking directory must still be the untouched directory it was:
+	// the rename must not have partially clobbered it.
+	info, err := os.Stat(filepath.Join(outputDir, "blocked.docx"))
+	if err != nil || !info.IsDir() {
+		t.Errorf("blocked.docx = %v (isDir=%v), want the original directory intact", err, info != nil && info.IsDir())
 	}
 }
 

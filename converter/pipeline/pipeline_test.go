@@ -696,11 +696,18 @@ func TestConvertSingleFile_BadPath(t *testing.T) {
 // used to populate the Release column when importing single files.
 func TestReleaseFromDocxFilename(t *testing.T) {
 	cases := map[string]int{
-		"23501-i30.docx": 18,
-		"24229-h50.docx": 17,
-		"29510-f60.docx": 15,
-		"weirdname.docx": 0,
-		"23501.docx":     0,
+		"23501-i30.docx":   18,
+		"24229-h50.docx":   17,
+		"29510-f60.docx":   15,
+		"weirdname.docx":   0,
+		"23501.docx":       0,
+		"38101-1-j50.docx": 19,
+		// #131: a split-spec chunk suffix ("_s00-11") must not be mistaken
+		// for the version token — the real token ("920") sits right after
+		// the spec number, and its first digit (9) is the release.
+		"36133-920_s00-11.docx":     9,
+		"38101-1-k00_s00-05.docx":   20,
+		"38101-1-k00_sAnnexes.docx": 20,
 	}
 	for in, want := range cases {
 		if got := releaseFromDocxFilename(in); got != want {
