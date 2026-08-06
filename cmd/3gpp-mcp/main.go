@@ -702,18 +702,30 @@ func removeWorkingCopy(path string) error {
 	return sidecarErr
 }
 
+// errSidecarsRemain marks a replacement whose rename went through while the
+// replaced database's sidecars survived: the new file is in place but is not
+// safe to open until they are gone.
+var errSidecarsRemain = errors.New("stale sidecars survived the replacement")
+
 // replaceDatabase moves the finalized working copy over the live database.
 //
 // The sidecars of the database being replaced are named after the live path,
 // so the rename leaves them next to the file that just took that name and
 // SQLite would replay that old write-ahead log into it. A serve process that
 // still has them open keeps reading its own unlinked inodes until it restarts.
+//
+// Sidecars are bound to a path rather than an inode, so no ordering of these
+// two steps keeps the new file from ever sharing a directory entry with the
+// old sidecars; a kill between them leaves the state this clears up. Deleting
+// them before the rename only trades that for discarding a live write-ahead
+// log that the run may then fail to replace, so the removal follows the
+// rename and the window is two syscalls wide.
 func replaceDatabase(newPath, dbPath string) error {
 	if err := os.Rename(newPath, dbPath); err != nil {
 		return fmt.Errorf("rename working copy: %w", err)
 	}
 	if err := removeStaleSidecars(dbPath); err != nil {
-		return fmt.Errorf("database replaced, but sidecars of the previous database remain and must be deleted before serving %s: %w", dbPath, err)
+		return fmt.Errorf("%w and must be deleted before serving %s: %w", errSidecarsRemain, dbPath, err)
 	}
 	return nil
 }
@@ -871,6 +883,13 @@ func cmdUpdate(args []string) {
 	// Atomically replace the live database. The serve process retains its old
 	// inode until restarted; ExecStartPost in the systemd unit handles that.
 	if err := replaceDatabase(newPath, *dbPath); err != nil {
+		// Once the rename has gone through the working copy is no longer ours
+		// to delete, and the database really was replaced: the leftover
+		// sidecars are the whole failure, so say so instead of claiming the
+		// update did not land.
+		if errors.Is(err, errSidecarsRemain) {
+			log.Fatalf("Database replaced, but %v", err)
+		}
 		_ = removeWorkingCopy(newPath)
 		log.Fatalf("Failed to replace database: %v", err)
 	}

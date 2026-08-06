@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -1374,6 +1375,9 @@ func TestReplaceDatabase_RenameError(t *testing.T) {
 	if !strings.Contains(err.Error(), "rename working copy") {
 		t.Errorf("error = %v, want a rename failure report", err)
 	}
+	if errors.Is(err, errSidecarsRemain) {
+		t.Errorf("error = %v, want it not to claim the database was replaced", err)
+	}
 	got, readErr := os.ReadFile(live)
 	if readErr != nil {
 		t.Fatal(readErr)
@@ -1402,6 +1406,14 @@ func TestReplaceDatabase_SidecarError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "-shm") {
 		t.Errorf("error = %v, want it to name the -shm sidecar", err)
+	}
+	// The rename did land, so the caller must not report a failed replacement
+	// or try to delete a working copy that no longer exists.
+	if !errors.Is(err, errSidecarsRemain) {
+		t.Errorf("error = %v, want it to report that the replacement already happened", err)
+	}
+	if _, statErr := os.Stat(newPath); !os.IsNotExist(statErr) {
+		t.Errorf("working copy still at %s (stat err %v)", newPath, statErr)
 	}
 }
 
