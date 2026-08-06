@@ -356,21 +356,45 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 	var xmlPending *paragraphInfo
 	var xmlPendingStyle string
 	inXML := false
+	// Paragraphs absorbed only because an element is still open (they carry no
+	// markup of their own) are held here instead of going straight into the
+	// fence: a block whose closing tag never comes must not turn the rest of
+	// the clause into code (issue #136). They join the fence only once the
+	// element that was open when holding started — recorded in xmlHeldDepth —
+	// is closed, which is what proves they were its content; if the block ends
+	// first they are replayed as the ordinary paragraphs they are.
+	var xmlHeld []paragraphInfo
+	var xmlHeldStyles []string
+	xmlHeldDepth := 0
+	holdXMLLine := func(info paragraphInfo, styleName string) {
+		xmlHeld = append(xmlHeld, info)
+		xmlHeldStyles = append(xmlHeldStyles, styleName)
+	}
+	commitXMLHeld := func() {
+		for _, info := range xmlHeld {
+			xmlBuffer = append(xmlBuffer, codeLineText(info))
+		}
+		xmlHeld, xmlHeldStyles = nil, nil
+	}
 	flushXML := func() {
 		inXML = false
 		xmlTracker = xmlLineTracker{}
-		if len(xmlBuffer) == 0 || currentSection == nil {
-			xmlBuffer = nil
-			return
-		}
-		for len(xmlBuffer) > 0 && strings.TrimSpace(xmlBuffer[len(xmlBuffer)-1]) == "" {
-			xmlBuffer = xmlBuffer[:len(xmlBuffer)-1]
-		}
-		if len(xmlBuffer) > 0 {
-			currentSection.Content = append(currentSection.Content,
-				"```xml\n"+strings.Join(xmlBuffer, "\n")+"\n```")
+		held, heldStyles := xmlHeld, xmlHeldStyles
+		xmlHeld, xmlHeldStyles = nil, nil
+		if len(xmlBuffer) > 0 && currentSection != nil {
+			for len(xmlBuffer) > 0 && strings.TrimSpace(xmlBuffer[len(xmlBuffer)-1]) == "" {
+				xmlBuffer = xmlBuffer[:len(xmlBuffer)-1]
+			}
+			if len(xmlBuffer) > 0 {
+				currentSection.Content = append(currentSection.Content,
+					"```xml\n"+strings.Join(xmlBuffer, "\n")+"\n```")
+			}
 		}
 		xmlBuffer = nil
+		// The unconfirmed lines belong after the fence, as the prose they are.
+		for i, info := range held {
+			emitParagraph(info, heldStyles[i])
+		}
 	}
 	abandonXMLPending := func() {
 		if xmlPending == nil {
@@ -569,13 +593,60 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 						// Preserve blank lines inside a pending block
 						// (whitespace-only paragraphs included, so indentation
 						// filler does not split the fence); trailing ones are
-						// trimmed at flush.
-						xmlBuffer = append(xmlBuffer, "")
+						// trimmed at flush. A blank line after unconfirmed
+						// content is held with it, so the two keep their order.
+						if len(xmlHeld) > 0 {
+							holdXMLLine(info, styleName)
+						} else {
+							xmlBuffer = append(xmlBuffer, "")
+						}
 						continue
 					case !isCodePara && len(info.Images) == 0 && matchXMLContinuation(info, &xmlTracker):
 						line := codeLineText(info)
-						xmlBuffer = append(xmlBuffer, line)
-						xmlTracker.observe(line)
+						// Observe on a copy first: whether this line closes an
+						// element decides where it and anything held belong, and
+						// that is only known after the line has been parsed.
+						// minDepth, not the depth left at the end of the line,
+						// is what answers it — "</a><b>" closes a and opens b.
+						probe := xmlTracker
+						probe.observe(line)
+						isMarkup := matchXMLLine(info, &xmlTracker)
+						switch {
+						case len(xmlHeld) > 0:
+							// Only the close of the element that was open when
+							// holding started proves the held paragraphs were
+							// its content. Any other line — including a tag that
+							// merely opens something new — is held as well, so
+							// document order survives and unrelated markup later
+							// in the clause cannot fence the prose in between.
+							// Nesting opened and closed while holding never
+							// reaches below xmlHeldDepth, so it neither confirms
+							// nor disturbs the wait; comments, CDATA and
+							// self-closing tags leave the depth alone entirely.
+							if probe.minDepth < xmlHeldDepth {
+								commitXMLHeld()
+								xmlBuffer = append(xmlBuffer, line)
+							} else {
+								holdXMLLine(info, styleName)
+							}
+						case isMarkup:
+							// Markup in its own right: straight into the fence.
+							xmlBuffer = append(xmlBuffer, line)
+						case probe.minDepth < xmlTracker.depth:
+							// Text absorbed by an open element that this very
+							// paragraph closes ("some text </a>"): already
+							// confirmed, so there is nothing to hold.
+							xmlBuffer = append(xmlBuffer, line)
+						default:
+							// Absorbed only on the strength of an open element,
+							// so hold it until that element closes. xmlHeldDepth
+							// is written whenever holding starts from empty and
+							// read only while xmlHeld is non-empty, so it can
+							// never be stale.
+							xmlHeldDepth = xmlTracker.depth
+							holdXMLLine(info, styleName)
+						}
+						xmlTracker = probe
 						continue
 					default:
 						// First non-matching (or code-styled) paragraph ends

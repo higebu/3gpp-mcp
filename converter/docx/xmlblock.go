@@ -94,6 +94,12 @@ func matchXMLLine(info paragraphInfo, tr *xmlLineTracker) bool {
 // block. On top of matchXMLLine, an element left open (depth > 0) absorbs
 // plain text lines: element content regularly spills onto its own paragraph
 // (e.g. the <xs:documentation> text of TS 24.423 clause 6.4).
+//
+// Such a line is captured but not committed: the caller holds it until a line
+// that matchXMLLine accepts confirms it, because an element whose closing tag
+// never comes keeps the depth above zero for the rest of the clause (issue
+// #136). Confirming on markup rather than counting lines lets element content
+// run as long as it likes without a missing close tag turning prose into code.
 func matchXMLContinuation(info paragraphInfo, tr *xmlLineTracker) bool {
 	t := xmlTrimmedText(info)
 	if t == "" || strings.HasPrefix(t, "$") {
@@ -113,10 +119,18 @@ type xmlLineTracker struct {
 	inComment bool
 	depth     int    // element nesting depth of the captured lines
 	pending   string // unterminated tag text carried over from the previous line
+	// minDepth is the lowest depth reached while observing the most recent
+	// line, which is not the same as the depth left at its end: a paragraph
+	// that closes an element and opens a sibling in one go ("</a><b>") ends at
+	// the depth it started from, yet it did close the element whose content
+	// preceded it. Callers deciding whether an element has closed must read
+	// this rather than depth (issue #136).
+	minDepth int
 }
 
 // observe updates the tracker after line has been captured into the block.
 func (t *xmlLineTracker) observe(line string) {
+	t.minDepth = t.depth
 	rest := line
 	if t.inComment {
 		loc := xmlCommentCloseRE.FindStringIndex(rest)
@@ -131,7 +145,8 @@ func (t *xmlLineTracker) observe(line string) {
 		joined := t.pending + rest
 		t.pending = ""
 		i := xmlTagEnd(joined)
-		if i < 0 {
+		switch {
+		case i < 0:
 			// The tag did not close on this line either. Carrying the state
 			// further would absorb every following paragraph until a stray
 			// ">" turns up (issue #95), so give up on the tag instead — the
@@ -139,9 +154,17 @@ func (t *xmlLineTracker) observe(line string) {
 			// next line.
 			t.open = false
 			return
+		case xmlTagHasInnerLT(joined[:i+1]):
+			// The join only "closed" because this line opens a construct of
+			// its own: a tag body never contains an unquoted "<". Counting
+			// the join as a start element would inflate the depth and eat the
+			// very close tag that ends it, leaving depth stuck above zero and
+			// absorbing the following prose (issue #136). Drop the carried-over
+			// "<…" and read this line on its own terms instead.
+		default:
+			t.observeTag(joined[:i+1])
+			rest = joined[i+1:]
 		}
-		t.observeTag(joined[:i+1])
-		rest = joined[i+1:]
 	}
 	for {
 		i := strings.IndexByte(rest, '<')
@@ -196,6 +219,27 @@ func xmlTagEnd(s string) int {
 	return -1
 }
 
+// xmlTagHasInnerLT reports whether the "<…>" tag in s carries another unquoted
+// "<" after its opening one — the signature of a bogus join between an
+// unterminated "<…" and a line that starts markup of its own, since a
+// well-formed tag body cannot contain "<" (issue #136).
+func xmlTagHasInnerLT(s string) bool {
+	var quote byte
+	for i := 1; i < len(s); i++ {
+		switch c := s[i]; {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '<':
+			return true
+		}
+	}
+	return false
+}
+
 // observeTag adjusts the element depth for one complete "<…>" tag.
 // Declarations, processing instructions, comments, self-closing tags and
 // anything unrecognizable leave it unchanged; the mangled "< name>" spelling
@@ -211,6 +255,9 @@ func (t *xmlLineTracker) observeTag(tag string) {
 	if inner[0] == '/' {
 		if t.depth > 0 {
 			t.depth--
+		}
+		if t.depth < t.minDepth {
+			t.minDepth = t.depth
 		}
 		return
 	}

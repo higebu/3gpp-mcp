@@ -67,8 +67,11 @@ const DefaultFileName = "versions.db"
 // continuation from pulling prose after a blank line into an SDP fence,
 // generation 8 hardens XML fence tracking against malformed markup, limits
 // sip/sdp backslash continuation to the wrapped line, and emits run text
-// before an inline image in the same run.
-const cacheSchemaVersion = 8
+// before an inline image in the same run, generation 9 stops unbalanced XML
+// blocks and VML text boxes from absorbing surrounding paragraphs and clamps
+// headings to ATX level 6 (alongside the concurrent EMF naming, OMML and
+// link conversion changes, which this one bump covers as well).
+const cacheSchemaVersion = 9
 
 // schema mirrors the spec, section and image tables of the main database,
 // without the full-text index: cached versions must never appear in search
