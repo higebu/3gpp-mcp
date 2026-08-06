@@ -692,14 +692,29 @@ func removeStaleSidecars(path string) error {
 }
 
 // removeWorkingCopy deletes the working copy at path together with its
-// sidecars. The sidecars go first, so an interrupted cleanup can leave a
-// database without its WAL but never a WAL without its database.
+// sidecars. The sidecars go first, and a sidecar that cannot be removed stops
+// the cleanup: an interrupted or failed removal can leave a database without
+// its WAL, but never a WAL without its database. Deleting the database anyway
+// would orphan the survivor onto the copy the next run writes at this path,
+// which is the corruption this cleanup exists to prevent.
 func removeWorkingCopy(path string) error {
-	sidecarErr := removeStaleSidecars(path)
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return errors.Join(sidecarErr, fmt.Errorf("remove %s: %w", path, err))
+	if err := removeStaleSidecars(path); err != nil {
+		return err
 	}
-	return sidecarErr
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove %s: %w", path, err)
+	}
+	return nil
+}
+
+// discardWorkingCopy drops a working copy the run is walking away from. The
+// caller is already aborting, or has nothing to update, so a failure here
+// cannot change what it does next — but it leaves debris that stops the next
+// run in its tracks, so it is reported rather than dropped.
+func discardWorkingCopy(path string) {
+	if err := removeWorkingCopy(path); err != nil {
+		log.Printf("warning: failed to remove working copy: %v", err)
+	}
 }
 
 // errSidecarsRemain marks a replacement whose rename went through while the
@@ -798,7 +813,7 @@ func cmdUpdate(args []string) {
 		err = nil
 	}
 	if err != nil {
-		_ = removeWorkingCopy(newPath)
+		discardWorkingCopy(newPath)
 		log.Fatalf("Failed to fetch spec list: %v", err)
 	}
 
@@ -841,7 +856,7 @@ func cmdUpdate(args []string) {
 
 	if len(updates) == 0 {
 		fmt.Println("All specs are up to date.")
-		_ = removeWorkingCopy(newPath)
+		discardWorkingCopy(newPath)
 		return
 	}
 
@@ -849,14 +864,14 @@ func cmdUpdate(args []string) {
 
 	d, err := db.OpenReadWrite(newPath)
 	if err != nil {
-		_ = removeWorkingCopy(newPath)
+		discardWorkingCopy(newPath)
 		log.Fatalf("Failed to open working copy: %v", err)
 	}
 	// VACUUM INTO copies whatever schema the live database has, which may
 	// predate the current binary.
 	if err := d.InitSchema(); err != nil {
 		_ = d.Close()
-		_ = removeWorkingCopy(newPath)
+		discardWorkingCopy(newPath)
 		log.Fatalf("Failed to initialize working copy schema: %v", err)
 	}
 
@@ -871,7 +886,7 @@ func cmdUpdate(args []string) {
 
 	if err := p.Run(ctx, updates); err != nil {
 		_ = d.Close()
-		_ = removeWorkingCopy(newPath)
+		discardWorkingCopy(newPath)
 		log.Fatalf("Update failed: %v", err)
 	}
 
@@ -890,7 +905,7 @@ func cmdUpdate(args []string) {
 		if errors.Is(err, errSidecarsRemain) {
 			log.Fatalf("Database replaced, but %v", err)
 		}
-		_ = removeWorkingCopy(newPath)
+		discardWorkingCopy(newPath)
 		log.Fatalf("Failed to replace database: %v", err)
 	}
 	fmt.Println("Database updated successfully.")

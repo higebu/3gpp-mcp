@@ -1304,10 +1304,15 @@ func TestRemoveWorkingCopy_NoFiles(t *testing.T) {
 	}
 }
 
-// A sidecar that cannot be removed has to be reported: proceeding would run
-// VACUUM INTO next to a WAL that does not belong to its output.
+// A sidecar that cannot be removed has to be reported, and the database it
+// belongs to has to stay: deleting a removable database out from under a
+// surviving WAL orphans that WAL onto the copy the next run writes here, which
+// is the corruption this cleanup exists to prevent.
 func TestRemoveWorkingCopy_SidecarError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "3gpp.db.new")
+	if err := os.WriteFile(path, []byte("working copy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// A non-empty directory in the sidecar's place makes os.Remove fail with
 	// ENOTEMPTY, an error that is not os.ErrNotExist.
 	if err := os.MkdirAll(filepath.Join(path+"-wal", "child"), 0o755); err != nil {
@@ -1320,6 +1325,50 @@ func TestRemoveWorkingCopy_SidecarError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "-wal") {
 		t.Errorf("error = %v, want it to name the -wal sidecar", err)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Errorf("the database was deleted while its -wal survived: %v", statErr)
+	}
+}
+
+// The -shm goes the same way: the cleanup stops at the first sidecar it cannot
+// remove instead of working down to the database.
+func TestRemoveWorkingCopy_KeepsDatabaseWhenSHMSurvives(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "3gpp.db.new")
+	if err := os.WriteFile(path, []byte("working copy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+"-wal", []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(path+"-shm", "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeWorkingCopy(path); err == nil {
+		t.Fatal("expected an error when the -shm sidecar cannot be removed")
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Errorf("the database was deleted while its -shm survived: %v", statErr)
+	}
+}
+
+// The paths that walk away from a working copy — an aborting run, and the
+// "all specs are up to date" return — cannot act on a cleanup failure, but
+// they must not hide it either: the debris is what stops the next run before
+// it can start.
+func TestDiscardWorkingCopy_ReportsFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "3gpp.db.new")
+	if err := os.WriteFile(path, []byte("working copy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(path+"-wal", "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureLog(t, func() { discardWorkingCopy(path) })
+	if !strings.Contains(out, "-wal") {
+		t.Errorf("log = %q, want a warning naming the sidecar it could not remove", out)
 	}
 }
 
