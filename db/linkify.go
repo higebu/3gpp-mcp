@@ -7,8 +7,14 @@ import (
 	"strings"
 )
 
-// existingLinkRE matches Markdown link syntax [text](url) to avoid double-linking.
-var existingLinkRE = regexp.MustCompile(`\[[^\]]*\]\([^)]*\)`)
+// existingLinkRE matches Markdown link syntax [text](url) to avoid
+// double-linking. Both character classes exclude newlines: real link/image
+// syntax is emitted on a single line, and without this an unclosed "["
+// earlier in the content (e.g. an interval "[0, 1)" or an unterminated
+// editor's note "[FFS ...") would greedily span paragraphs to the next
+// unrelated "](" — such as an image link — swallowing every reference in
+// between as "already linked" and silently dropping their linkification.
+var existingLinkRE = regexp.MustCompile(`\[[^\]\n]*\]\([^)\n]*\)`)
 
 // tableRegionOpenRE matches a converter-emitted table opener: each table is
 // its own block, so a real opener sits at the start of a line.
