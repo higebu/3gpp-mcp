@@ -140,6 +140,16 @@ func TestOMMLToLaTeX(t *testing.T) {
 			want: "a/\\left(b\\times c\\right)",
 		},
 		{
+			// U+2217 is mapped to a literal "*", so the multiplication is
+			// invisible to a command-based check: "a/b*c" would read as
+			// (a/b)*c.
+			name: "linear fraction fences a denominator multiplied with an asterisk",
+			xml: `<m:oMath ` + mXMLNS + `><m:f><m:fPr><m:type m:val="lin"/></m:fPr>` +
+				`<m:num>` + mrun("a") + `</m:num><m:den>` + mrun("b∗c") + `</m:den>` +
+				`</m:f></m:oMath>`,
+			want: "a/\\left(b*c\\right)",
+		},
+		{
 			name: "linear fraction fences an operand holding a relation",
 			xml: `<m:oMath ` + mXMLNS + `><m:f><m:fPr><m:type m:val="lin"/></m:fPr>` +
 				`<m:num>` + mrun("a=b") + `</m:num><m:den>` + mrun("c") + `</m:den>` +
@@ -371,6 +381,7 @@ func TestEscapeMathText(t *testing.T) {
 		{"n mod 2", "n\\text{ }mod\\text{ }2"},
 		{"a  b", "a\\text{ }\\text{ }b"},
 		{"a×b", "a\\times b"},
+		{"a∗b", "a*b"}, // U+2217 asterisk operator → ASCII "*"
 	}
 	for _, tt := range tests {
 		if got := escapeMathText(tt.in); got != tt.want {

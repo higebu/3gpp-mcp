@@ -281,7 +281,9 @@ func needsLinGroup(s string) bool {
 			// command spelling nor the escaped character is read as an
 			// operator.
 			i += max(len(name), 1)
-		case '+', '-', '/', '=', '<', '>':
+		// "*" covers both the ASCII character and U+2217, which mathSymbols
+		// maps to it; like \times it re-associates in a denominator.
+		case '+', '-', '*', '/', '=', '<', '>':
 			if depth == 0 && i > 0 {
 				return true
 			}
