@@ -524,6 +524,43 @@ func TestRunSofficeBatch_Timeout(t *testing.T) {
 	}
 }
 
+// TestFileURLForProfile covers the file:// URL LibreOffice's
+// -env:UserInstallation option expects, including the Windows case that
+// plain "file://" + path concatenation gets wrong (issue #142): a backslash
+// path like `C:\Users\foo\AppData\Local\Temp\lo-profile-1` used to produce
+// the invalid file://C:\Users\... instead of the standard
+// file:///C:/Users/... form.
+func TestFileURLForProfile(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "posix absolute path",
+			path: "/tmp/lo-profile-123",
+			want: "file:///tmp/lo-profile-123",
+		},
+		{
+			name: "windows absolute path with backslashes",
+			path: `C:\Users\foo\AppData\Local\Temp\lo-profile-123`,
+			want: "file:///C:/Users/foo/AppData/Local/Temp/lo-profile-123",
+		},
+		{
+			name: "windows path already using forward slashes",
+			path: "C:/Temp/lo-profile-123",
+			want: "file:///C:/Temp/lo-profile-123",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := fileURLForProfile(tt.path); got != tt.want {
+				t.Errorf("fileURLForProfile(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEMRRecordEnd(t *testing.T) {
 	tests := []struct {
 		name    string

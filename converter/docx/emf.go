@@ -373,6 +373,22 @@ func batchConvertToPNG(ctx context.Context, items []*batchItem) error {
 // which would otherwise block ConvertDir forever; see issue #60.
 const sofficeTimeout = 5 * time.Minute
 
+// fileURLForProfile builds the file:// URL LibreOffice's -env:UserInstallation
+// option expects from a filesystem path. Backslashes are converted to forward
+// slashes and a leading slash is added if missing, so a Windows path such as
+// `C:\Users\foo\AppData\Local\Temp\lo-profile-1` becomes
+// file:///C:/Users/foo/AppData/Local/Temp/lo-profile-1 instead of the invalid
+// file://C:\Users\... that plain string concatenation used to produce. A
+// POSIX path already starts with "/", so it keeps the standard
+// file:///abs/path form unchanged.
+func fileURLForProfile(path string) string {
+	p := strings.ReplaceAll(path, `\`, "/")
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return "file://" + p
+}
+
 // runSofficeBatch invokes `soffice --convert-to png` with the given inputs,
 // writing PNG outputs to outDir. Each invocation uses a fresh user profile
 // so that repeated calls do not contend for LibreOffice's per-profile lock.
@@ -392,7 +408,7 @@ func runSofficeBatch(ctx context.Context, outDir string, inputs []string) error 
 	args := []string{
 		"--headless",
 		"--norestore",
-		"-env:UserInstallation=file://" + profileDir,
+		"-env:UserInstallation=" + fileURLForProfile(profileDir),
 		"--convert-to", "png",
 		"--outdir", outDir,
 	}
