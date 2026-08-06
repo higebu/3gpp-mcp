@@ -1256,6 +1256,48 @@ func TestInsertSpecWithSections_References(t *testing.T) {
 	}
 }
 
+func TestInsertSpecWithSections_DeleteStaleReferencesError(t *testing.T) {
+	// Covers the "delete stale references" error branch added for #134: a
+	// BEFORE DELETE trigger on spec_references forces the DELETE issued
+	// ahead of re-extraction to fail, so InsertSpecWithSections must
+	// propagate that error instead of silently continuing. The trigger only
+	// fires per matched row, so a pre-existing reference row for the same
+	// (spec, version, section) is seeded first.
+	d := setupTestDB(t)
+
+	if err := d.Exec(
+		"INSERT INTO spec_references (source_spec_id, source_version, source_section, target_spec, target_section, context) VALUES (?, ?, ?, ?, ?, ?)",
+		"TS 99.003", "1.0.0", "1", "TS 23.501", "5.1", "seed",
+	); err != nil {
+		t.Fatalf("seed reference: %v", err)
+	}
+	if err := d.Exec(
+		"CREATE TRIGGER block_ref_delete BEFORE DELETE ON spec_references BEGIN SELECT RAISE(ABORT, 'blocked for test'); END",
+	); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	spec := Spec{ID: "TS 99.003", Version: "1.0.0", Title: "Test Spec", Series: "99"}
+	sections := []Section{
+		{
+			SpecID:  "TS 99.003",
+			Version: "1.0.0",
+			Number:  "1",
+			Title:   "Scope",
+			Level:   1,
+			Content: "# 1 Scope\nNo references here.",
+		},
+	}
+
+	err := d.InsertSpecWithSections(spec, sections)
+	if err == nil {
+		t.Fatal("expected error from blocked spec_references delete")
+	}
+	if !strings.Contains(err.Error(), "delete stale references") {
+		t.Errorf("expected \"delete stale references\" error, got: %v", err)
+	}
+}
+
 func TestInsertSpecWithSections_ReimportDropsStaleReferences(t *testing.T) {
 	// Regression test for #134: re-importing the same (spec, version) must
 	// drop references the new content no longer produces. INSERT OR REPLACE
