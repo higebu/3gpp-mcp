@@ -1000,6 +1000,43 @@ func TestRenderMarkdown_AngleBracketPlaceholderVisible(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdown_UppercasePlaceholderNotATag verifies that upper-case
+// abbreviations in angle brackets — <UL>, <DL>, <TD> are everyday 3GPP prose —
+// stay visible text. A case-insensitive tag allowlist turned them into real
+// list and table elements, which browsers use to restructure (and swallow)
+// the surrounding paragraph.
+func TestRenderMarkdown_UppercasePlaceholderNotATag(t *testing.T) {
+	content := "Scheduling for <UL> and <DL> is described per <TD> slot."
+	got := renderMarkdown(content, renderOpts{specID: "TS 38.300"})
+	for _, want := range []string{"&lt;UL&gt;", "&lt;DL&gt;", "&lt;TD&gt;"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %s as escaped text, got:\n%s", want, got)
+		}
+	}
+	for _, bad := range []string{"<ul>", "<UL>", "<dl>", "<DL>", "<td>", "<TD>"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("placeholder must not become the %s element, got:\n%s", bad, got)
+		}
+	}
+	// The prose around the placeholders must survive intact.
+	if !strings.Contains(got, "Scheduling for") || !strings.Contains(got, "slot.") {
+		t.Errorf("paragraph text must not be swallowed, got:\n%s", got)
+	}
+}
+
+// TestRenderMarkdown_LowercasePipelineTagsAllowed guards the other side of
+// the case-sensitive allowlist: the tags the pipeline itself emits still pass
+// through unescaped.
+func TestRenderMarkdown_LowercasePipelineTagsAllowed(t *testing.T) {
+	content := "<ul><li>first</li><li>second</li></ul>"
+	got := renderMarkdown(content, renderOpts{specID: "TS 23.501"})
+	for _, want := range []string{"<ul>", "<li>first</li>"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected pipeline markup %s to survive, got:\n%s", want, got)
+		}
+	}
+}
+
 // TestRenderMarkdown_EventHandlerStripped verifies the sanitizer half of the
 // defense: a tag that is in the allowlist (img) still cannot smuggle script
 // through attributes or a non-relative src.
