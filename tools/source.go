@@ -369,7 +369,11 @@ func (s *Source) ensureImages(ctx context.Context, specID string, res Resolution
 	switch err := s.Store.EnsureImages(ctx, specID, res.Version, sv, s.Budget); {
 	case err == nil:
 		return nil
-	case errors.Is(err, versionstore.ErrInProgress):
+	case errors.Is(err, versionstore.ErrInProgress), errors.Is(err, versionstore.ErrImagesEvicted):
+		// Both are transient: the fetch is either still running or was
+		// dropped by a concurrent eviction mid-flight, and in either case
+		// the next call recovers it. Reporting it as VersionUnavailableError
+		// would tell the caller to give up on a version that does exist.
 		return &FetchInProgressError{SpecID: specID, Version: res.Version, Images: true}
 	default:
 		return &VersionUnavailableError{

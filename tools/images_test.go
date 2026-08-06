@@ -433,6 +433,60 @@ func TestGetImageArchivedFetchError(t *testing.T) {
 	}
 }
 
+// TestGetImageArchivedEvictedMidFetch checks that a version evicted from the
+// cache while its images were still downloading is reported as a transient,
+// retryable condition (FetchInProgressError) rather than a permanent
+// VersionUnavailableError: the version does exist, the fetch just lost a race
+// with a concurrent eviction, and the next call recovers it.
+func TestGetImageArchivedEvictedMidFetch(t *testing.T) {
+	d := setupTestDB(t)
+	proceed := make(chan struct{})
+	release := make(chan struct{})
+	src := sourceWithImageStore(t, d, func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+		close(proceed)
+		<-release
+		return []db.Image{{Name: "figure1.png", MIMEType: "image/png", Data: []byte("x"), LLMReadable: true}}, nil
+	})
+	// sourceWithImageStore leaves LimitBytes at its zero value, which keeps
+	// only the most recently fetched version, so fetching a second version
+	// below evicts the first.
+	src.Budget = 5 * time.Second
+	handler := HandleGetImage(src)
+
+	done := make(chan *mcp.CallToolResult, 1)
+	go func() {
+		result, _, err := handler(context.Background(), nil, GetImageInput{
+			SpecID:  "TS 23.501",
+			Name:    "figure1.png",
+			Version: "19.5.0",
+		})
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		done <- result
+	}()
+
+	<-proceed // the image fetch for 19.5.0 has started and is blocked on release
+
+	// Fetching a different version evicts 19.5.0's cache entry (sections and,
+	// with them, the row putImages needs to record 19.5.0's images against),
+	// racing the in-flight image fetch above.
+	if _, _, err := src.GetSection(context.Background(), "TS 23.501", "20.2.0", "5.1", false); err != nil {
+		t.Fatalf("evicting fetch: %v", err)
+	}
+
+	close(release) // let the blocked image fetch finish and try to commit
+
+	result := <-done
+	if result.IsError {
+		t.Fatalf("an evicted-mid-fetch image download must not be a permanent tool error: %s", getTextContent(result))
+	}
+	text := getTextContent(result)
+	if !strings.Contains(text, "Images for TS 23.501 v19.5.0 are being downloaded") || !strings.Contains(text, "Call the same tool again") {
+		t.Errorf("expected a retryable image fetch-in-progress message, got: %s", text)
+	}
+}
+
 // TestListImagesArchivedReResolveFails covers the cached fast path: the
 // version's sections are already cached (so resolve carries no archive entry)
 // and the archive listing has become unreachable, which must fail the image
