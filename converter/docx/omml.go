@@ -211,12 +211,95 @@ func renderFraction(n *ommlNode) string {
 	if typ, ok := mVal(child(n, "fPr"), "type"); ok {
 		switch typ {
 		case "lin":
-			return num + "/" + den
+			return linOperand(num) + "/" + linOperand(den)
 		case "noBar":
 			return "{" + num + " \\atop " + den + "}"
 		}
 	}
 	return "\\frac{" + num + "}{" + den + "}"
+}
+
+// linOperand fences a linear-fraction operand that would otherwise lose its
+// grouping. m:num and m:den are separate operands, but "/" is a plain character
+// in LaTeX, so splicing them together turns "(a+b)/(c+d)" into "a+b/c+d", which
+// reads as a+(b/c)+d — a silent change of meaning (issue #141).
+func linOperand(s string) string {
+	s = trimMathSpace(s)
+	if !needsLinGroup(s) {
+		return s
+	}
+	return "\\left(" + s + "\\right)"
+}
+
+// looseMathCmds are the binary operators and relations escapeMathText emits as
+// LaTeX commands. They bind no more tightly than "/", so needsLinGroup has to
+// spot them just like a literal "+": "a±b" reaches it as "a\pm b", with the
+// operator hidden inside a control word.
+var looseMathCmds = map[string]bool{
+	// Additive-level operators.
+	"pm": true, "mp": true, "cup": true, "cap": true,
+	"oplus": true, "otimes": true,
+	// Multiplicative operators. They re-associate in a denominator —
+	// "a/(b×c)" flattened to "a/b\times c" reads as (a/b)×c.
+	"times": true, "div": true, "cdot": true, "circ": true,
+	// Relations.
+	"leq": true, "geq": true, "neq": true, "approx": true, "equiv": true,
+	"in": true, "notin": true, "subset": true, "subseteq": true,
+	"propto": true, "rightarrow": true, "leftarrow": true,
+	"leftrightarrow": true, "Rightarrow": true, "Leftrightarrow": true,
+}
+
+// needsLinGroup reports whether s binds loosely enough that "/" would steal
+// part of it. A top-level operator or relation makes it so; everything inside
+// braces or a \left...\right pair is already grouped, and a leading sign is
+// unary. Juxtaposition stays unfenced: "2n" is indistinguishable from a single
+// atom here, so "a/2n" keeps the source's own ambiguity.
+func needsLinGroup(s string) bool {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
+			if depth > 0 {
+				depth--
+			}
+		case '\\':
+			name := latexCmdName(s[i+1:])
+			switch {
+			case name == "left":
+				depth++
+			case name == "right":
+				if depth > 0 {
+					depth--
+				}
+			case depth == 0 && i > 0 && looseMathCmds[name]:
+				return true
+			}
+			// Step over the control word, or over the single escaped
+			// character of a control symbol such as "\-", so neither the
+			// command spelling nor the escaped character is read as an
+			// operator.
+			i += max(len(name), 1)
+		case '+', '-', '/', '=', '<', '>':
+			if depth == 0 && i > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// latexCmdName returns the control word starting at the beginning of s (the
+// letters that follow a backslash), or "" when the backslash introduces a
+// control symbol such as "\{".
+func latexCmdName(s string) string {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') {
+			return s[:i]
+		}
+	}
+	return s
 }
 
 func renderDelimiter(n *ommlNode) string {
