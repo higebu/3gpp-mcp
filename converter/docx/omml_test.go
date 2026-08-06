@@ -79,6 +79,93 @@ func TestOMMLToLaTeX(t *testing.T) {
 			want: "a/b",
 		},
 		{
+			// "/" is a plain character in LaTeX, so an ungrouped "a+b/c+d"
+			// would read as a+(b/c)+d (issue #141).
+			name: "linear fraction fences compound operands",
+			xml: `<m:oMath ` + mXMLNS + `><m:f><m:fPr><m:type m:val="lin"/></m:fPr>` +
+				`<m:num>` + mrun("a+b") + `</m:num><m:den>` + mrun("c+d") + `</m:den>` +
+				`</m:f></m:oMath>`,
+			want: "\\left(a+b\\right)/\\left(c+d\\right)",
+		},
+		{
+			name: "linear fraction keeps a leading sign unfenced",
+			xml: `<m:oMath ` + mXMLNS + `><m:f><m:fPr><m:type m:val="lin"/></m:fPr>` +
+				`<m:num>` + mrun("-1") + `</m:num><m:den>` + mrun("2") + `</m:den>` +
+				`</m:f></m:oMath>`,
+			want: "-1/2",
+		},
+		{
+			name: "linear fraction does not re-fence a delimited operand",
+			xml: `<m:oMath ` + mXMLNS + `><m:f><m:fPr><m:type m:val="lin"/></m:fPr>` +
+				`<m:num><m:d><m:e>` + mrun("a+b") + `</m:e></m:d></m:num>` +
+				`<m:den>` + mrun("c") + `</m:den></m:f></m:oMath>`,
+			want: "\\left(a+b\\right)/c",
+		},
+		{
+			// A nested division in the denominator is the other way "/" can
+			// re-associate: "a/b/c" would read as (a/b)/c.
+			name: "linear fraction fences a nested linear fraction",
+			xml: `<m:oMath ` + mXMLNS + `><m:f><m:fPr><m:type m:val="lin"/></m:fPr>` +
+				`<m:num>` + mrun("a") + `</m:num><m:den>` +
+				`<m:f><m:fPr><m:type m:val="lin"/></m:fPr>` +
+				`<m:num>` + mrun("b") + `</m:num><m:den>` + mrun("c") + `</m:den></m:f>` +
+				`</m:den></m:f></m:oMath>`,
+			want: "a/\\left(b/c\\right)",
+		},
+		{
+			// "\leftarrow" must not be mistaken for a "\left" group opener,
+			// which would hide the top-level "+" from the scanner.
+			name: "linear fraction fences an operand holding an arrow command",
+			xml: `<m:oMath ` + mXMLNS + `><m:f><m:fPr><m:type m:val="lin"/></m:fPr>` +
+				`<m:num>` + mrun("a←b+c") + `</m:num><m:den>` + mrun("d") + `</m:den>` +
+				`</m:f></m:oMath>`,
+			want: "\\left(a\\leftarrow b+c\\right)/d",
+		},
+		{
+			// The operator reaches needsLinGroup as the command "\pm", not as
+			// a literal character.
+			name: "linear fraction fences an operand joined by a symbol command",
+			xml: `<m:oMath ` + mXMLNS + `><m:f><m:fPr><m:type m:val="lin"/></m:fPr>` +
+				`<m:num>` + mrun("a±b") + `</m:num><m:den>` + mrun("c") + `</m:den>` +
+				`</m:f></m:oMath>`,
+			want: "\\left(a\\pm b\\right)/c",
+		},
+		{
+			// Multiplication re-associates in a denominator: "a/b×c" reads as
+			// (a/b)×c, not a/(b×c).
+			name: "linear fraction fences a multiplied denominator",
+			xml: `<m:oMath ` + mXMLNS + `><m:f><m:fPr><m:type m:val="lin"/></m:fPr>` +
+				`<m:num>` + mrun("a") + `</m:num><m:den>` + mrun("b×c") + `</m:den>` +
+				`</m:f></m:oMath>`,
+			want: "a/\\left(b\\times c\\right)",
+		},
+		{
+			// U+2217 is mapped to a literal "*", so the multiplication is
+			// invisible to a command-based check: "a/b*c" would read as
+			// (a/b)*c.
+			name: "linear fraction fences a denominator multiplied with an asterisk",
+			xml: `<m:oMath ` + mXMLNS + `><m:f><m:fPr><m:type m:val="lin"/></m:fPr>` +
+				`<m:num>` + mrun("a") + `</m:num><m:den>` + mrun("b∗c") + `</m:den>` +
+				`</m:f></m:oMath>`,
+			want: "a/\\left(b*c\\right)",
+		},
+		{
+			name: "linear fraction fences an operand holding a relation",
+			xml: `<m:oMath ` + mXMLNS + `><m:f><m:fPr><m:type m:val="lin"/></m:fPr>` +
+				`<m:num>` + mrun("a=b") + `</m:num><m:den>` + mrun("c") + `</m:den>` +
+				`</m:f></m:oMath>`,
+			want: "\\left(a=b\\right)/c",
+		},
+		{
+			// Braces already group, and the \frac itself is a single atom.
+			name: "linear fraction with a bar fraction operand needs no fence",
+			xml: `<m:oMath ` + mXMLNS + `><m:f><m:fPr><m:type m:val="lin"/></m:fPr>` +
+				`<m:num>` + mrun("x") + `</m:num><m:den><m:f>` +
+				`<m:num>` + mrun("a+b") + `</m:num><m:den>` + mrun("2") + `</m:den>` +
+				`</m:f></m:den></m:f></m:oMath>`,
+			want: "x/\\frac{a+b}{2}",
+		},
+		{
 			name: "matrix",
 			xml: `<m:oMath ` + mXMLNS + `><m:m>` +
 				`<m:mr><m:e>` + mrun("1") + `</m:e><m:e>` + mrun("j") + `</m:e></m:mr>` +
@@ -228,6 +315,33 @@ func TestOMMLToLaTeX(t *testing.T) {
 			want: "\\begin{gathered} a=1 \\\\ b=2 \\\\ c=3 \\end{gathered}",
 		},
 		{
+			// Math mode drops ordinary spaces, so "n mod 2" would otherwise
+			// render as "nmod2" (issue #140).
+			name: "spaces inside a run survive math mode",
+			xml:  `<m:oMath ` + mXMLNS + `>` + mrun("n mod 2") + `</m:oMath>`,
+			want: "n\\text{ }mod\\text{ }2",
+		},
+		{
+			name: "padding around a formula is trimmed, not protected",
+			xml:  `<m:oMath ` + mXMLNS + `>` + mrun(" x+1 ") + `</m:oMath>`,
+			want: "x+1",
+		},
+		{
+			// A padded function name still has to match the operator table.
+			name: "function name with surrounding spaces",
+			xml: `<m:oMath ` + mXMLNS + `><m:func>` +
+				`<m:fName>` + mrun(" cos ") + `</m:fName>` +
+				`<m:e>` + mrun("x") + `</m:e></m:func></m:oMath>`,
+			want: "\\cos x",
+		},
+		{
+			name: "radical with blank degree hides the degree",
+			xml: `<m:oMath ` + mXMLNS + `><m:rad>` +
+				`<m:deg>` + mrun(" ") + `</m:deg><m:e>` + mrun("x") + `</m:e>` +
+				`</m:rad></m:oMath>`,
+			want: "\\sqrt{x}",
+		},
+		{
 			name: "greek and relation symbols",
 			xml:  `<m:oMath ` + mXMLNS + `>` + mrun("α≤β") + `</m:oMath>`,
 			want: "\\alpha \\leq \\beta",
@@ -262,7 +376,12 @@ func TestEscapeMathText(t *testing.T) {
 		{"a^b", "a\\text{\\textasciicircum}b"},
 		{"$x", "\\$x"},
 		{"β≥γ", "\\beta \\geq \\gamma "},
+		// Spaces need the same treatment: math mode would collapse them and
+		// turn "n mod 2" into "nmod2".
+		{"n mod 2", "n\\text{ }mod\\text{ }2"},
+		{"a  b", "a\\text{ }\\text{ }b"},
 		{"a×b", "a\\times b"},
+		{"a∗b", "a*b"}, // U+2217 asterisk operator → ASCII "*"
 	}
 	for _, tt := range tests {
 		if got := escapeMathText(tt.in); got != tt.want {
