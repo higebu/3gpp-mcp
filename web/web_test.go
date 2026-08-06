@@ -646,6 +646,71 @@ func TestHandleSearch_Pagination(t *testing.T) {
 	}
 }
 
+// TestHandleSearch_PaginationSpecIDWithSpace pins issue #150: spec_id values
+// like "TS 23.501" contain a space, so the pagination link must percent-encode
+// it exactly once. Double-encoding turns the space into a literal "+" byte on
+// the server side (url.QueryEscape("TS 23.501") = "TS+23.501", re-escaped by
+// html/template's own urlquery context to "TS%2b23.501", which decodes back to
+// "TS+23.501" — not the original spec_id), so the second page's scoped search
+// would silently match zero rows.
+func TestHandleSearch_PaginationSpecIDWithSpace(t *testing.T) {
+	ts, d := setupTestServer(t)
+
+	for i := 0; i < 55; i++ {
+		if err := d.UpsertSection(db.Section{
+			SpecID:  "TS 23.501",
+			Version: "18.6.0",
+			Number:  fmt.Sprintf("9.%d", i),
+			Title:   fmt.Sprintf("Filler %d", i),
+			Level:   2,
+			Content: "pagispec content",
+		}); err != nil {
+			t.Fatalf("UpsertSection: %v", err)
+		}
+	}
+
+	resp, err := http.Get(ts.URL + "/search?q=pagispec&spec_id=" + url.QueryEscape("TS 23.501"))
+	if err != nil {
+		t.Fatalf("GET /search error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if !strings.Contains(body, "55 results") {
+		t.Errorf("expected the total count 55, got:\n%s", body)
+	}
+
+	// The link must be encoded exactly once: a single "%20"/"+" for the space,
+	// never a re-escaped "%2b" (which would mean the space survived as a
+	// literal "+" once decoded server-side, corrupting the spec_id filter).
+	const wantLink = "/search?q=pagispec&page=2&spec_id=TS%2023.501"
+	if !strings.Contains(body, wantLink) {
+		t.Fatalf("expected a singly-encoded page 2 link %q, got:\n%s", wantLink, body)
+	}
+	if strings.Contains(body, "%2b") || strings.Contains(body, "%2B") {
+		t.Errorf("pagination link must not double-encode the spec_id, got:\n%s", body)
+	}
+
+	resp2, err := http.Get(ts.URL + wantLink)
+	if err != nil {
+		t.Fatalf("GET page 2 error: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	body2 := readBody(t, resp2)
+	if !strings.Contains(body2, "Page 2 of 2") {
+		t.Errorf("expected page 2 info, got:\n%s", body2)
+	}
+	// Before the fix, the mangled spec_id ("TS+23.501") matches no spec, so
+	// the scoped search would return zero hits instead of the 5 remaining.
+	if strings.Count(body2, `class="search-result"`) != 5 {
+		t.Errorf("expected the 5 remaining hits on page 2 (spec_id filter must still match), got:\n%s", body2)
+	}
+	if !strings.Contains(body2, `name="spec_id" value="TS 23.501"`) {
+		t.Errorf("expected the spec_id filter to survive to page 2, got:\n%s", body2)
+	}
+}
+
 // TestHandleSearch_ErrorBanner verifies a failing search renders an error
 // banner instead of silently claiming zero results.
 func TestHandleSearch_ErrorBanner(t *testing.T) {
@@ -1750,6 +1815,39 @@ func TestHandleCompare_RenumberedSectionDiff(t *testing.T) {
 	if !strings.Contains(body2, "7 &rarr; 5.1.1") {
 		t.Errorf("expected the header to show the renumbering, got:\n%s", body2)
 	}
+	// #154: the filter form must carry old_section, or resubmitting it (e.g.
+	// clicking Compare again unchanged) drops the old number and the old side
+	// wrongly resolves against the new number. It must be a visible, editable
+	// field rather than hidden (Greptile flagged the earlier hidden-field fix
+	// as a trap: editing the visible Section field and resubmitting would
+	// silently carry the stale old_section along with it) so the user can see
+	// and clear/update it like every other field in this form.
+	if !strings.Contains(body2, `<input type="text" name="old_section" id="old_section" value="7"`) {
+		t.Errorf("expected the filter form to preserve old_section in a visible, editable field, got:\n%s", body2)
+	}
+	if strings.Contains(body2, `type="hidden" name="old_section"`) {
+		t.Errorf("old_section must not be a hidden field: editing Section and resubmitting would silently reuse a stale value, got:\n%s", body2)
+	}
+}
+
+// TestHandleCompare_OldSectionBlankWhenNotRenumbered checks that a plain
+// section comparison (no renumbering involved) renders the old_section field
+// empty rather than carrying over some other value, so the placeholder ("same
+// as section") reflects reality and the field starts each page load in sync
+// with the URL, not stale client-side form state.
+func TestHandleCompare_OldSectionBlankWhenNotRenumbered(t *testing.T) {
+	ts, _ := setupVersionedServer(t, cannedFetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=19.5.0&section=5.1")
+	if err != nil {
+		t.Fatalf("GET compare section: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if !strings.Contains(body, `<input type="text" name="old_section" id="old_section" value=""`) {
+		t.Errorf("expected an empty old_section field when the request carried none, got:\n%s", body)
+	}
 }
 
 // TestHandleCompare_IdenticalSection reports identity instead of an empty diff.
@@ -1875,6 +1973,36 @@ func TestHandleCompare_UnknownNewVersion(t *testing.T) {
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestHandleCompare_NewSideErrorShownImmediately pins issue #153: a permanent
+// new-side error (a version that exists nowhere) must be reported right away,
+// not hidden behind an old-side fetch that is still in progress. The old-side
+// fetcher blocks past the budget, so before the fix this would answer 202
+// (auto-refreshing "fetching" page) instead of the confirmed 404 for the
+// unknown new version.
+func TestHandleCompare_NewSideErrorShownImmediately(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	ts, src := setupVersionedServer(t, func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		<-release
+		return cannedFetcher(ctx, sv)
+	}, nil)
+	src.Budget = 20 * time.Millisecond
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=19.5.0&new=12.0.0")
+	if err != nil {
+		t.Fatalf("GET compare: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (confirmed new-side error, not the fetching page), got body:\n%s", resp.StatusCode, body)
+	}
+	if strings.Contains(body, `http-equiv="refresh"`) {
+		t.Errorf("the confirmed new-side error must not be masked by an auto-refreshing fetching page, got:\n%s", body)
 	}
 }
 
