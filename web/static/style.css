@@ -614,6 +614,37 @@ mark {
     height: auto;
     border: 1px solid var(--border);
     border-radius: var(--radius);
+    cursor: zoom-in;
+}
+
+/* === Image lightbox === */
+/* Modal <dialog> for click-to-enlarge on section figures (see app.js). The
+   image scales to fill the viewport with object-fit: contain, so small
+   figures are enlarged too — the whole point of the dialog — without ever
+   cropping. */
+.lightbox {
+    width: calc(100vw - 48px);
+    height: calc(100vh - 48px);
+    max-width: none;
+    max-height: none;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: zoom-out;
+}
+
+.lightbox img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.lightbox::backdrop {
+    background: rgba(0, 0, 0, 0.75);
+}
+
+body:has(dialog.lightbox[open]) {
+    overflow: hidden;
 }
 
 .section-body figure {

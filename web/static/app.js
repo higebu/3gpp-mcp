@@ -121,6 +121,9 @@
         if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) {
             return;
         }
+        if (document.querySelector('dialog.lightbox[open]')) {
+            return;
+        }
         var active = document.activeElement;
         if (active && (active.isContentEditable || active.matches('input, textarea, select, button, [contenteditable], [role="button"], [role="textbox"], [role="combobox"], [role="listbox"]'))) {
             return;
@@ -134,6 +137,51 @@
             window.location.href = link.getAttribute('href');
         }
     });
+
+    // Image lightbox: figures are rendered at the document's display size,
+    // which is often smaller than the viewport, so clicking one opens a
+    // modal <dialog> scaled to fit the screen. The dialog is created lazily
+    // on first use and reused; a click anywhere closes it (clicks on the
+    // ::backdrop target the dialog itself), and Escape is native <dialog>
+    // behavior.
+    const sectionBody = document.querySelector('.section-body');
+    if (sectionBody) {
+        let lightbox = null;
+        const openLightbox = function (img) {
+            if (!lightbox) {
+                lightbox = document.createElement('dialog');
+                lightbox.className = 'lightbox';
+                lightbox.appendChild(document.createElement('img'));
+                lightbox.addEventListener('click', function () {
+                    lightbox.close();
+                });
+                document.body.appendChild(lightbox);
+            }
+            const large = lightbox.querySelector('img');
+            large.src = img.currentSrc || img.src;
+            large.alt = img.alt;
+            lightbox.setAttribute('aria-label', img.alt || 'Figure');
+            lightbox.showModal();
+        };
+        // Figures are focusable buttons so keyboard users can open the
+        // lightbox too; closing a <dialog> restores focus to the figure.
+        sectionBody.querySelectorAll('img').forEach(function (img) {
+            img.tabIndex = 0;
+            img.setAttribute('role', 'button');
+        });
+        sectionBody.addEventListener('click', function (e) {
+            const img = e.target.closest('img');
+            if (img) {
+                openLightbox(img);
+            }
+        });
+        sectionBody.addEventListener('keydown', function (e) {
+            if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('img')) {
+                e.preventDefault();
+                openLightbox(e.target);
+            }
+        });
+    }
 
     // Render LaTeX math emitted by the DOCX converter. The server wraps each
     // equation in a <span class="math-inline|math-display"> whose text content
