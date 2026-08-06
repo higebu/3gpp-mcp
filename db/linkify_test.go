@@ -523,6 +523,11 @@ func TestLinkifyRefs_BareRefs(t *testing.T) {
 			want:  "See clause [4.2](/specs/TS 23.402/sections/4.2) and [5.1](/specs/TS 23.402/sections/5.1) of [TS 23.402](/specs/TS 23.402).",
 		},
 		{
+			name:  "trailing element after spec-first list not linked bare",
+			input: "See TS 23.402 clause 4.2 and clause 5.1 for details.",
+			want:  "See [TS 23.402 clause 4.2](/specs/TS 23.402/sections/4.2) and clause 5.1 for details.",
+		},
+		{
 			name:  "oxford comma list of TS not linked bare",
 			input: "See clause 4.2, 5.1, and 5.15.2 of TS 23.402.",
 			want:  "See clause 4.2, 5.1, and 5.15.2 of [TS 23.402](/specs/TS 23.402).",

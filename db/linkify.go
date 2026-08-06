@@ -293,8 +293,8 @@ func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec,
 			// bareLeadingSpecRE is anchored at $; a short tail keeps the scan
 			// cheap. A cut-off leading rune can only lose a match, and only
 			// for a designator further away than any it would ever match.
-			if len(head) > 48 {
-				head = head[len(head)-48:]
+			if len(head) > 128 {
+				head = head[len(head)-128:]
 			}
 			return bareLeadingSpecRE.MatchString(head)
 		}

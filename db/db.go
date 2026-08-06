@@ -1314,13 +1314,16 @@ var (
 	barePresentDocRE = regexp.MustCompile(`^` + bareRefChain + sp + `+(?:of|in)` + sp +
 		`+(?:the` + sp + `+present` + sp + `+(?:document|specification)|this` + sp + `+(?:specification|document))`)
 
-	// bareLeadingSpecRE matches a spec designator or bracket reference just
-	// before a bare reference ("TS 23.402 Clause 5.1", "RFC 3748 Section 3.1",
-	// "[19] Clause 6") — qualified territory even when capitalization keeps
-	// the lowercase-only qualified patterns (and thus the overlap gate) from
-	// covering it.
+	// bareLeadingSpecRE matches a spec designator or bracket reference before
+	// a bare reference — directly ("TS 23.402 Clause 5.1", "RFC 3748
+	// Section 3.1", "[19] Clause 6") or across a coordinated list
+	// ("TS 23.402 clause 4.2 and clause 5.1") — qualified territory even when
+	// the lowercase-only qualified patterns (and thus the overlap gate) do
+	// not cover the element itself.
 	bareLeadingSpecRE = regexp.MustCompile(
-		`(?:(?:TS|TR)` + sp + `+\d+\.\d+|RFC` + sp + `+\d+|\[\d+[A-Za-z]*\])` + sp + `*[,;]?` + sp + `*$`)
+		`(?:(?:TS|TR)` + sp + `+\d+\.\d+|RFC` + sp + `+\d+|\[\d+[A-Za-z]*\])` +
+			`(?:` + sp + `+(?:(?:[Cc]lauses?|[Ss]ections?|[Ss]ubclauses?|[Aa]nnexe?s?)` + sp + `+)?` + secNumRaw + bareRefChain + `)?` +
+			sp + `*[,;]?` + sp + `*(?:(?:and|or)` + sp + `+)?$`)
 )
 
 // refExtractor converts regex submatch indices into (targetSpec, targetSection, ok).
