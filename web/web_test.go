@@ -646,6 +646,71 @@ func TestHandleSearch_Pagination(t *testing.T) {
 	}
 }
 
+// TestHandleSearch_PaginationSpecIDWithSpace pins issue #150: spec_id values
+// like "TS 23.501" contain a space, so the pagination link must percent-encode
+// it exactly once. Double-encoding turns the space into a literal "+" byte on
+// the server side (url.QueryEscape("TS 23.501") = "TS+23.501", re-escaped by
+// html/template's own urlquery context to "TS%2b23.501", which decodes back to
+// "TS+23.501" — not the original spec_id), so the second page's scoped search
+// would silently match zero rows.
+func TestHandleSearch_PaginationSpecIDWithSpace(t *testing.T) {
+	ts, d := setupTestServer(t)
+
+	for i := 0; i < 55; i++ {
+		if err := d.UpsertSection(db.Section{
+			SpecID:  "TS 23.501",
+			Version: "18.6.0",
+			Number:  fmt.Sprintf("9.%d", i),
+			Title:   fmt.Sprintf("Filler %d", i),
+			Level:   2,
+			Content: "pagispec content",
+		}); err != nil {
+			t.Fatalf("UpsertSection: %v", err)
+		}
+	}
+
+	resp, err := http.Get(ts.URL + "/search?q=pagispec&spec_id=" + url.QueryEscape("TS 23.501"))
+	if err != nil {
+		t.Fatalf("GET /search error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if !strings.Contains(body, "55 results") {
+		t.Errorf("expected the total count 55, got:\n%s", body)
+	}
+
+	// The link must be encoded exactly once: a single "%20"/"+" for the space,
+	// never a re-escaped "%2b" (which would mean the space survived as a
+	// literal "+" once decoded server-side, corrupting the spec_id filter).
+	const wantLink = "/search?q=pagispec&page=2&spec_id=TS%2023.501"
+	if !strings.Contains(body, wantLink) {
+		t.Fatalf("expected a singly-encoded page 2 link %q, got:\n%s", wantLink, body)
+	}
+	if strings.Contains(body, "%2b") || strings.Contains(body, "%2B") {
+		t.Errorf("pagination link must not double-encode the spec_id, got:\n%s", body)
+	}
+
+	resp2, err := http.Get(ts.URL + wantLink)
+	if err != nil {
+		t.Fatalf("GET page 2 error: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	body2 := readBody(t, resp2)
+	if !strings.Contains(body2, "Page 2 of 2") {
+		t.Errorf("expected page 2 info, got:\n%s", body2)
+	}
+	// Before the fix, the mangled spec_id ("TS+23.501") matches no spec, so
+	// the scoped search would return zero hits instead of the 5 remaining.
+	if strings.Count(body2, `class="search-result"`) != 5 {
+		t.Errorf("expected the 5 remaining hits on page 2 (spec_id filter must still match), got:\n%s", body2)
+	}
+	if !strings.Contains(body2, `name="spec_id" value="TS 23.501"`) {
+		t.Errorf("expected the spec_id filter to survive to page 2, got:\n%s", body2)
+	}
+}
+
 // TestHandleSearch_ErrorBanner verifies a failing search renders an error
 // banner instead of silently claiming zero results.
 func TestHandleSearch_ErrorBanner(t *testing.T) {
