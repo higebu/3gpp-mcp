@@ -74,7 +74,7 @@ func TestRenderMarkdown(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := renderMarkdown(tt.content, tt.specID, "", nil, nil)
+			result := renderMarkdown(tt.content, renderOpts{specID: tt.specID})
 			if !strings.Contains(result, tt.want) {
 				t.Errorf("renderMarkdown() = %q, want to contain %q", result, tt.want)
 			}
@@ -88,7 +88,7 @@ func TestRenderMarkdown(t *testing.T) {
 func TestRenderMarkdown_MathProtected(t *testing.T) {
 	t.Run("paragraph matrix keeps backslashes", func(t *testing.T) {
 		content := `$\begin{matrix} 1 & j \\ -1 & j \end{matrix}$`
-		got := renderMarkdown(content, "TS 38.211", "", nil, nil)
+		got := renderMarkdown(content, renderOpts{specID: "TS 38.211"})
 		want := `<span class="math-inline">\begin{matrix} 1 &amp; j \\ -1 &amp; j \end{matrix}</span>`
 		if !strings.Contains(got, want) {
 			t.Errorf("math not protected, got:\n%s", got)
@@ -98,7 +98,7 @@ func TestRenderMarkdown_MathProtected(t *testing.T) {
 	t.Run("pre-escaped table-cell math normalizes ampersand", func(t *testing.T) {
 		// Table HTML from the docx converter has already HTML-escaped & → &amp;.
 		content := `<table><tbody><tr><td>$1 &amp; 2$</td></tr></tbody></table>`
-		got := renderMarkdown(content, "TS 38.211", "", nil, nil)
+		got := renderMarkdown(content, renderOpts{specID: "TS 38.211"})
 		// The span's inner HTML must be single-escaped so textContent is "1 & 2".
 		want := `<span class="math-inline">1 &amp; 2</span>`
 		if !strings.Contains(got, want) {
@@ -116,7 +116,7 @@ func TestRenderMarkdown_MathProtected(t *testing.T) {
 func TestRenderMarkdown_MathSkipsCode(t *testing.T) {
 	t.Run("fenced block keeps dollars", func(t *testing.T) {
 		content := "```asn1\nprice ::= $100 and $200\n```\n"
-		got := renderMarkdown(content, "TS 23.501", "", nil, nil)
+		got := renderMarkdown(content, renderOpts{specID: "TS 23.501"})
 		// Chroma may tokenize around the dollars, so assert on the characters
 		// rather than the contiguous string.
 		if strings.Count(got, "$") != 2 {
@@ -133,7 +133,7 @@ func TestRenderMarkdown_MathSkipsCode(t *testing.T) {
 
 	t.Run("inline code keeps dollars, surrounding math still works", func(t *testing.T) {
 		content := "Set `$PATH` and `$HOME` first; the value $x^2$ is math."
-		got := renderMarkdown(content, "TS 23.501", "", nil, nil)
+		got := renderMarkdown(content, renderOpts{specID: "TS 23.501"})
 		if !strings.Contains(got, "<code>$PATH</code>") || !strings.Contains(got, "<code>$HOME</code>") {
 			t.Errorf("inline code must keep its dollars, got:\n%s", got)
 		}
@@ -144,7 +144,7 @@ func TestRenderMarkdown_MathSkipsCode(t *testing.T) {
 
 	t.Run("angle brackets in code stay code", func(t *testing.T) {
 		content := "```\na <SUPI> in code\n```\n\nand `<NSSAI>` inline."
-		got := renderMarkdown(content, "TS 23.501", "", nil, nil)
+		got := renderMarkdown(content, renderOpts{specID: "TS 23.501"})
 		if !strings.Contains(got, "&lt;SUPI&gt;") {
 			t.Errorf("code block angle brackets must be goldmark-escaped, got:\n%s", got)
 		}
@@ -163,7 +163,7 @@ func TestRenderMarkdown_MathSkipsCode(t *testing.T) {
 // substituted.
 func TestRenderMarkdown_PlaceholderLiteralUntouched(t *testing.T) {
 	content := "Literal token xxkatexmathxx0xxkatexmathxx in prose.\n\nAnd math $a+b$ after it."
-	got := renderMarkdown(content, "TS 23.501", "", nil, nil)
+	got := renderMarkdown(content, renderOpts{specID: "TS 23.501"})
 	if !strings.Contains(got, "xxkatexmathxx0xxkatexmathxx") {
 		t.Errorf("literal placeholder-lookalike text must survive verbatim, got:\n%s", got)
 	}
@@ -864,7 +864,7 @@ func TestIsExternalRef(t *testing.T) {
 // text flows through htmlpkg.EscapeString before reaching the template.
 func TestRenderMarkdown_ImageAltEscaped(t *testing.T) {
 	content := `![alt"onload=x("y")](image://fig.png?w=600&h=400)`
-	got := renderMarkdown(content, "TS 23.501", "", nil, nil)
+	got := renderMarkdown(content, renderOpts{specID: "TS 23.501"})
 	if strings.Contains(got, `alt"onload`) {
 		t.Errorf("alt text should be HTML-escaped, got:\n%s", got)
 	}
@@ -879,7 +879,7 @@ func TestRenderMarkdown_ImageAltEscaped(t *testing.T) {
 // must reach the browser as visible text, never as markup.
 func TestRenderMarkdown_RawHTMLEscaped(t *testing.T) {
 	content := "Inline <b>bold</b> and <script>alert(1)</script> here."
-	got := renderMarkdown(content, "TS 23.501", "", nil, nil)
+	got := renderMarkdown(content, renderOpts{specID: "TS 23.501"})
 	if strings.Contains(got, "<script>") {
 		t.Errorf("raw <script> must not pass through, got:\n%s", got)
 	}
@@ -899,7 +899,7 @@ func TestRenderMarkdown_RawHTMLEscaped(t *testing.T) {
 // must stay visible as text.
 func TestRenderMarkdown_AngleBracketPlaceholderVisible(t *testing.T) {
 	content := "The identifier <SUPI> is used here."
-	got := renderMarkdown(content, "TS 23.501", "", nil, nil)
+	got := renderMarkdown(content, renderOpts{specID: "TS 23.501"})
 	if !strings.Contains(got, "&lt;SUPI&gt;") {
 		t.Errorf("expected <SUPI> to survive as escaped text, got:\n%s", got)
 	}
@@ -913,7 +913,7 @@ func TestRenderMarkdown_AngleBracketPlaceholderVisible(t *testing.T) {
 // through attributes or a non-relative src.
 func TestRenderMarkdown_EventHandlerStripped(t *testing.T) {
 	content := `Before <img src=x onerror=alert(1)> after, and <a href="javascript:alert(2)">link</a>.`
-	got := renderMarkdown(content, "TS 23.501", "", nil, nil)
+	got := renderMarkdown(content, renderOpts{specID: "TS 23.501"})
 	if strings.Contains(got, "onerror") {
 		t.Errorf("event handler attribute must be stripped, got:\n%s", got)
 	}
@@ -934,7 +934,7 @@ func TestRenderMarkdown_ExternalHrefStripped(t *testing.T) {
 	content := `<a href="https://evil.example/p">x</a> <a href="//evil.example/p">y</a> ` +
 		`<a href="http://evil.example/p">z</a> ` +
 		"See RFC 3748 and TS 23.501 for details."
-	got := renderMarkdown(content, "TS 23.501", "", nil, nil)
+	got := renderMarkdown(content, renderOpts{specID: "TS 23.501"})
 	if strings.Contains(got, `href="https://evil`) || strings.Contains(got, `href="//`) ||
 		strings.Contains(got, `href="http://`) {
 		t.Errorf("no anchor may carry an external href, got:\n%s", got)
@@ -1060,7 +1060,7 @@ func TestNewMathToken_RandFailure(t *testing.T) {
 	if a == b {
 		t.Errorf("fallback tokens must be unique, got %q twice", a)
 	}
-	got := renderMarkdown("Inline $x_1$ math.", "TS 23.501", "", nil, nil)
+	got := renderMarkdown("Inline $x_1$ math.", renderOpts{specID: "TS 23.501"})
 	if !strings.Contains(got, "katex-math") && !strings.Contains(got, "math") {
 		t.Errorf("math must still render under the fallback token, got:\n%s", got)
 	}
@@ -1071,7 +1071,7 @@ func TestNewMathToken_RandFailure(t *testing.T) {
 
 // TestRenderMarkdown_UnknownLanguageFence pins the chroma fallback lexer path.
 func TestRenderMarkdown_UnknownLanguageFence(t *testing.T) {
-	got := renderMarkdown("```zzznotalanguage\nplain <text>\n```\n", "TS 23.501", "", nil, nil)
+	got := renderMarkdown("```zzznotalanguage\nplain <text>\n```\n", renderOpts{specID: "TS 23.501"})
 	if !strings.Contains(got, "plain") {
 		t.Errorf("unknown-language fence must still render its content, got:\n%s", got)
 	}
@@ -1086,7 +1086,7 @@ func TestRenderMarkdown_UnknownLanguageFence(t *testing.T) {
 func TestRenderMarkdown_TableMarkupSurvivesSanitizer(t *testing.T) {
 	content := `<table><thead><tr><th colspan="2">Head</th></tr></thead>` +
 		`<tbody><tr><td rowspan="2">A</td><td><img src="image://fig.png?w=200&h=100" alt="diag" width="200" height="100"></td></tr></tbody></table>`
-	got := renderMarkdown(content, "TS 23.501", "", nil, nil)
+	got := renderMarkdown(content, renderOpts{specID: "TS 23.501"})
 	if !strings.Contains(got, `colspan="2"`) {
 		t.Errorf("expected colspan to survive, got:\n%s", got)
 	}
@@ -1104,7 +1104,7 @@ func TestRenderMarkdown_TableMarkupSurvivesSanitizer(t *testing.T) {
 // correctly in the web viewer.
 func TestRenderMarkdown_SubSupPassthrough(t *testing.T) {
 	content := "n_78<sup>1</sup> and H<sub>2</sub>O"
-	got := renderMarkdown(content, "TS 23.501", "", nil, nil)
+	got := renderMarkdown(content, renderOpts{specID: "TS 23.501"})
 	if !strings.Contains(got, "<sup>1</sup>") {
 		t.Errorf("expected <sup> to pass through, got:\n%s", got)
 	}
@@ -1118,7 +1118,7 @@ func TestRenderMarkdown_SubSupPassthrough(t *testing.T) {
 // converter) are rewritten to a real /specs/<id>/images/<name> URL.
 func TestRenderMarkdown_HTMLImageRewrite(t *testing.T) {
 	content := `<table><tbody><tr><td><img src="image://fig.png?w=200&h=100" alt="diag" width="200" height="100"></td></tr></tbody></table>`
-	got := renderMarkdown(content, "TS 23.501", "", nil, nil)
+	got := renderMarkdown(content, renderOpts{specID: "TS 23.501"})
 	if !strings.Contains(got, `src="/specs/TS%2023.501/images/fig.png"`) {
 		t.Errorf("expected image:// to be rewritten to spec-relative URL, got:\n%s", got)
 	}
@@ -1137,7 +1137,7 @@ func TestRenderMarkdown_HTMLImageRewrite(t *testing.T) {
 // the served attribute has to round-trip back to the stored basename.
 func TestRenderMarkdown_HTMLImageRewriteSpecialChars(t *testing.T) {
 	content := `<table><tbody><tr><td><img src="image://Figure A&B's diagram.png?w=200&h=100" alt="diag"></td></tr></tbody></table>`
-	got := renderMarkdown(content, "TS 23.501", "", nil, nil)
+	got := renderMarkdown(content, renderOpts{specID: "TS 23.501"})
 
 	const want = "Figure A&B's diagram.png"
 	prefix := `src="/specs/TS%2023.501/images/`
@@ -2002,44 +2002,105 @@ func TestRenderMarkdown_BareClauseRefs(t *testing.T) {
 	exists := func(section string) bool { return section == "4.2" }
 
 	t.Run("bare clause links within the current spec", func(t *testing.T) {
-		got := renderMarkdown("See clause 4.2 for details.", "TS 23.501", "", nil, exists)
+		got := renderMarkdown("See clause 4.2 for details.", renderOpts{specID: "TS 23.501", sectionExists: exists})
 		if want := `<a href="/specs/TS%2023.501/sections/4.2">clause 4.2</a>`; !strings.Contains(got, want) {
 			t.Errorf("expected %s, got:\n%s", want, got)
 		}
 	})
 
 	t.Run("bare clause carries the version on archived pages", func(t *testing.T) {
-		got := renderMarkdown("See clause 4.2 for details.", "TS 23.501", "18.5.0", nil, exists)
+		got := renderMarkdown("See clause 4.2 for details.", renderOpts{specID: "TS 23.501", version: "18.5.0", sectionExists: exists})
 		if want := `<a href="/specs/TS%2023.501/sections/4.2?version=18.5.0">clause 4.2</a>`; !strings.Contains(got, want) {
 			t.Errorf("expected %s, got:\n%s", want, got)
 		}
 	})
 
 	t.Run("qualified same-spec ref carries the version too", func(t *testing.T) {
-		got := renderMarkdown("See TS 23.501 clause 5.1 for details.", "TS 23.501", "18.5.0", nil, exists)
+		got := renderMarkdown("See TS 23.501 clause 5.1 for details.", renderOpts{specID: "TS 23.501", version: "18.5.0", sectionExists: exists})
 		if want := `<a href="/specs/TS%2023.501/sections/5.1?version=18.5.0">TS 23.501 clause 5.1</a>`; !strings.Contains(got, want) {
 			t.Errorf("expected %s, got:\n%s", want, got)
 		}
 	})
 
 	t.Run("qualified other-spec ref stays canonical", func(t *testing.T) {
-		got := renderMarkdown("See TS 23.502 clause 4.3 for details.", "TS 23.501", "18.5.0", nil, exists)
+		got := renderMarkdown("See TS 23.502 clause 4.3 for details.", renderOpts{specID: "TS 23.501", version: "18.5.0", sectionExists: exists})
 		if want := `<a href="/specs/TS%2023.502/sections/4.3">TS 23.502 clause 4.3</a>`; !strings.Contains(got, want) {
 			t.Errorf("expected %s, got:\n%s", want, got)
 		}
 	})
 
 	t.Run("nonexistent section stays plain", func(t *testing.T) {
-		got := renderMarkdown("See clause 9.9 for details.", "TS 23.501", "", nil, exists)
+		got := renderMarkdown("See clause 9.9 for details.", renderOpts{specID: "TS 23.501", sectionExists: exists})
 		if strings.Contains(got, `href="/specs/TS%2023.501/sections/9.9"`) {
 			t.Errorf("nonexistent section must not link, got:\n%s", got)
 		}
 	})
 
 	t.Run("nil sectionExists disables bare linking", func(t *testing.T) {
-		got := renderMarkdown("See clause 4.2 for details.", "TS 23.501", "", nil, nil)
+		got := renderMarkdown("See clause 4.2 for details.", renderOpts{specID: "TS 23.501"})
 		if strings.Contains(got, `href="/specs/TS%2023.501/sections/4.2"`) {
 			t.Errorf("bare ref must not link with nil sectionExists, got:\n%s", got)
+		}
+	})
+}
+
+// TestRenderMarkdown_UnresolvedRefs verifies unresolved-reference markers and
+// tooltips survive the full pipeline: escapeUnknownHTML keeps the marker
+// span, goldmark passes it through, and the sanitizer keeps class and title.
+func TestRenderMarkdown_UnresolvedRefs(t *testing.T) {
+	exists := func(section string) bool { return section == "4.2" }
+	targetInfo := func(spec, section string) (bool, string, bool) {
+		if spec == "TS 23.502" {
+			return section == "4.12.2", "20.2.0", true
+		}
+		return false, "", false
+	}
+
+	t.Run("bare unresolved ref renders marker span", func(t *testing.T) {
+		got := renderMarkdown("See clause 9.9 for details.", renderOpts{specID: "TS 23.501", display: "20.2.0", sectionExists: exists})
+		want := `<span class="ref-unresolved" title="Section 9.9 does not exist in TS 23.501 v20.2.0 — possibly a stale or incorrect reference in the source text">clause 9.9</span>`
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %s, got:\n%s", want, got)
+		}
+	})
+
+	t.Run("bare unresolved ref in table renders marker span", func(t *testing.T) {
+		got := renderMarkdown("<table><tr><td>see clause 9.9</td></tr></table>", renderOpts{specID: "TS 23.501", sectionExists: exists})
+		want := `<span class="ref-unresolved" title="Section 9.9 does not exist in TS 23.501 — possibly a stale or incorrect reference in the source text">clause 9.9</span>`
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %s, got:\n%s", want, got)
+		}
+	})
+
+	t.Run("cross-spec unresolved ref links to spec top with tooltip", func(t *testing.T) {
+		got := renderMarkdown("See TS 23.502 clause 4.12.2a.", renderOpts{specID: "TS 23.501", targetInfo: targetInfo})
+		if !strings.Contains(got, `href="/specs/TS%2023.502"`) {
+			t.Errorf("expected spec-top link, got:\n%s", got)
+		}
+		if !strings.Contains(got, `title="Section 4.12.2a does not exist in TS 23.502 v20.2.0`) {
+			t.Errorf("expected explanatory title, got:\n%s", got)
+		}
+		if strings.Contains(got, "/sections/4.12.2a") {
+			t.Errorf("must not link to the missing section, got:\n%s", got)
+		}
+	})
+
+	t.Run("cross-spec resolved ref keeps section link", func(t *testing.T) {
+		got := renderMarkdown("See TS 23.502 clause 4.12.2.", renderOpts{specID: "TS 23.501", targetInfo: targetInfo})
+		want := `<a href="/specs/TS%2023.502/sections/4.12.2">TS 23.502 clause 4.12.2</a>`
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %s, got:\n%s", want, got)
+		}
+	})
+
+	t.Run("literal span in document text is escaped", func(t *testing.T) {
+		got := renderMarkdown("a literal <span> placeholder", renderOpts{specID: "TS 23.501"})
+		if !strings.Contains(got, "&lt;span&gt;") {
+			t.Errorf("bare <span> in prose must stay visible text, got:\n%s", got)
+		}
+		got = renderMarkdown(`a <span class="x"> placeholder`, renderOpts{specID: "TS 23.501"})
+		if !strings.Contains(got, "&lt;span") {
+			t.Errorf("non-marker <span class> in prose must stay visible text, got:\n%s", got)
 		}
 	})
 }

@@ -1251,10 +1251,10 @@ const secNum = `([A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 const secNumRaw = `(?:[A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 
 // bareRefChain matches zero or more coordinated references (", clause 4.3",
-// " and 4.4", ", and 4.4", "; or Annex B") so bareTrailingQualRE and
-// barePresentDocRE can see through a list to the "of"/"in" that qualifies its
-// every element.
-const bareRefChain = `(?:` + sp + `*(?:[,;]` + sp + `*(?:and|or)?|and|or)` + sp + `*(?:(?:[Cc]lauses?|[Ss]ections?|[Ss]ubclauses?|[Aa]nnexe?s?)` + sp + `+)?` + secNumRaw + `)*`
+// " and 4.4", ", and 4.4", "; or Annex B", " and in clause 4.12.2a") so
+// bareTrailingQualRE and barePresentDocRE can see through a list to the
+// "of"/"in" that qualifies its every element.
+const bareRefChain = `(?:` + sp + `*(?:[,;]` + sp + `*(?:and|or)?|and|or)` + sp + `*(?:(?:of|in)` + sp + `+)?(?:(?:[Cc]lauses?|[Ss]ections?|[Ss]ubclauses?|[Aa]nnexe?s?)` + sp + `+)?` + secNumRaw + `)*`
 
 var (
 	// "TS 23.501 clause 5.1" or "3GPP TS 33.203 Annex H"
@@ -1282,6 +1282,16 @@ var (
 		`(?:3GPP` + sp + `+)?(TS|TR)` + sp + `+(\d+\.\d+)` + sp + `+` +
 			`(clauses?|subclauses?|sections?|[Aa]nnexe?s?)` + sp + `+` +
 			`(` + secNumRaw + `(?:(?:,` + sp + `*` + secNumRaw + `)*` + sp + `+and` + sp + `+` + secNumRaw + `))\b`)
+
+	// tsCoordPrefixRefRE matches a coordinated list that repeats the keyword
+	// per element before naming the spec — "clause 4.12.2 and in
+	// clause 4.12.2a of TS 23.502" — which tsMultiPrefixRefRE (bare-number
+	// lists) does not cover. Every element belongs to the named spec.
+	// Groups: 1=reference-list, 2=TS|TR, 3=spec-number.
+	tsCoordPrefixRefRE = regexp.MustCompile(
+		`((?:[Cc]lauses?|[Ss]ubclauses?|[Ss]ections?|[Aa]nnexe?s?)` + sp + `+` + secNumRaw +
+			`(?:` + sp + `*(?:,|and|or)` + sp + `*(?:(?:of|in)` + sp + `+)?(?:[Cc]lauses?|[Ss]ubclauses?|[Ss]ections?|[Aa]nnexe?s?)` + sp + `+` + secNumRaw + `)+)` +
+			sp + `+(?:of|in)` + sp + `+(?:3GPP` + sp + `+)?(TS|TR)` + sp + `+(\d+\.\d+)`)
 
 	// secNumListRE extracts individual section numbers from a comma/and-separated list.
 	secNumListRE = regexp.MustCompile(secNumRaw)
@@ -1362,18 +1372,19 @@ func rfcExtractor(m []int, content string) (string, string, bool) {
 }
 
 // multiRefExtractor converts regex submatch indices into replacement text containing multiple links.
-// urlFor is called with (targetSpec, targetSection) and returns a URL string.
-// mkLink renders a single link from (linkText, url); it lets the caller choose
-// Markdown or HTML link syntax depending on the surrounding context.
+// opts resolves target URLs and validates target sections (see
+// LinkifyRefsOpts.resolveTarget). mkLink renders a single link from
+// (linkText, url, title); it lets the caller choose Markdown or HTML link
+// syntax depending on the surrounding context.
 // Returns (replacementText, ok). When ok is false, the match is skipped.
-type multiRefExtractor func(m []int, content string, urlFor func(string, string) string, mkLink func(text, url string) string) (string, bool)
+type multiRefExtractor func(m []int, content string, opts *LinkifyRefsOpts, mkLink func(text, url, title string) string) (string, bool)
 
 // multiRefSpecSections extracts (spec, []sections) from a multi-section regex match.
 // Returns ("", nil, false) if fewer than 2 sections are found.
 type multiRefSpecSections func(m []int, content string) (string, []string, bool)
 
 // tsMultiPrefixMRExtractor handles "clauses 8.2 and 16.11 of TS 23.402 [45]".
-func tsMultiPrefixMRExtractor(m []int, content string, urlFor func(string, string) string, mkLink func(text, url string) string) (string, bool) {
+func tsMultiPrefixMRExtractor(m []int, content string, opts *LinkifyRefsOpts, mkLink func(text, url, title string) string) (string, bool) {
 	keyword := content[m[2]:m[3]]
 	secList := content[m[4]:m[5]]
 	specType := content[m[6]:m[7]]
@@ -1386,9 +1397,10 @@ func tsMultiPrefixMRExtractor(m []int, content string, urlFor func(string, strin
 	}
 
 	linkedSecList := secNumListRE.ReplaceAllStringFunc(secList, func(sec string) string {
-		return mkLink(sec, urlFor(spec, sec))
+		u, title := opts.resolveTarget(spec, sec)
+		return mkLink(sec, u, title)
 	})
-	specLink := mkLink(specType+" "+specNum, urlFor(spec, ""))
+	specLink := mkLink(specType+" "+specNum, opts.URLFor(spec, ""), "")
 	result := keyword + " " + linkedSecList + " of " + specLink
 
 	if m[10] >= 0 {
@@ -1410,8 +1422,23 @@ func tsMultiPrefixSpecSections(m []int, content string) (string, []string, bool)
 	return spec, sections, true
 }
 
+// tsCoordPrefixMRExtractor handles "clause 4.12.2 and in clause 4.12.2a of
+// TS 23.502": each keyword-prefixed element links to the named spec. The
+// original text — separators, prepositions, the optional 3GPP prefix — is
+// kept intact around the links.
+func tsCoordPrefixMRExtractor(m []int, content string, opts *LinkifyRefsOpts, mkLink func(text, url, title string) string) (string, bool) {
+	spec := content[m[4]:m[5]] + " " + content[m[6]:m[7]]
+	linked := bareRefRE.ReplaceAllStringFunc(content[m[2]:m[3]], func(ref string) string {
+		sec := bareRefRE.FindStringSubmatch(ref)[1]
+		u, title := opts.resolveTarget(spec, sec)
+		return ref[:len(ref)-len(sec)] + mkLink(sec, u, title)
+	})
+	specLink := mkLink(content[m[4]:m[7]], opts.URLFor(spec, ""), "")
+	return linked + content[m[3]:m[4]] + specLink, true
+}
+
 // tsMultiMRExtractor handles "TS 23.402 clauses 8.2 and 16.11".
-func tsMultiMRExtractor(m []int, content string, urlFor func(string, string) string, mkLink func(text, url string) string) (string, bool) {
+func tsMultiMRExtractor(m []int, content string, opts *LinkifyRefsOpts, mkLink func(text, url, title string) string) (string, bool) {
 	specType := content[m[2]:m[3]]
 	specNum := content[m[4]:m[5]]
 	keyword := content[m[6]:m[7]]
@@ -1424,9 +1451,10 @@ func tsMultiMRExtractor(m []int, content string, urlFor func(string, string) str
 	}
 
 	linkedSecList := secNumListRE.ReplaceAllStringFunc(secList, func(sec string) string {
-		return mkLink(sec, urlFor(spec, sec))
+		u, title := opts.resolveTarget(spec, sec)
+		return mkLink(sec, u, title)
 	})
-	specLink := mkLink(specType+" "+specNum, urlFor(spec, ""))
+	specLink := mkLink(specType+" "+specNum, opts.URLFor(spec, ""), "")
 	return specLink + " " + keyword + " " + linkedSecList, true
 }
 

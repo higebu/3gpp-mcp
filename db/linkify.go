@@ -132,29 +132,108 @@ func regionEnd(regions []region, pos int) int {
 	return pos + 1
 }
 
-// mdLink renders a Markdown link.
-func mdLink(text, url string) string {
+// mdLink renders a Markdown link. A non-empty title becomes the link's title
+// attribute (tooltip).
+func mdLink(text, url, title string) string {
+	if title != "" {
+		return "[" + text + "](" + url + ` "` + strings.ReplaceAll(title, `"`, "'") + `")`
+	}
 	return "[" + text + "](" + url + ")"
 }
 
 // htmlLink renders an HTML anchor. Used inside raw HTML blocks (e.g. tables)
 // where goldmark would not process Markdown link syntax.
-func htmlLink(text, url string) string {
-	return `<a href="` + htmlpkg.EscapeString(url) + `">` + htmlpkg.EscapeString(text) + `</a>`
+func htmlLink(text, url, title string) string {
+	attr := ""
+	if title != "" {
+		attr = ` title="` + htmlpkg.EscapeString(title) + `"`
+	}
+	return `<a href="` + htmlpkg.EscapeString(url) + `"` + attr + `>` + htmlpkg.EscapeString(text) + `</a>`
 }
 
-// LinkifyRefs replaces spec/RFC/bracket references in Markdown content with Markdown links.
-// bracketMap maps bracket numbers (e.g. "19") to spec IDs (e.g. "TS 33.203"); pass nil to skip.
-// urlFor is called with (targetSpec, targetSection) and returns a URL string.
-// sectionExists enables bare same-document references ("clause 4.2" with no
-// spec designator): a bare reference is linkified only when sectionExists
-// reports its section number present in the current document, and urlFor is
-// then called with an empty targetSpec meaning "the current spec". Pass nil
-// to skip bare references.
+// unresolvedSpan marks reference text whose target section does not exist,
+// with a tooltip explaining why. Emitted as raw HTML in both body text and
+// tables: goldmark passes inline <span> through and the sanitizer allowlists
+// class and title on span.
+func unresolvedSpan(text, title string) string {
+	return `<span class="ref-unresolved" title="` + htmlpkg.EscapeString(title) + `">` +
+		htmlpkg.EscapeString(text) + `</span>`
+}
+
+// crossRefTitle explains a cross-spec reference whose section is missing from
+// the database's version of the target spec.
+func crossRefTitle(spec, section, version string) string {
+	label := spec
+	if version != "" {
+		label += " v" + version
+	}
+	return "Section " + section + " does not exist in " + label +
+		" — the text may reference a different version of " + spec + "; linked to the specification instead"
+}
+
+// bareRefTitle explains a bare same-document reference whose section does not
+// exist in the current document.
+func bareRefTitle(section, label string) string {
+	if label == "" {
+		label = "this document"
+	}
+	return "Section " + section + " does not exist in " + label +
+		" — possibly a stale or incorrect reference in the source text"
+}
+
+// LinkifyRefsOpts configures LinkifyRefs.
+type LinkifyRefsOpts struct {
+	// BracketMap maps bracket numbers (e.g. "19") to spec IDs (e.g.
+	// "TS 33.203"); nil skips bracket references.
+	BracketMap map[string]string
+	// URLFor returns the URL for (targetSpec, targetSection). An empty
+	// targetSpec means the current spec (bare references); an empty
+	// targetSection means the spec itself.
+	URLFor func(spec, section string) string
+	// SectionExists reports whether the current document has a section.
+	// nil disables bare same-document references ("clause 4.2" with no spec
+	// designator) entirely. A bare reference whose section exists links via
+	// URLFor("", section); one whose section is missing is marked with
+	// unresolvedSpan instead — a bare reference is same-document by
+	// construction, so a missing target is an error in the source text.
+	SectionExists func(section string) bool
+	// CurrentLabel names the current document in unresolved bare-reference
+	// tooltips (e.g. "TS 23.501 v20.2.0"). Empty means "this document".
+	CurrentLabel string
+	// TargetInfo reports whether targetSpec contains targetSection, and
+	// targetSpec's display version. ok=false means the spec cannot be
+	// validated (not in the database) and the reference links as-is.
+	// nil disables cross-spec validation. A reference whose target section is
+	// missing links to the spec's top page with an explanatory tooltip: the
+	// database holds one version per spec, so section numbers in the citing
+	// text can lag or lead the stored version of the target spec.
+	TargetInfo func(spec, section string) (exists bool, version string, ok bool)
+}
+
+// resolveTarget returns the URL and tooltip title for a reference to
+// (spec, section), degrading to the spec's top page when the section does not
+// exist in the database's version of the target spec. RFC references are
+// never validated.
+func (o *LinkifyRefsOpts) resolveTarget(spec, section string) (url, title string) {
+	url = o.URLFor(spec, section)
+	if o.TargetInfo == nil || section == "" || strings.HasPrefix(spec, "RFC ") {
+		return url, ""
+	}
+	exists, version, ok := o.TargetInfo(spec, section)
+	if !ok || exists {
+		return url, ""
+	}
+	return o.URLFor(spec, ""), crossRefTitle(spec, section, version)
+}
+
+// LinkifyRefs replaces spec/RFC/bracket references in Markdown content with
+// Markdown links (HTML anchors inside raw HTML table blocks, where goldmark
+// would not process Markdown link syntax).
 // References inside existing Markdown links, fenced code blocks and inline
 // code spans are not replaced: goldmark renders code verbatim, so a rewritten
 // reference there would show up as literal link syntax.
-func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec, section string) string, sectionExists func(section string) bool) string {
+func LinkifyRefs(content string, opts LinkifyRefsOpts) string {
+	bracketMap, urlFor, sectionExists := opts.BracketMap, opts.URLFor, opts.SectionExists
 	// Build list of excluded regions: existing Markdown links, fenced code
 	// blocks and inline code spans.
 	var excluded []region
@@ -197,7 +276,7 @@ func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec,
 		i = end
 	}
 
-	linkFor := func(start, end int) func(text, url string) string {
+	linkFor := func(start, end int) func(text, url, title string) string {
 		for _, r := range htmlRegions {
 			if start >= r.start && end <= r.end {
 				return htmlLink
@@ -217,6 +296,7 @@ func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec,
 		re      *regexp.Regexp
 		extract multiRefExtractor
 	}{
+		{tsCoordPrefixRefRE, tsCoordPrefixMRExtractor},
 		{tsMultiPrefixRefRE, tsMultiPrefixMRExtractor},
 		{tsMultiRefRE, tsMultiMRExtractor},
 	}
@@ -225,7 +305,7 @@ func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec,
 			if isExcluded(m[0], m[1]) {
 				continue
 			}
-			text, ok := pat.extract(m, content, urlFor, linkFor(m[0], m[1]))
+			text, ok := pat.extract(m, content, &opts, linkFor(m[0], m[1]))
 			if !ok {
 				continue
 			}
@@ -262,12 +342,12 @@ func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec,
 			if isExcluded(m[0], m[1]) {
 				continue
 			}
-			u := urlFor(targetSpec, targetSection)
+			u, title := opts.resolveTarget(targetSpec, targetSection)
 			matchText := content[m[0]:m[1]]
 			candidates = append(candidates, candidate{
 				start: m[0],
 				end:   m[1],
-				text:  linkFor(m[0], m[1])(matchText, u),
+				text:  linkFor(m[0], m[1])(matchText, u, title),
 			})
 		}
 	}
@@ -307,17 +387,12 @@ func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec,
 				continue
 			}
 			mkLink := linkFor(m[0], m[1])
-			linkedAny := false
 			linked := secNumListRE.ReplaceAllStringFunc(content[m[2]:m[3]], func(sec string) string {
 				if !sectionExists(sec) {
-					return sec
+					return unresolvedSpan(sec, bareRefTitle(sec, opts.CurrentLabel))
 				}
-				linkedAny = true
-				return mkLink(sec, urlFor("", sec))
+				return mkLink(sec, urlFor("", sec), "")
 			})
-			if !linkedAny {
-				continue
-			}
 			candidates = append(candidates, candidate{
 				start: m[0],
 				end:   m[1],
@@ -329,14 +404,20 @@ func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec,
 				continue
 			}
 			sec := content[m[2]:m[3]]
-			if !sectionExists(sec) {
-				continue
-			}
 			matchText := content[m[0]:m[1]]
+			text := ""
+			if sectionExists(sec) {
+				text = linkFor(m[0], m[1])(matchText, urlFor("", sec), "")
+			} else {
+				// A bare reference is same-document by construction, so a
+				// missing section is worth surfacing: mark it instead of
+				// leaving silently ambiguous plain text.
+				text = unresolvedSpan(matchText, bareRefTitle(sec, opts.CurrentLabel))
+			}
 			candidates = append(candidates, candidate{
 				start: m[0],
 				end:   m[1],
-				text:  linkFor(m[0], m[1])(matchText, urlFor("", sec)),
+				text:  text,
 			})
 		}
 	}

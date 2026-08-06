@@ -9,14 +9,16 @@ import (
 
 // allowedTagRE matches an HTML tag the rendering pipeline legitimately
 // produces before goldmark runs: the DOCX converter's table markup and list
-// tags inside cells (converter/docx/table.go), <sub>/<sup> in body text, and
-// the image:// rewrite's <img>. db.LinkifyRefs emits Markdown links, not raw
-// anchors, so <a> is document text here. Any other angle bracket in body
-// text is document text too — 3GPP prose is full of placeholders like
-// <SUPI> — and must be escaped so it stays visible instead of being parsed
-// as markup.
+// tags inside cells (converter/docx/table.go), <sub>/<sup> in body text, the
+// image:// rewrite's <img>, and db.LinkifyRefs's unresolved-reference
+// markers — only the exact <span class="ref-unresolved" ...> form, so a
+// literal <span> in document prose still escapes to visible text.
+// db.LinkifyRefs emits Markdown links, not raw anchors, so <a> is document
+// text here. Any other angle bracket in body text is document text too —
+// 3GPP prose is full of placeholders like <SUPI> — and must be escaped so it
+// stays visible instead of being parsed as markup.
 var allowedTagRE = regexp.MustCompile(
-	`(?i)^</?(?:img|li|ol|p|sub|sup|table|tbody|td|th|thead|tr|ul)(?:\s[^<>]*)?/?>`)
+	`(?i)^(?:</?(?:img|li|ol|p|sub|sup|table|tbody|td|th|thead|tr|ul)(?:\s[^<>]*)?/?>|<span class="ref-unresolved"[^<>]*>|</span>)`)
 
 // escapeUnknownHTML escapes every '<' in text that does not start a tag the
 // pipeline itself emits, so third-party document content cannot inject raw
@@ -69,6 +71,9 @@ func newSanitizePolicy() *bluemonday.Policy {
 	// KaTeX math targets.
 	p.AllowElements("strong", "em", "del", "sub", "sup", "span", "pre", "code")
 	p.AllowAttrs("class").Matching(regexp.MustCompile(`^[a-zA-Z0-9 _-]+$`)).OnElements("span", "pre", "code")
+	// Unresolved-reference markers (db.LinkifyRefs) carry their explanation
+	// in a title tooltip.
+	p.AllowAttrs("title").OnElements("span")
 	// Links: the pipeline only produces site-relative anchors
 	// (db.LinkifyRefs spec links) and https://www.rfc-editor.org RFC links.
 	// The pattern rejects protocol-relative //host and every other absolute
