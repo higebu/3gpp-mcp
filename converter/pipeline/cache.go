@@ -80,7 +80,13 @@ func LoadCache(key string, ttl time.Duration) ([]string, error) {
 	}
 	defer f.Close()
 
-	var entries []string
+	// entries starts non-nil so a fresh cache file that legitimately holds
+	// zero entries (e.g. a filter with no matching specs) still returns a
+	// non-nil, empty slice. Callers distinguish a hit from a miss by nil-ness
+	// (see speclist.go), so a nil result here for a present, unexpired file
+	// would read as a miss and force a network re-fetch every call even
+	// within the TTL.
+	entries := []string{}
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
