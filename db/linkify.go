@@ -132,23 +132,26 @@ func regionEnd(regions []region, pos int) int {
 	return pos + 1
 }
 
-// mdLink renders a Markdown link. A non-empty title becomes the link's title
-// attribute (tooltip).
-func mdLink(text, url, title string) string {
-	if title != "" {
-		return "[" + text + "](" + url + ` "` + strings.ReplaceAll(title, `"`, "'") + `")`
-	}
+// mdLink renders a Markdown link.
+func mdLink(text, url string) string {
 	return "[" + text + "](" + url + ")"
 }
 
 // htmlLink renders an HTML anchor. Used inside raw HTML blocks (e.g. tables)
 // where goldmark would not process Markdown link syntax.
-func htmlLink(text, url, title string) string {
-	attr := ""
-	if title != "" {
-		attr = ` title="` + htmlpkg.EscapeString(title) + `"`
-	}
-	return `<a href="` + htmlpkg.EscapeString(url) + `"` + attr + `>` + htmlpkg.EscapeString(text) + `</a>`
+func htmlLink(text, url string) string {
+	return `<a href="` + htmlpkg.EscapeString(url) + `">` + htmlpkg.EscapeString(text) + `</a>`
+}
+
+// unresolvedLink renders an anchor for a reference whose target section does
+// not exist in the stored version of the target spec: the URL degrades to the
+// spec's top page and the title explains why. Emitted as raw HTML in both
+// body text and tables — the class carries the visual marker, which Markdown
+// link syntax cannot express — and allowlisted by the web sanitizer in
+// exactly this form.
+func unresolvedLink(text, url, title string) string {
+	return `<a class="ref-unresolved" href="` + htmlpkg.EscapeString(url) +
+		`" title="` + htmlpkg.EscapeString(title) + `">` + htmlpkg.EscapeString(text) + `</a>`
 }
 
 // unresolvedSpan marks reference text whose target section does not exist,
@@ -276,7 +279,7 @@ func LinkifyRefs(content string, opts LinkifyRefsOpts) string {
 		i = end
 	}
 
-	linkFor := func(start, end int) func(text, url, title string) string {
+	linkFor := func(start, end int) func(text, url string) string {
 		for _, r := range htmlRegions {
 			if start >= r.start && end <= r.end {
 				return htmlLink
@@ -287,9 +290,15 @@ func LinkifyRefs(content string, opts LinkifyRefsOpts) string {
 
 	type candidate struct {
 		start, end int
-		text       string
+		// idx is the collection order, which encodes pattern precedence:
+		// it breaks ties between candidates covering the exact same range.
+		idx  int
+		text string
 	}
 	var candidates []candidate
+	addCandidate := func(start, end int, text string) {
+		candidates = append(candidates, candidate{start: start, end: end, idx: len(candidates), text: text})
+	}
 
 	// Multi-section patterns (produce multiple links per match, checked first).
 	multiPatterns := []struct {
@@ -309,11 +318,7 @@ func LinkifyRefs(content string, opts LinkifyRefsOpts) string {
 			if !ok {
 				continue
 			}
-			candidates = append(candidates, candidate{
-				start: m[0],
-				end:   m[1],
-				text:  text,
-			})
+			addCandidate(m[0], m[1], text)
 		}
 	}
 
@@ -344,11 +349,13 @@ func LinkifyRefs(content string, opts LinkifyRefsOpts) string {
 			}
 			u, title := opts.resolveTarget(targetSpec, targetSection)
 			matchText := content[m[0]:m[1]]
-			candidates = append(candidates, candidate{
-				start: m[0],
-				end:   m[1],
-				text:  linkFor(m[0], m[1])(matchText, u, title),
-			})
+			text := ""
+			if title != "" {
+				text = unresolvedLink(matchText, u, title)
+			} else {
+				text = linkFor(m[0], m[1])(matchText, u)
+			}
+			addCandidate(m[0], m[1], text)
 		}
 	}
 
@@ -391,13 +398,9 @@ func LinkifyRefs(content string, opts LinkifyRefsOpts) string {
 				if !sectionExists(sec) {
 					return unresolvedSpan(sec, bareRefTitle(sec, opts.CurrentLabel))
 				}
-				return mkLink(sec, urlFor("", sec), "")
+				return mkLink(sec, urlFor("", sec))
 			})
-			candidates = append(candidates, candidate{
-				start: m[0],
-				end:   m[1],
-				text:  content[m[0]:m[2]] + linked,
-			})
+			addCandidate(m[0], m[1], content[m[0]:m[2]]+linked)
 		}
 		for _, m := range bareRefRE.FindAllStringSubmatchIndex(content, -1) {
 			if isExcluded(m[0], m[1]) || overlapsAny(m[0], m[1]) || qualifiedElsewhere(m[0], m[1]) {
@@ -407,18 +410,14 @@ func LinkifyRefs(content string, opts LinkifyRefsOpts) string {
 			matchText := content[m[0]:m[1]]
 			text := ""
 			if sectionExists(sec) {
-				text = linkFor(m[0], m[1])(matchText, urlFor("", sec), "")
+				text = linkFor(m[0], m[1])(matchText, urlFor("", sec))
 			} else {
 				// A bare reference is same-document by construction, so a
 				// missing section is worth surfacing: mark it instead of
 				// leaving silently ambiguous plain text.
 				text = unresolvedSpan(matchText, bareRefTitle(sec, opts.CurrentLabel))
 			}
-			candidates = append(candidates, candidate{
-				start: m[0],
-				end:   m[1],
-				text:  text,
-			})
+			addCandidate(m[0], m[1], text)
 		}
 	}
 
@@ -426,12 +425,16 @@ func LinkifyRefs(content string, opts LinkifyRefsOpts) string {
 		return content
 	}
 
-	// Sort by start position; on a tie the longer match wins deterministically.
+	// Sort by start position; on a tie the longer match wins, then the
+	// earlier-collected candidate (pattern precedence) — fully deterministic.
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].start != candidates[j].start {
 			return candidates[i].start < candidates[j].start
 		}
-		return candidates[i].end > candidates[j].end
+		if candidates[i].end != candidates[j].end {
+			return candidates[i].end > candidates[j].end
+		}
+		return candidates[i].idx < candidates[j].idx
 	})
 
 	// Remove overlapping candidates (keep first/earliest).

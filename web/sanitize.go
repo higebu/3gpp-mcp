@@ -9,16 +9,25 @@ import (
 
 // allowedTagRE matches an HTML tag the rendering pipeline legitimately
 // produces before goldmark runs: the DOCX converter's table markup and list
-// tags inside cells (converter/docx/table.go), <sub>/<sup> in body text, the
-// image:// rewrite's <img>, and db.LinkifyRefs's unresolved-reference
-// markers — only the exact <span class="ref-unresolved" ...> form, so a
-// literal <span> in document prose still escapes to visible text.
-// db.LinkifyRefs emits Markdown links, not raw anchors, so <a> is document
-// text here. Any other angle bracket in body text is document text too —
-// 3GPP prose is full of placeholders like <SUPI> — and must be escaped so it
-// stays visible instead of being parsed as markup.
+// tags inside cells (converter/docx/table.go), <sub>/<sup> in body text, and
+// the image:// rewrite's <img>. db.LinkifyRefs emits Markdown links in body
+// text; its raw markup — table anchors and unresolved-reference markers —
+// is handled separately (markerOpenRE/markerCloseRE and the table-region
+// skip in renderMarkdown). Any other angle bracket in body text is document
+// text — 3GPP prose is full of placeholders like <SUPI> — and must be
+// escaped so it stays visible instead of being parsed as markup.
 var allowedTagRE = regexp.MustCompile(
-	`(?i)^(?:</?(?:img|li|ol|p|sub|sup|table|tbody|td|th|thead|tr|ul)(?:\s[^<>]*)?/?>|<span class="ref-unresolved"[^<>]*>|</span>)`)
+	`(?i)^</?(?:img|li|ol|p|sub|sup|table|tbody|td|th|thead|tr|ul)(?:\s[^<>]*)?/?>`)
+
+// markerOpenRE and markerCloseRE match db.LinkifyRefs's unresolved-reference
+// markers in body text — only the exact class="ref-unresolved" form, so a
+// literal <span> or <a> in document prose still escapes to visible text.
+// Closers are only admitted while a marker is open (see escapeUnknownHTML),
+// so a stray literal </span> in prose stays visible too.
+var (
+	markerOpenRE  = regexp.MustCompile(`^<(span|a) class="ref-unresolved"[^<>]*>`)
+	markerCloseRE = regexp.MustCompile(`^</(span|a)>`)
+)
 
 // escapeUnknownHTML escapes every '<' in text that does not start a tag the
 // pipeline itself emits, so third-party document content cannot inject raw
@@ -27,6 +36,7 @@ var allowedTagRE = regexp.MustCompile(
 // sanitizeHTML.
 func escapeUnknownHTML(text string) string {
 	var b strings.Builder
+	open := map[string]int{}
 	for {
 		i := strings.IndexByte(text, '<')
 		if i < 0 {
@@ -38,6 +48,18 @@ func escapeUnknownHTML(text string) string {
 		}
 		b.WriteString(text[:i])
 		text = text[i:]
+		if m := markerOpenRE.FindStringSubmatch(text); m != nil {
+			open[m[1]]++
+			b.WriteString(m[0])
+			text = text[len(m[0]):]
+			continue
+		}
+		if m := markerCloseRE.FindStringSubmatch(text); m != nil && open[m[1]] > 0 {
+			open[m[1]]--
+			b.WriteString(m[0])
+			text = text[len(m[0]):]
+			continue
+		}
 		if loc := allowedTagRE.FindStringIndex(text); loc != nil {
 			b.WriteString(text[:loc[1]])
 			text = text[loc[1]:]
@@ -83,6 +105,8 @@ func newSanitizePolicy() *bluemonday.Policy {
 		`^(?:#.*|/(?:[^/\\].*)?|https://www\.rfc-editor\.org/.*)$`)).OnElements("a")
 	p.AllowAttrs("rel").Matching(regexp.MustCompile(`^[a-z ]+$`)).OnElements("a")
 	p.AllowAttrs("title").OnElements("a")
+	// Unresolved-reference anchors (db.LinkifyRefs) carry the marker class.
+	p.AllowAttrs("class").Matching(regexp.MustCompile(`^ref-unresolved$`)).OnElements("a")
 	// Images: only the site-relative URLs the image:// rewrite produces
 	// (reject protocol-relative //host and any absolute URL).
 	p.AllowAttrs("src").Matching(regexp.MustCompile(`^/[^/\\]`)).OnElements("img")

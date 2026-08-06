@@ -1681,14 +1681,10 @@ body:has(dialog.lightbox[open]) {
 /* === Unresolved references === */
 /* Reference text whose target section does not exist in the stored version:
    bare same-document refs get a marker span, cross-spec refs keep a link to
-   the spec top and carry an explanatory title tooltip. */
+   the spec top. Both carry an explanatory title tooltip and share this
+   class. */
 .ref-unresolved {
     text-decoration: underline dashed var(--danger);
     text-underline-offset: 3px;
     cursor: help;
-}
-
-.section-body a[title] {
-    text-decoration: underline dashed;
-    text-underline-offset: 3px;
 }

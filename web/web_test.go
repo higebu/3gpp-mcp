@@ -2104,3 +2104,27 @@ func TestRenderMarkdown_UnresolvedRefs(t *testing.T) {
 		}
 	})
 }
+
+// TestRenderMarkdown_TableAnchors pins the fix for table-cell reference
+// links: escapeUnknownHTML must not escape db.LinkifyRefs's raw anchors
+// inside <table> regions (they previously rendered as literal
+// "&lt;a href=...&gt;" text).
+func TestRenderMarkdown_TableAnchors(t *testing.T) {
+	got := renderMarkdown("<table><tr><td>TS 23.501 clause 5.1</td></tr></table>", renderOpts{specID: "TS 23.502"})
+	want := `<a href="/specs/TS%2023.501/sections/5.1">TS 23.501 clause 5.1</a>`
+	if !strings.Contains(got, want) {
+		t.Errorf("expected %s, got:\n%s", want, got)
+	}
+	if strings.Contains(got, "&lt;a href") {
+		t.Errorf("table anchor must not be escaped to text, got:\n%s", got)
+	}
+}
+
+// A literal closing </span> in prose, with no marker open, must stay
+// visible text rather than vanishing as a stray closing tag.
+func TestRenderMarkdown_LiteralSpanCloserEscaped(t *testing.T) {
+	got := renderMarkdown("a literal </span> closer", renderOpts{specID: "TS 23.501"})
+	if !strings.Contains(got, "&lt;/span&gt;") {
+		t.Errorf("stray </span> in prose must stay visible text, got:\n%s", got)
+	}
+}

@@ -159,7 +159,7 @@ func renderMarkdown(content string, o renderOpts) string {
 			continue
 		}
 		text := protectMath(seg.text, token, &mathSpans)
-		sb.WriteString(escapeUnknownHTML(text))
+		sb.WriteString(escapeOutsideTables(text))
 	}
 	content = sb.String()
 
@@ -172,6 +172,37 @@ func renderMarkdown(content string, o renderOpts) string {
 		out = strings.Replace(out, mathPlaceholder(token, i), span, 1)
 	}
 	return sanitizeHTML(out)
+}
+
+// escapeOutsideTables applies escapeUnknownHTML to text outside
+// <table>...</table> regions and passes table regions through verbatim.
+// Table markup is pipeline-generated — the DOCX converter's tags with cell
+// text already entity-escaped at build time, plus db.LinkifyRefs's raw
+// anchors — so escaping there would turn the anchors into visible text
+// (and did, before this function existed). sanitizeHTML still attribute-
+// sanitizes everything afterwards.
+func escapeOutsideTables(text string) string {
+	var b strings.Builder
+	for {
+		open := strings.Index(text, "<table")
+		if open < 0 {
+			if b.Len() == 0 {
+				return escapeUnknownHTML(text)
+			}
+			b.WriteString(escapeUnknownHTML(text))
+			return b.String()
+		}
+		b.WriteString(escapeUnknownHTML(text[:open]))
+		rest := text[open:]
+		end := strings.Index(rest, "</table>")
+		if end < 0 {
+			b.WriteString(rest)
+			return b.String()
+		}
+		end += len("</table>")
+		b.WriteString(rest[:end])
+		text = rest[end:]
+	}
 }
 
 // randRead is cryptorand.Read, injectable so tests can exercise the

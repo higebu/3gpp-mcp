@@ -190,7 +190,7 @@ func TestLinkifyRefs_MultiSection(t *testing.T) {
 		{
 			name:  "with 3GPP prefix",
 			input: "clauses 8.2 and 16.11 of 3GPP TS 23.402",
-			want:  "clauses [8.2](/specs/TS 23.402/sections/8.2) and [16.11](/specs/TS 23.402/sections/16.11) of [TS 23.402](/specs/TS 23.402)",
+			want:  "clauses [8.2](/specs/TS 23.402/sections/8.2) and [16.11](/specs/TS 23.402/sections/16.11) of 3GPP [TS 23.402](/specs/TS 23.402)",
 		},
 		{
 			name:  "spec-first multi-section",
@@ -543,9 +543,9 @@ func TestLinkifyRefs_BareRefs(t *testing.T) {
 			want:  "See [TS 23.402](/specs/TS 23.402): Clause 5.1.",
 		},
 		{
-			name:  "mixed singular plural list of TS not linked bare",
+			name:  "mixed singular plural list links every element to the named spec",
 			input: "See clause 4.2 and clauses 5.1, 5.15.2 of TS 23.402.",
-			want:  "See clause 4.2 and clauses 5.1, 5.15.2 of [TS 23.402](/specs/TS 23.402).",
+			want:  "See clause [4.2](/specs/TS 23.402/sections/4.2) and clauses [5.1](/specs/TS 23.402/sections/5.1), [5.15.2](/specs/TS 23.402/sections/5.15.2) of [TS 23.402](/specs/TS 23.402).",
 		},
 		{
 			name:  "oxford comma list of TS not linked bare",
@@ -687,12 +687,12 @@ func TestLinkifyRefs_TargetValidation(t *testing.T) {
 		{
 			name:  "missing target links to spec top with tooltip",
 			input: "See TS 23.502 clause 4.12.2a.",
-			want:  `See [TS 23.502 clause 4.12.2a](/specs/TS 23.502 "` + missing502 + `").`,
+			want:  `See <a class="ref-unresolved" href="/specs/TS 23.502" title="` + missing502 + `">TS 23.502 clause 4.12.2a</a>.`,
 		},
 		{
 			name:  "missing target in prefix form",
 			input: "as described in clause 4.12.2a of TS 23.502.",
-			want:  `as described in [clause 4.12.2a of TS 23.502](/specs/TS 23.502 "` + missing502 + `").`,
+			want:  `as described in <a class="ref-unresolved" href="/specs/TS 23.502" title="` + missing502 + `">clause 4.12.2a of TS 23.502</a>.`,
 		},
 		{
 			name:  "unvalidatable spec links as-is",
@@ -703,18 +703,18 @@ func TestLinkifyRefs_TargetValidation(t *testing.T) {
 			name:  "multi list validates each element",
 			input: "TS 23.502 clauses 4.12.2 and 9.9",
 			want: "[TS 23.502](/specs/TS 23.502) clauses [4.12.2](/specs/TS 23.502/sections/4.12.2) and " +
-				`[9.9](/specs/TS 23.502 "Section 9.9 does not exist in TS 23.502 v20.2.0 — the text may reference a different version of TS 23.502; linked to the specification instead")`,
+				`<a class="ref-unresolved" href="/specs/TS 23.502" title="Section 9.9 does not exist in TS 23.502 v20.2.0 — the text may reference a different version of TS 23.502; linked to the specification instead">9.9</a>`,
 		},
 		{
 			name:  "coordinated list validates each element",
 			input: "in clause 4.12.2 and in clause 4.12.2a of TS 23.502.",
 			want: "in clause [4.12.2](/specs/TS 23.502/sections/4.12.2) and in " +
-				`clause [4.12.2a](/specs/TS 23.502 "` + missing502 + `") of [TS 23.502](/specs/TS 23.502).`,
+				"clause " + `<a class="ref-unresolved" href="/specs/TS 23.502" title="` + missing502 + `">4.12.2a</a>` + " of [TS 23.502](/specs/TS 23.502).",
 		},
 		{
 			name:  "missing target in table gets anchor title",
 			input: "<table><tr><td>TS 23.502 clause 4.12.2a</td></tr></table>",
-			want:  `<table><tr><td><a href="/specs/TS 23.502" title="` + missing502 + `">TS 23.502 clause 4.12.2a</a></td></tr></table>`,
+			want:  `<table><tr><td><a class="ref-unresolved" href="/specs/TS 23.502" title="` + missing502 + `">TS 23.502 clause 4.12.2a</a></td></tr></table>`,
 		},
 		{
 			name:  "RFC references are never validated",
@@ -735,7 +735,7 @@ func TestLinkifyRefs_TargetValidation(t *testing.T) {
 func TestLinkifyRefs_TargetValidationBracket(t *testing.T) {
 	bracketMap := map[string]string{"19": "TS 33.203"}
 	input := "See [19] clause 7 for details."
-	want := `See [[19] clause 7](/specs/TS 33.203 "Section 7 does not exist in TS 33.203 v18.0.0 — the text may reference a different version of TS 33.203; linked to the specification instead") for details.`
+	want := `See <a class="ref-unresolved" href="/specs/TS 33.203" title="Section 7 does not exist in TS 33.203 v18.0.0 — the text may reference a different version of TS 33.203; linked to the specification instead">[19] clause 7</a> for details.`
 	got := LinkifyRefs(input, LinkifyRefsOpts{BracketMap: bracketMap, URLFor: urlFor, TargetInfo: stubTargetInfo})
 	if got != want {
 		t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", input, got, want)
@@ -762,6 +762,18 @@ func TestLinkifyRefs_BareUnresolvedInTable(t *testing.T) {
 	input := "<table><tr><td>see clause 9.9</td></tr></table>"
 	want := `<table><tr><td>see <span class="ref-unresolved" title="Section 9.9 does not exist in this document — possibly a stale or incorrect reference in the source text">clause 9.9</span></td></tr></table>`
 	got := LinkifyRefs(input, LinkifyRefsOpts{URLFor: bareURLFor, SectionExists: bareSectionSet})
+	if got != want {
+		t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", input, got, want)
+	}
+}
+
+// Coordinated lists may use plural keywords per element; the element
+// extractor must share the pattern's keyword classes.
+func TestLinkifyRefs_CoordPluralKeyword(t *testing.T) {
+	input := "See clause 8.2 and in clauses 8.3 and 8.4 of TS 23.402."
+	want := "See clause [8.2](/specs/TS 23.402/sections/8.2) and in clauses [8.3](/specs/TS 23.402/sections/8.3) and " +
+		"[8.4](/specs/TS 23.402/sections/8.4) of [TS 23.402](/specs/TS 23.402)."
+	got := LinkifyRefs(input, LinkifyRefsOpts{URLFor: urlFor})
 	if got != want {
 		t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", input, got, want)
 	}
