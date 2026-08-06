@@ -491,6 +491,57 @@ func TestDownloadSpecs_ConvertDocSameBasenameAcrossSpecsStaysDocOnly(t *testing.
 	}
 }
 
+// TestDownloadSpecs_ConvertDocPublishFailureStaysDocOnly verifies that a spec
+// is never reported OK when its converted .docx fails to publish into
+// outputDir (3rd Greptile review finding). Before this fix, promotion was
+// decided from mere existence in the scratch conversion directory: if the
+// subsequent os.Rename into outputDir then failed, the spec had already been
+// counted OK, and the scratch-dir cleanup that follows would delete the only
+// copy of the file that had ever existed -- leaving an "OK" spec with no
+// .docx anywhere. This plants a directory at the exact path the converted
+// .docx would publish to, which makes os.Rename fail deterministically
+// (renaming a regular file onto a directory always errors), and checks the
+// spec stays DOC_ONLY with the scratch file gone rather than orphaned.
+func TestDownloadSpecs_ConvertDocPublishFailureStaysDocOnly(t *testing.T) {
+	writeFakeLibreOffice(t)
+
+	zip := makeZipWithFiles(t, map[string][]byte{
+		"blocked.doc": []byte("h1"),
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zip)
+	}))
+	defer ts.Close()
+
+	specs := []*SpecVersion{
+		{SpecID: "TS 88.008", URL: ts.URL + "/h.zip"},
+	}
+
+	outputDir := t.TempDir()
+	// A directory at the expected publish path makes the rename fail: you
+	// cannot rename a regular file onto an existing directory.
+	if err := os.MkdirAll(filepath.Join(outputDir, "blocked.docx"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := DownloadSpecs(context.Background(), &http.Client{}, specs, outputDir, 2, true, 10*time.Second)
+
+	if stats["OK"] != 0 {
+		t.Errorf("OK = %d, want 0 (the converted .docx never published into outputDir)", stats["OK"])
+	}
+	if stats["DOC_ONLY"] != 1 {
+		t.Errorf("DOC_ONLY = %d, want 1", stats["DOC_ONLY"])
+	}
+
+	// The blocking directory must still be the untouched directory it was:
+	// the rename must not have partially clobbered it.
+	info, err := os.Stat(filepath.Join(outputDir, "blocked.docx"))
+	if err != nil || !info.IsDir() {
+		t.Errorf("blocked.docx = %v (isDir=%v), want the original directory intact", err, info != nil && info.IsDir())
+	}
+}
+
 // TestConvertDocFiles_NoDocFiles verifies ConvertDocFiles returns (0, nil)
 // when the directory contains no .doc files (happy but trivial path).
 func TestConvertDocFiles_NoDocFiles(t *testing.T) {

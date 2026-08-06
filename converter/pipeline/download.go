@@ -363,11 +363,38 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 					log.Printf("ConvertDocFiles error: %v", err)
 				}
 				log.Printf("Converted %d files", n)
+
+				// Publish every converted file into outputDir before
+				// deciding any promotion, and track which basenames
+				// actually made it there. Deciding OK from mere existence
+				// in convDir (as an earlier version of this fix did) could
+				// report a spec OK and then have the evidence vanish: if
+				// the rename below failed for that file -- outputDir
+				// already holds a same-named directory, a permissions
+				// problem, anything -- the .docx never reached outputDir,
+				// yet the scratch-dir cleanup at the end of this block
+				// would delete the only copy that had ever existed,
+				// leaving the reported OK status orphaned from any real
+				// file. Only a file that is confirmed moved counts as
+				// evidence a spec's conversion succeeded.
+				published := make(map[string]bool)
+				if convEntries, err := os.ReadDir(convDir); err == nil {
+					for _, e := range convEntries {
+						src := filepath.Join(convDir, e.Name())
+						dst := filepath.Join(outputDir, e.Name())
+						if err := os.Rename(src, dst); err != nil {
+							log.Printf("  publish converted %s: %v", e.Name(), err)
+							continue
+						}
+						published[e.Name()] = true
+					}
+				}
+
 				// A spec is promoted from DOC_ONLY to OK only when one of
-				// its own .doc files produced a .docx in convDir this run
-				// (partial success still counts, matching the .docx branch
-				// above). The old code used
-				// min(convertedFileCount, docOnlySpecCount), which
+				// its own .doc files was both converted and successfully
+				// published into outputDir this run (partial success still
+				// counts, matching the .docx branch above). The old code
+				// used min(convertedFileCount, docOnlySpecCount), which
 				// conflates a file count with a spec count: a spec with
 				// several .doc files could absorb the whole converted-file
 				// budget and drag an unrelated, fully-failed spec's status
@@ -377,23 +404,16 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 						if unattributable[docPath] {
 							continue
 						}
-						if _, statErr := os.Stat(convertedDocxPath(docPath, convDir)); statErr == nil {
-							stats["DOC_ONLY"]--
-							stats["OK"]++
-							break
+						base := filepath.Base(convertedDocxPath(docPath, ""))
+						if !published[base] {
+							continue
 						}
+						stats["DOC_ONLY"]--
+						stats["OK"]++
+						break
 					}
 				}
 
-				if convEntries, err := os.ReadDir(convDir); err == nil {
-					for _, e := range convEntries {
-						src := filepath.Join(convDir, e.Name())
-						dst := filepath.Join(outputDir, e.Name())
-						if err := os.Rename(src, dst); err != nil {
-							log.Printf("  move converted %s: %v", e.Name(), err)
-						}
-					}
-				}
 				if err := os.RemoveAll(convDir); err != nil {
 					log.Printf("  cleanup doc conversion scratch dir: %v", err)
 				}
