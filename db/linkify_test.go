@@ -508,6 +508,31 @@ func TestLinkifyRefs_BareRefs(t *testing.T) {
 			want:  "as specified in [clause 4.2](/specs/TS 23.501/sections/4.2) of the present document.",
 		},
 		{
+			name:  "of present specification links",
+			input: "as specified in clause 4.2 of the present specification.",
+			want:  "as specified in [clause 4.2](/specs/TS 23.501/sections/4.2) of the present specification.",
+		},
+		{
+			name:  "coordinated list of TS not linked bare",
+			input: "See clause 4.2 and clause 5.1 of TS 23.402.",
+			want:  "See clause 4.2 and [clause 5.1 of TS 23.402](/specs/TS 23.402/sections/5.1).",
+		},
+		{
+			name:  "coordinated bare numbers of TS keep qualified links",
+			input: "See clause 4.2 and 5.1 of TS 23.402.",
+			want:  "See clause [4.2](/specs/TS 23.402/sections/4.2) and [5.1](/specs/TS 23.402/sections/5.1) of [TS 23.402](/specs/TS 23.402).",
+		},
+		{
+			name:  "coordinated list of present document links all",
+			input: "See clause 4.2 and clause 5.1 of the present document.",
+			want:  "See [clause 4.2](/specs/TS 23.501/sections/4.2) and [clause 5.1](/specs/TS 23.501/sections/5.1) of the present document.",
+		},
+		{
+			name:  "coordinated list without qualifier links all",
+			input: "See clause 4.2 and clause 5.1 for details.",
+			want:  "See [clause 4.2](/specs/TS 23.501/sections/4.2) and [clause 5.1](/specs/TS 23.501/sections/5.1) for details.",
+		},
+		{
 			name:  "in this specification links",
 			input: "as specified in clause 4.2 in this specification.",
 			want:  "as specified in [clause 4.2](/specs/TS 23.501/sections/4.2) in this specification.",

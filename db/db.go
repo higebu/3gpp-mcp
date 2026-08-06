@@ -1250,6 +1250,11 @@ const secNum = `([A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 // secNumRaw is secNum without capture group, used for multi-section list matching.
 const secNumRaw = `(?:[A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 
+// bareRefChain matches zero or more coordinated references (", clause 4.3",
+// " and 4.4", " or Annex B") so bareTrailingQualRE and barePresentDocRE can
+// see through a list to the "of"/"in" that qualifies its every element.
+const bareRefChain = `(?:` + sp + `*(?:,|and|or)` + sp + `*(?:(?:[Cc]lause|[Ss]ection|[Ss]ubclause|[Aa]nnex)` + sp + `+)?` + secNumRaw + `)*`
+
 var (
 	// "TS 23.501 clause 5.1" or "3GPP TS 33.203 Annex H"
 	tsRefRE = regexp.MustCompile(`(?:3GPP` + sp + `+)?(TS|TR)` + sp + `+(\d+\.\d+)(?:` + sp + `*[,;]?` + sp + `*(?:clause|section|subclause|[Aa]nnex)` + sp + `+` + secNum + `)?`)
@@ -1297,14 +1302,16 @@ var (
 	// bareTrailingQualRE matches an "of"/"in" continuation after a bare
 	// reference, which usually names another document ("clause 5.1 of
 	// TS 23.402", "clause 4.2 of [26]", "clause 4 of ITU-T Recommendation
-	// X.509"). RE2 has no lookahead, so it is applied to the text after a
+	// X.509"). The chain prefix looks through coordinated references so the
+	// first element of "clause 4.2 and clause 4.3 of TS 23.402" is rejected
+	// too. RE2 has no lookahead, so these are applied to the text after a
 	// bare match instead of being part of bareRefRE.
-	bareTrailingQualRE = regexp.MustCompile(`^` + sp + `+(?:of|in)` + sp + `+`)
+	bareTrailingQualRE = regexp.MustCompile(`^` + bareRefChain + sp + `+(?:of|in)` + sp + `+`)
 
 	// barePresentDocRE matches the continuations that still mean the current
 	// document, re-allowing a bare reference bareTrailingQualRE would reject.
-	barePresentDocRE = regexp.MustCompile(`^` + sp + `+(?:of|in)` + sp +
-		`+(?:the` + sp + `+present` + sp + `+document|this` + sp + `+(?:specification|document))`)
+	barePresentDocRE = regexp.MustCompile(`^` + bareRefChain + sp + `+(?:of|in)` + sp +
+		`+(?:the` + sp + `+present` + sp + `+(?:document|specification)|this` + sp + `+(?:specification|document))`)
 
 	// bareLeadingSpecRE matches a spec designator or bracket reference just
 	// before a bare reference ("TS 23.402 Clause 5.1", "RFC 3748 Section 3.1",
