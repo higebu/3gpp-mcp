@@ -58,8 +58,11 @@ const DefaultFileName = "versions.db"
 // SIP/SDP fences (```sip / ```sdp) for syntax highlighting, generation 7
 // makes OMML math render in math mode (n-ary operators separated from their
 // operand, "~" and "^" escaped through \text{}) and stops a backslash
-// continuation from pulling prose after a blank line into an SDP fence.
-const cacheSchemaVersion = 7
+// continuation from pulling prose after a blank line into an SDP fence,
+// generation 8 hardens XML fence tracking against malformed markup, limits
+// sip/sdp backslash continuation to the wrapped line, and emits run text
+// before an inline image in the same run.
+const cacheSchemaVersion = 8
 
 // schema mirrors the spec, section and image tables of the main database,
 // without the full-text index: cached versions must never appear in search

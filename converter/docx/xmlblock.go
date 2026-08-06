@@ -38,9 +38,22 @@ var (
 	// the mangled openers sometimes lose their closer entirely (TS 29.163
 	// carries "<!-Definition of simple types" with no "-->" at all), and a
 	// sticky comment state with no closer would swallow everything up to the
-	// next heading. The closer accepts mangled hyphen/dash forms.
+	// next heading. The closer accepts the mangled dash forms ("—>", "–>",
+	// hyphens folded into one dash) but not a bare "->": an arrow inside the
+	// comment text would end it early and leak whatever tags follow into the
+	// element depth (issue #111).
 	xmlCommentOpenRE  = regexp.MustCompile(`<!--`)
-	xmlCommentCloseRE = regexp.MustCompile(`(?:--|[-—–])>`)
+	xmlCommentCloseRE = regexp.MustCompile(`(?:--|[—–])>`)
+
+	// An unterminated "<…" only carries over to the next line when it looks
+	// like a genuine tag left open: an element tag, a processing instruction
+	// or a "<!NAME" markup declaration (a DOCTYPE identifier regularly spills
+	// onto the next line). A comment-shaped "<!-"/"<!—" is deliberately
+	// excluded — the mangled openers sometimes have no closer at all
+	// ("<!-Definition of simple types", TS 29.163) and must not go sticky,
+	// for the same reason the comment tracking above only trusts "<!--" —
+	// and so is a bare "<" in prose (issue #95).
+	xmlPendingTagRE = regexp.MustCompile(`^<(?:[/?]?[A-Za-z_]|![A-Za-z])`)
 )
 
 // xmlTrimmedText returns the paragraph's raw text (no markdown emphasis
@@ -99,7 +112,7 @@ type xmlLineTracker struct {
 	open      bool
 	inComment bool
 	depth     int    // element nesting depth of the captured lines
-	pending   string // unterminated tag text carried over from earlier lines
+	pending   string // unterminated tag text carried over from the previous line
 }
 
 // observe updates the tracker after line has been captured into the block.
@@ -115,15 +128,20 @@ func (t *xmlLineTracker) observe(line string) {
 		rest = rest[loc[1]:]
 	}
 	if t.pending != "" {
-		i := strings.IndexByte(rest, '>')
+		joined := t.pending + rest
+		t.pending = ""
+		i := xmlTagEnd(joined)
 		if i < 0 {
-			t.pending += rest
-			t.open = true
+			// The tag did not close on this line either. Carrying the state
+			// further would absorb every following paragraph until a stray
+			// ">" turns up (issue #95), so give up on the tag instead — the
+			// genuine attribute-spill case (TS 38.508-1) closes on the very
+			// next line.
+			t.open = false
 			return
 		}
-		t.observeTag(t.pending + rest[:i+1])
-		t.pending = ""
-		rest = rest[i+1:]
+		t.observeTag(joined[:i+1])
+		rest = joined[i+1:]
 	}
 	for {
 		i := strings.IndexByte(rest, '<')
@@ -141,16 +159,41 @@ func (t *xmlLineTracker) observe(line string) {
 			rest = rest[loc[1]+end[1]:]
 			continue
 		}
-		j := strings.IndexByte(rest, '>')
+		j := xmlTagEnd(rest)
 		if j < 0 {
-			t.pending = rest
-			t.open = true
+			if xmlPendingTagRE.MatchString(rest) {
+				t.pending = rest
+				t.open = true
+			} else {
+				t.open = false
+			}
 			return
 		}
 		t.observeTag(rest[:j+1])
 		rest = rest[j+1:]
 	}
 	t.open = false
+}
+
+// xmlTagEnd returns the index of the ">" closing the tag that starts at
+// s[0] == '<', skipping over quoted attribute values so that a ">" inside
+// one does not split the tag and leak element depth (issue #96). Returns -1
+// when the tag does not close within s.
+func xmlTagEnd(s string) int {
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '>':
+			return i
+		}
+	}
+	return -1
 }
 
 // observeTag adjusts the element depth for one complete "<…>" tag.
