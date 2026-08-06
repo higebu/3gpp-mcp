@@ -466,7 +466,10 @@ func TestDownloadSpecs_ConvertDocDirectVsConvertedCollision_PreservesExisting(t 
 // extraction silently overwrites the other and only one spec's content
 // survives to be converted; an existence check on the single resulting
 // .docx cannot tell which spec it actually belongs to, so neither should be
-// credited.
+// credited. The converted file must also never reach outputDir at all: an
+// earlier version of this fix skipped promotion but still published the
+// ambiguous result, leaving an ownerless .docx that neither spec was
+// credited for (a later Greptile review finding on this same test).
 func TestDownloadSpecs_ConvertDocConvertedVsConvertedCollision_NeitherPromoted(t *testing.T) {
 	writeFakeLibreOffice(t)
 
@@ -501,6 +504,10 @@ func TestDownloadSpecs_ConvertDocConvertedVsConvertedCollision_NeitherPromoted(t
 	}
 	if stats["DOC_ONLY"] != 2 {
 		t.Errorf("DOC_ONLY = %d, want 2 (both specs stay DOC_ONLY rather than risk a false OK)", stats["DOC_ONLY"])
+	}
+
+	if _, err := os.Stat(filepath.Join(outputDir, "collide.docx")); !os.IsNotExist(err) {
+		t.Errorf("collide.docx stat = %v, want it absent from outputDir (ambiguous ownership must not be published)", err)
 	}
 }
 

@@ -377,12 +377,24 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 			docPathClaimants[docPath][specID] = true
 		}
 	}
+	// unattributableBasenames is the set of converted .docx basenames whose
+	// source .doc path is unattributable: not just excluded from
+	// promotion, but never even published into outputDir. The publish loop
+	// below can't tell which spec's content the surviving .doc physically
+	// held (see case 3), so any file it converts to is an ownerless
+	// .docx that no spec should be credited for -- and its content may
+	// itself be a jumble of a racy write to a path two specs both
+	// extracted into. Skipping the publish, not just the promotion, keeps
+	// that ambiguous file out of outputDir entirely rather than leaving it
+	// there unowned.
 	unattributable := make(map[string]bool)
+	unattributableBasenames := make(map[string]bool)
 	for docPath, specIDSet := range docPathClaimants {
 		if len(specIDSet) <= 1 {
 			continue
 		}
 		unattributable[docPath] = true
+		unattributableBasenames[filepath.Base(convertedDocxPath(docPath, ""))] = true
 		specIDs := make([]string, 0, len(specIDSet))
 		for specID := range specIDSet {
 			specIDs = append(specIDs, specID)
@@ -448,6 +460,10 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 				published := make(map[string]bool)
 				if convEntries, err := os.ReadDir(convDir); err == nil {
 					for _, e := range convEntries {
+						if unattributableBasenames[e.Name()] {
+							log.Printf("  publish converted %s: skipped, ambiguous ownership (shared .doc basename, see warning above)", e.Name())
+							continue
+						}
 						src := filepath.Join(convDir, e.Name())
 						dst := filepath.Join(outputDir, e.Name())
 						if err := os.Link(src, dst); err != nil {
