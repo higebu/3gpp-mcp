@@ -1230,6 +1230,181 @@ func TestFinalizeWorkingCopy_RemoveError(t *testing.T) {
 	}
 }
 
+// A run killed mid-update leaves the working copy's -wal and -shm behind, and
+// SQLite binds a write-ahead log to its database by file name alone: removing
+// only the database file lets the stale WAL be replayed into the copy the next
+// run builds at the same path (#129).
+func TestRemoveWorkingCopy_ClearsStaleSidecars(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "3gpp.db")
+	newPath := live + ".new"
+
+	src := seedWorkingCopy(t, live)
+	if err := finalizeWorkingCopy(src, live); err != nil {
+		t.Fatalf("finalizeWorkingCopy: %v", err)
+	}
+
+	// Debris of the killed run: a half-written copy and both sidecars.
+	debris := []string{newPath, newPath + "-wal", newPath + "-shm"}
+	for _, p := range debris {
+		if err := os.WriteFile(p, []byte("stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := removeWorkingCopy(newPath); err != nil {
+		t.Fatalf("removeWorkingCopy: %v", err)
+	}
+	for _, p := range debris {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s survived cleanup (stat err %v)", p, err)
+		}
+	}
+
+	// The rebuild has to land on a clean path: VACUUM INTO refuses an existing
+	// target, and any sidecar left next to the result follows it into the
+	// rename.
+	d, err := db.OpenReadWrite(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.VacuumInto(newPath); err != nil {
+		_ = d.Close()
+		t.Fatalf("VACUUM INTO after cleanup: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, sidecar := range []string{newPath + "-wal", newPath + "-shm"} {
+		if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+			t.Errorf("%s exists next to the rebuilt copy (stat err %v)", sidecar, err)
+		}
+	}
+
+	conn, err := sql.Open("sqlite", "file:"+newPath+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var n int
+	if err := conn.QueryRow("SELECT count(*) FROM t").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 200 {
+		t.Errorf("row count in rebuilt copy = %d, want 200", n)
+	}
+}
+
+// Nothing to clean up is not a failure: the first run of 'update' finds no
+// working copy at all.
+func TestRemoveWorkingCopy_NoFiles(t *testing.T) {
+	if err := removeWorkingCopy(filepath.Join(t.TempDir(), "3gpp.db.new")); err != nil {
+		t.Errorf("removeWorkingCopy on a missing working copy = %v, want nil", err)
+	}
+}
+
+// A sidecar that cannot be removed has to be reported: proceeding would run
+// VACUUM INTO next to a WAL that does not belong to its output.
+func TestRemoveWorkingCopy_SidecarError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "3gpp.db.new")
+	// A non-empty directory in the sidecar's place makes os.Remove fail with
+	// ENOTEMPTY, an error that is not os.ErrNotExist.
+	if err := os.MkdirAll(filepath.Join(path+"-wal", "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := removeWorkingCopy(path)
+	if err == nil {
+		t.Fatal("expected an error when a stale sidecar cannot be removed")
+	}
+	if !strings.Contains(err.Error(), "-wal") {
+		t.Errorf("error = %v, want it to name the -wal sidecar", err)
+	}
+}
+
+// The rename leaves the replaced database's sidecars next to the file that
+// just took its name, so they have to go with it.
+func TestReplaceDatabase_ClearsPreviousSidecars(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "3gpp.db")
+	newPath := live + ".new"
+
+	if err := os.WriteFile(live, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, sidecar := range []string{live + "-wal", live + "-shm"} {
+		if err := os.WriteFile(sidecar, []byte("stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(newPath, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := replaceDatabase(newPath, live); err != nil {
+		t.Fatalf("replaceDatabase: %v", err)
+	}
+
+	got, err := os.ReadFile(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new" {
+		t.Errorf("live database content = %q, want the working copy's", got)
+	}
+	for _, p := range []string{live + "-wal", live + "-shm", newPath} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s survived the replacement (stat err %v)", p, err)
+		}
+	}
+}
+
+// A failed rename leaves the live database alone and is reported.
+func TestReplaceDatabase_RenameError(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "3gpp.db")
+	if err := os.WriteFile(live, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := replaceDatabase(live+".new", live)
+	if err == nil {
+		t.Fatal("expected an error when the working copy is missing")
+	}
+	if !strings.Contains(err.Error(), "rename working copy") {
+		t.Errorf("error = %v, want a rename failure report", err)
+	}
+	got, readErr := os.ReadFile(live)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "old" {
+		t.Errorf("live database content = %q, want it untouched", got)
+	}
+}
+
+// A sidecar the replacement cannot delete is a corruption hazard on the live
+// path, so it is surfaced instead of being swallowed by the success message.
+func TestReplaceDatabase_SidecarError(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "3gpp.db")
+	newPath := live + ".new"
+	if err := os.WriteFile(newPath, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(live+"-shm", "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := replaceDatabase(newPath, live)
+	if err == nil {
+		t.Fatal("expected an error when a sidecar of the replaced database survives")
+	}
+	if !strings.Contains(err.Error(), "-shm") {
+		t.Errorf("error = %v, want it to name the -shm sidecar", err)
+	}
+}
+
 // TestHTTPListenAddr covers the ListenAndServe-compatible default for an
 // empty listen address.
 func TestHTTPListenAddr(t *testing.T) {

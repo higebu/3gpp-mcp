@@ -668,12 +668,52 @@ func finalizeWorkingCopy(d *db.DB, path string) error {
 		// WAL" is exactly the unknown-merge-state this check exists to catch.
 		return fmt.Errorf("stat working copy write-ahead log: %w", err)
 	}
+	// A sidecar that survives next to the renamed database would be picked up
+	// by the next run's working copy, so refuse the rename.
+	return removeStaleSidecars(path)
+}
+
+// removeStaleSidecars deletes the -wal and -shm files SQLite keeps next to the
+// database at path.
+//
+// SQLite associates a write-ahead log with its database by file name alone, so
+// a sidecar that outlives its database — left behind by a killed run, or
+// orphaned when a new file is renamed over the live path — is replayed into
+// whatever database next answers to that name. Deleting a database without its
+// sidecars is the corruption hazard the SQLite documentation warns about.
+func removeStaleSidecars(path string) error {
+	var errs []error
 	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
 		if err := os.Remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
-			// A sidecar that survives next to the renamed database would be
-			// picked up by the next run's working copy, so refuse the rename.
-			return fmt.Errorf("remove %s: %w", sidecar, err)
+			errs = append(errs, fmt.Errorf("remove %s: %w", sidecar, err))
 		}
+	}
+	return errors.Join(errs...)
+}
+
+// removeWorkingCopy deletes the working copy at path together with its
+// sidecars. The sidecars go first, so an interrupted cleanup can leave a
+// database without its WAL but never a WAL without its database.
+func removeWorkingCopy(path string) error {
+	sidecarErr := removeStaleSidecars(path)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errors.Join(sidecarErr, fmt.Errorf("remove %s: %w", path, err))
+	}
+	return sidecarErr
+}
+
+// replaceDatabase moves the finalized working copy over the live database.
+//
+// The sidecars of the database being replaced are named after the live path,
+// so the rename leaves them next to the file that just took that name and
+// SQLite would replay that old write-ahead log into it. A serve process that
+// still has them open keeps reading its own unlinked inodes until it restarts.
+func replaceDatabase(newPath, dbPath string) error {
+	if err := os.Rename(newPath, dbPath); err != nil {
+		return fmt.Errorf("rename working copy: %w", err)
+	}
+	if err := removeStaleSidecars(dbPath); err != nil {
+		return fmt.Errorf("database replaced, but sidecars of the previous database remain and must be deleted before serving %s: %w", dbPath, err)
 	}
 	return nil
 }
@@ -691,7 +731,12 @@ func cmdUpdate(args []string) {
 	_ = fs.Parse(args)
 
 	newPath := *dbPath + ".new"
-	_ = os.Remove(newPath) // remove stale copy from any previous failed run
+	// Clear any copy left by a previous failed run. Its sidecars have to go
+	// too: a -wal left by a run that was killed mid-update outlives the copy
+	// itself and would be replayed into the one VACUUM INTO writes below.
+	if err := removeWorkingCopy(newPath); err != nil {
+		log.Fatalf("Failed to remove stale working copy: %v", err)
+	}
 
 	// Open live DB (WAL mode allows one concurrent writer alongside serve's readers)
 	// to snapshot current spec versions and create a working copy via VACUUM INTO.
@@ -741,7 +786,7 @@ func cmdUpdate(args []string) {
 		err = nil
 	}
 	if err != nil {
-		_ = os.Remove(newPath)
+		_ = removeWorkingCopy(newPath)
 		log.Fatalf("Failed to fetch spec list: %v", err)
 	}
 
@@ -784,7 +829,7 @@ func cmdUpdate(args []string) {
 
 	if len(updates) == 0 {
 		fmt.Println("All specs are up to date.")
-		_ = os.Remove(newPath)
+		_ = removeWorkingCopy(newPath)
 		return
 	}
 
@@ -792,14 +837,14 @@ func cmdUpdate(args []string) {
 
 	d, err := db.OpenReadWrite(newPath)
 	if err != nil {
-		_ = os.Remove(newPath)
+		_ = removeWorkingCopy(newPath)
 		log.Fatalf("Failed to open working copy: %v", err)
 	}
 	// VACUUM INTO copies whatever schema the live database has, which may
 	// predate the current binary.
 	if err := d.InitSchema(); err != nil {
 		_ = d.Close()
-		_ = os.Remove(newPath)
+		_ = removeWorkingCopy(newPath)
 		log.Fatalf("Failed to initialize working copy schema: %v", err)
 	}
 
@@ -814,7 +859,7 @@ func cmdUpdate(args []string) {
 
 	if err := p.Run(ctx, updates); err != nil {
 		_ = d.Close()
-		_ = os.Remove(newPath)
+		_ = removeWorkingCopy(newPath)
 		log.Fatalf("Update failed: %v", err)
 	}
 
@@ -825,8 +870,8 @@ func cmdUpdate(args []string) {
 
 	// Atomically replace the live database. The serve process retains its old
 	// inode until restarted; ExecStartPost in the systemd unit handles that.
-	if err := os.Rename(newPath, *dbPath); err != nil {
-		_ = os.Remove(newPath)
+	if err := replaceDatabase(newPath, *dbPath); err != nil {
+		_ = removeWorkingCopy(newPath)
 		log.Fatalf("Failed to replace database: %v", err)
 	}
 	fmt.Println("Database updated successfully.")
