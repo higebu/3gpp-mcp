@@ -144,6 +144,27 @@ func HandleListVersions(src *Source) func(ctx context.Context, req *mcp.CallTool
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to marshal: %v", err)), nil, nil
 		}
+
+		// The archive listing may have failed while the cache and/or database
+		// still produced versions; the list returned is then incomplete, and
+		// silently returning it as if it were complete would hide that. The
+		// warning travels as its own content item so the JSON payload stays
+		// parseable.
+		if archiveErr != nil {
+			return listVersionsResult(string(data),
+				fmt.Sprintf("[Warning: failed to list archive versions for %s, so this list may be incomplete: %v]", input.SpecID, archiveErr)), nil, nil
+		}
 		return textResult(string(data)), nil, nil
 	}
+}
+
+// listVersionsResult builds a result whose first content item is the JSON
+// payload; a non-empty warning is appended as a separate item so it never
+// corrupts the JSON.
+func listVersionsResult(payload, warning string) *mcp.CallToolResult {
+	res := textResult(payload)
+	if warning != "" {
+		res.Content = append(res.Content, &mcp.TextContent{Text: warning})
+	}
+	return res
 }

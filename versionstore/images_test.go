@@ -408,6 +408,12 @@ func TestPutImagesAfterEviction(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "evicted") {
 		t.Fatalf("EnsureImages = %v, want an eviction error", err)
 	}
+	// The error must be recognizable as transient (errors.Is), not just by
+	// message text, so callers can classify it as retryable rather than a
+	// permanent failure.
+	if !errors.Is(err, ErrImagesEvicted) {
+		t.Errorf("EnsureImages = %v, want it to wrap ErrImagesEvicted", err)
+	}
 	if img, err := s.GetImage("TS 23.501", "18.6.0", "image1.png"); err != nil || img != nil {
 		t.Errorf("orphaned image survived: %+v, %v", img, err)
 	}

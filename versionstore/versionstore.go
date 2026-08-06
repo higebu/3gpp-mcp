@@ -33,6 +33,12 @@ import (
 // returns the content.
 var ErrInProgress = errors.New("version fetch still in progress")
 
+// ErrImagesEvicted reports that a version was evicted from the cache while its
+// images were downloading, so the newly fetched images could not be recorded.
+// This is transient, not a permanent failure: the caller's next call re-fetches
+// the version's sections first and then its images.
+var ErrImagesEvicted = errors.New("version was evicted while its images downloaded")
+
 // DefaultLimitBytes is the default cache size limit.
 const DefaultLimitBytes int64 = 1024 << 20 // 1 GiB
 
@@ -773,7 +779,7 @@ func (s *Store) putImages(specID, version string, images []db.Image) error {
 		// orphan the blobs and break the invariant that a cache entry always
 		// accompanies cached rows, so give up; the next call re-fetches the
 		// sections first.
-		return fmt.Errorf("%s v%s was evicted while its images downloaded; call the tool again", specID, version)
+		return fmt.Errorf("%w: %s v%s; call the tool again", ErrImagesEvicted, specID, version)
 	}
 
 	if err := tx.Commit(); err != nil {
