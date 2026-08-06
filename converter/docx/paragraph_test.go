@@ -642,6 +642,40 @@ func TestParagraphToMarkdown_LeadingTabTrimmed(t *testing.T) {
 	}
 }
 
+// A single run carrying both text and an inline drawing keeps document
+// order: the text before the image is emitted before it, and the text after
+// it lands in its own run with the same formatting (issue #100).
+func TestParseParagraph_TextAndImageInOneRun(t *testing.T) {
+	xml := `<w:p ` + wXMLNS + ` xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+		`<w:r><w:rPr><w:b/></w:rPr>` +
+		`<w:t xml:space="preserve">before </w:t>` +
+		`<w:drawing><a:blip r:embed="rId5"/></w:drawing>` +
+		`<w:t xml:space="preserve"> after</w:t>` +
+		`</w:r></w:p>`
+	info := parseParagraph([]byte(xml))
+	if len(info.Runs) != 3 {
+		t.Fatalf("Runs = %d, want 3 (text, image, text): %#v", len(info.Runs), info.Runs)
+	}
+	if info.Runs[0].Text != "before " || info.Runs[0].Image != nil {
+		t.Errorf("run[0] = %#v, want text %q", info.Runs[0], "before ")
+	}
+	if info.Runs[1].Image == nil || info.Runs[1].Image.RID != "rId5" {
+		t.Errorf("run[1] = %#v, want image rId5", info.Runs[1])
+	}
+	if info.Runs[2].Text != " after" || info.Runs[2].Image != nil {
+		t.Errorf("run[2] = %#v, want text %q", info.Runs[2], " after")
+	}
+	if !info.Runs[0].Bold || !info.Runs[2].Bold {
+		t.Errorf("expected the run formatting kept on both text segments, got %#v", info.Runs)
+	}
+	if info.Text != "before  after" {
+		t.Errorf("Text = %q, want %q", info.Text, "before  after")
+	}
+	if len(info.Images) != 1 || info.Images[0].RID != "rId5" {
+		t.Errorf("Images = %#v, want one rId5 entry", info.Images)
+	}
+}
+
 func TestParseParagraph_GroupShapeNoImage_SkipsLabels(t *testing.T) {
 	// A grouped VML diagram (v:group containing several v:shape/v:textbox
 	// labels) with no embedded picture anywhere inside it must not have its

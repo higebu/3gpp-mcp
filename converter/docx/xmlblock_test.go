@@ -65,6 +65,98 @@ func TestXMLLineTracker(t *testing.T) {
 	}
 }
 
+// An unterminated "<" that is not a genuine tag start — a mangled comment
+// opener with no closer (TS 29.163) or a "<" in prose — must not keep the
+// block open and swallow every following paragraph (issue #95).
+func TestXMLLineTrackerUnterminatedNotSticky(t *testing.T) {
+	prose := paragraphInfo{
+		Text: "Ordinary prose paragraph.",
+		Runs: []runInfo{{Text: "Ordinary prose paragraph."}},
+	}
+
+	var tr xmlLineTracker
+	tr.observe(`<!-Definition of simple types`)
+	if tr.open {
+		t.Error("expected tracker closed after a mangled comment opener with no closer")
+	}
+	if matchXMLContinuation(prose, &tr) {
+		t.Error("expected prose not to continue the block")
+	}
+
+	tr = xmlLineTracker{}
+	tr.observe(`values where a < b hold`)
+	if tr.open {
+		t.Error("expected tracker closed after a '<' in prose")
+	}
+
+	// A genuine unterminated tag stays open for one continuation line only:
+	// when that line does not close it either, the tag is abandoned instead
+	// of absorbing everything up to the next stray ">".
+	tr = xmlLineTracker{}
+	tr.observe(`<mcpttinfo xmlns="urn:3gpp:ns:mcpttInfo:1.0"`)
+	if !tr.open {
+		t.Error("expected tracker open after an unterminated tag")
+	}
+	tr.observe(`this prose line has no closing angle bracket`)
+	if tr.open {
+		t.Error("expected the unterminated tag abandoned after a line with no '>'")
+	}
+	if matchXMLContinuation(prose, &tr) {
+		t.Error("expected prose not to continue the block after the tag is abandoned")
+	}
+}
+
+// A ">" inside a quoted attribute value does not end the tag early: the
+// element depth stays balanced and following prose is not absorbed
+// (issue #96).
+func TestXMLLineTrackerQuotedAngleBracket(t *testing.T) {
+	var tr xmlLineTracker
+	tr.observe(`<sig:Object MimeType="a>b" Encoding='c>d'/>`)
+	if tr.open || tr.depth != 0 {
+		t.Errorf("expected closed tracker with depth 0, got open=%v depth=%d", tr.open, tr.depth)
+	}
+	prose := paragraphInfo{
+		Text: "Ordinary prose after the element.",
+		Runs: []runInfo{{Text: "Ordinary prose after the element."}},
+	}
+	if matchXMLContinuation(prose, &tr) {
+		t.Error("expected prose not to continue the block")
+	}
+
+	// The quoted value may also span the continuation of a tag left open on
+	// the previous line.
+	tr = xmlLineTracker{}
+	tr.observe(`<elem attr="quote holding a >`)
+	if !tr.open {
+		t.Error("expected tracker open while the quote and tag are unterminated")
+	}
+	tr.observe(`still quoted" other="x">`)
+	if tr.open || tr.depth != 1 {
+		t.Errorf("expected the tag completed across the quote, got open=%v depth=%d", tr.open, tr.depth)
+	}
+}
+
+// An arrow inside a comment does not close it early (issue #111); the
+// mangled single-dash closers still do.
+func TestXMLLineTrackerCommentArrow(t *testing.T) {
+	var tr xmlLineTracker
+	tr.observe(`<!-- maps A -> B via <xs:element name="m"> -->`)
+	if tr.open || tr.inComment || tr.depth != 0 {
+		t.Errorf("expected the whole comment consumed, got open=%v inComment=%v depth=%d",
+			tr.open, tr.inComment, tr.depth)
+	}
+
+	tr = xmlLineTracker{}
+	tr.observe(`<!-- a comment with an arrow ->`)
+	if !tr.open || !tr.inComment {
+		t.Error("expected tracker still inside the comment after a bare '->'")
+	}
+	tr.observe(`closed with a mangled dash —>`)
+	if tr.open || tr.inComment {
+		t.Error("expected the mangled dash closer to end the comment")
+	}
+}
+
 // Element text content on its own paragraph (the <xs:documentation> text of
 // TS 24.423 clause 6.4) is absorbed while an element is open, and the fence
 // closes with the root element so trailing prose stays out.
@@ -143,6 +235,36 @@ func TestParseSections_XMLBlockUnstyled(t *testing.T) {
 	}
 	if content[2] != "Trailing prose." {
 		t.Errorf("expected trailing prose intact, got %q", content[2])
+	}
+}
+
+// A mangled comment opener with no closer (the TS 29.163 shape the comment
+// tracking guards against) must not keep the block open through its pending
+// state: the following prose stays outside the fence (issue #95).
+func TestParseSections_XMLUnterminatedNotSwallowingProse(t *testing.T) {
+	elements := []bodyElement{
+		xmlTestHeading("F.3\tXML schema"),
+		xmlTestPara(`<?xml version="1.0" encoding="UTF-8"?>`),
+		xmlTestPara(`<!-Definition of simple types`),
+		xmlTestPara("This prose paragraph must stay outside the fence."),
+		xmlTestPara("And so must this one, even without a '>' anywhere."),
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(sections))
+	}
+	content := sections[0].Content
+	if len(content) != 3 {
+		t.Fatalf("expected fence + two prose paragraphs, got %v", content)
+	}
+	if !strings.Contains(content[0], "<!-Definition of simple types") {
+		t.Errorf("expected the mangled comment line inside the fence, got %q", content[0])
+	}
+	if strings.Contains(content[0], "prose") {
+		t.Errorf("prose swallowed into the fence: %q", content[0])
+	}
+	if content[1] != "This prose paragraph must stay outside the fence." {
+		t.Errorf("expected first prose paragraph intact, got %q", content[1])
 	}
 }
 
