@@ -82,9 +82,14 @@ func paginateText(content string, offset, maxLines, maxChars int) *mcp.CallToolR
 		return textResult(fmt.Sprintf("[No content at offset %d. Total lines: %d]", offset, totalLines))
 	}
 
-	end := offset + maxLines
-	if end > totalLines {
-		end = totalLines
+	// offset+maxLines can overflow int when maxLines is attacker-controlled
+	// (e.g. math.MaxInt64), wrapping negative and panicking on lines[i]
+	// below. offset < totalLines is already established above, so
+	// totalLines-offset cannot overflow; compare against it instead of
+	// adding offset+maxLines directly.
+	end := totalLines
+	if maxLines < totalLines-offset {
+		end = offset + maxLines
 	}
 
 	if maxChars > 0 {
