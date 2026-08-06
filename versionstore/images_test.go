@@ -329,6 +329,35 @@ func TestEnsureImagesPropagatesFetchError(t *testing.T) {
 	}
 }
 
+// TestEnsureImagesRecoversFetcherPanic checks that a panic on the detached
+// image fetch goroutine is reported as an error instead of killing the
+// process, and that a later call can retry.
+func TestEnsureImagesRecoversFetcherPanic(t *testing.T) {
+	var calls atomic.Int32
+	s := openImageStore(t, DefaultLimitBytes, func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+		if calls.Add(1) == 1 {
+			panic("slice bounds out of range")
+		}
+		return fakeImages(8), nil
+	})
+	ensureVersion(t, s, "TS 23.501", "18.6.0")
+
+	err := s.EnsureImages(context.Background(), "TS 23.501", "18.6.0", entry("23.501"), time.Minute)
+	if err == nil || !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("EnsureImages = %v, want an error reporting the panic", err)
+	}
+	if fetched, _ := s.HasImages("TS 23.501", "18.6.0"); fetched {
+		t.Error("a panicked fetch must not mark images as fetched")
+	}
+	// The inflight slot must be released so a later call starts a fresh fetch.
+	if err := s.EnsureImages(context.Background(), "TS 23.501", "18.6.0", entry("23.501"), time.Minute); err != nil {
+		t.Fatalf("EnsureImages retry after panic: %v", err)
+	}
+	if fetched, _ := s.HasImages("TS 23.501", "18.6.0"); !fetched {
+		t.Error("retry after a panicked fetch did not cache the images")
+	}
+}
+
 // TestImageBytesCountTowardLimit checks that image blobs join the eviction
 // account and that an evicted version takes its images with it.
 func TestImageBytesCountTowardLimit(t *testing.T) {

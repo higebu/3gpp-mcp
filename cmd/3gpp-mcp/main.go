@@ -359,6 +359,13 @@ func cmdConvertDir(args []string) {
 // terminating the test process.
 var exit = os.Exit
 
+// newHTTPClient builds the client used for archive scraping and downloads.
+// It is a variable so tests can point commands that construct their own
+// client, such as update, at a mock archive server.
+var newHTTPClient = func(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout}
+}
+
 // requireSelector exits unless at least one spec selector flag was provided.
 func requireSelector(release int, latest bool, spec, series string) {
 	if release != 0 || latest || spec != "" || series != "" {
@@ -392,6 +399,15 @@ func resolveSpecs(ctx context.Context, client *http.Client, specList, specFlag, 
 	} else {
 		fmt.Println("Fetching spec list from 3GPP archive...")
 		entries, err = pipeline.FetchSpecList(ctx, client, seriesFilter, useCache, scrapeConcurrency)
+		var partial *pipeline.PartialSpecListError
+		if errors.As(err, &partial) {
+			// Proceeding would silently drop every spec under the failed
+			// directories from the result, so a build or download from this
+			// list would be quietly incomplete.
+			log.Printf("Aborting: %v; rerun to retry", partial)
+			exit(1)
+			return nil
+		}
 		if err != nil {
 			log.Fatalf("Failed to fetch spec list: %v", err)
 		}
@@ -628,7 +644,7 @@ func cmdUpdate(args []string) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	client := &http.Client{Timeout: *timeout}
+	client := newHTTPClient(*timeout)
 	useCache := !*noCache
 
 	// Fetch latest versions from FTP
@@ -638,6 +654,13 @@ func cmdUpdate(args []string) {
 	} else {
 		fmt.Println("Fetching spec list from 3GPP archive...")
 		entries, err = pipeline.FetchSpecList(ctx, client, nil, useCache, *scrapeWorkers)
+	}
+	// A partial list is survivable here: a spec missing from it is skipped
+	// rather than deleted, so the cost is missed updates until the next run.
+	var partial *pipeline.PartialSpecListError
+	if errors.As(err, &partial) {
+		log.Printf("warning: %v; specs under the failed directories will not be updated this run", partial)
+		err = nil
 	}
 	if err != nil {
 		_ = os.Remove(newPath)

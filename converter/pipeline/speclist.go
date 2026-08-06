@@ -224,9 +224,29 @@ func FetchSpecZips(ctx context.Context, client *http.Client, specID string, useC
 	return entries, nil
 }
 
+// PartialSpecListError reports that a spec list was assembled while some
+// directory listings failed to fetch. The entries returned alongside it are
+// valid but incomplete: every spec under a failed directory is missing, so a
+// database built from them would silently lack those specs. Callers decide
+// whether that is fatal — a build should abort, while an update may proceed
+// and merely miss some updates until the next run.
+type PartialSpecListError struct {
+	// FailedListings is the number of directory listings that failed to fetch.
+	FailedListings int
+}
+
+func (e *PartialSpecListError) Error() string {
+	return fmt.Sprintf("spec list is incomplete: %d directory listing(s) failed to fetch", e.FailedListings)
+}
+
 // FetchSpecList scrapes the 3GPP FTP directory for all spec zip files.
 // If useCache is true, results are cached to disk with a 24h TTL.
 // scrapeConcurrency controls parallel HTTP requests; 0 uses defaultConcurrency().
+//
+// When some directory listings fail, the entries assembled so far are returned
+// together with a *PartialSpecListError, so callers can tell a complete list
+// from one that is silently missing specs. A cancelled context is reported as
+// ctx.Err() rather than as a partial list.
 func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []string, useCache bool, scrapeConcurrency int) ([]string, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
@@ -338,10 +358,19 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 	log.Printf("Total: %d spec versions found", len(entries))
 
 	// A list missing the specs whose listings failed to fetch must not be
-	// cached: every build within the TTL would silently skip them.
+	// cached: every build within the TTL would silently skip them. The caller
+	// gets the partial entries plus an error naming the gap, so it can decide
+	// whether to proceed.
 	if failed := fetchFailures.Load(); failed > 0 {
+		// A cancelled context fails every remaining fetch; that is an abort,
+		// not a partial scrape.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		log.Printf("warning: %d directory listing(s) failed to fetch; not caching this partial spec list", failed)
-	} else if useCache {
+		return entries, &PartialSpecListError{FailedListings: int(failed)}
+	}
+	if useCache {
 		if err := SaveCache(cacheKey, entries); err != nil {
 			log.Printf("warning: failed to save cache: %v", err)
 		}
