@@ -308,6 +308,30 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 		}
 	}
 
+	// docPathClaimants maps each shared docDir path to every DOC_ONLY spec
+	// that recorded it. Two specs whose .doc files share a basename both
+	// extract into the same path in the flat, shared docDir, so the second
+	// extraction silently overwrites the first: only one spec's content
+	// physically survives to be converted, but both specs' docFilesBySpec
+	// entries still point at that same surviving path. An existence check
+	// on the converted output can't tell whose file actually made it
+	// through, so any path claimed by more than one spec is treated as
+	// unattributable for all of them rather than risk crediting a spec
+	// whose own file was clobbered before conversion ever ran.
+	docPathClaimants := make(map[string][]string)
+	for specID, docFiles := range docFilesBySpec {
+		for _, docPath := range docFiles {
+			docPathClaimants[docPath] = append(docPathClaimants[docPath], specID)
+		}
+	}
+	unattributable := make(map[string]bool)
+	for docPath, specIDs := range docPathClaimants {
+		if len(specIDs) > 1 {
+			unattributable[docPath] = true
+			log.Printf("  warning: %s share a same-named .doc file (%s); none will be promoted from it", strings.Join(specIDs, ", "), filepath.Base(docPath))
+		}
+	}
+
 	if convertDoc {
 		docDir := filepath.Join(outputDir, "_doc_files")
 		if entries, err := os.ReadDir(docDir); err == nil && len(entries) > 0 {
@@ -350,6 +374,9 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 				// up to OK along with it.
 				for _, docFiles := range docFilesBySpec {
 					for _, docPath := range docFiles {
+						if unattributable[docPath] {
+							continue
+						}
 						if _, statErr := os.Stat(convertedDocxPath(docPath, convDir)); statErr == nil {
 							stats["DOC_ONLY"]--
 							stats["OK"]++

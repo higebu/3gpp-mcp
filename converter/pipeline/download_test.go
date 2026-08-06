@@ -447,6 +447,50 @@ func TestDownloadSpecs_ConvertDocSameBatchBasenameCollision(t *testing.T) {
 	}
 }
 
+// TestDownloadSpecs_ConvertDocSameBasenameAcrossSpecsStaysDocOnly verifies
+// that two DOC_ONLY specs whose .doc files share a basename are never both
+// promoted to OK (2nd Greptile review finding). Both extract into the same
+// path in the shared, flat _doc_files directory, so one extraction silently
+// overwrites the other and only one spec's content survives to be
+// converted; an existence check on the single resulting .docx cannot tell
+// which spec it actually belongs to, so neither should be credited.
+func TestDownloadSpecs_ConvertDocSameBasenameAcrossSpecsStaysDocOnly(t *testing.T) {
+	writeFakeLibreOffice(t)
+
+	zipF := makeZipWithFiles(t, map[string][]byte{
+		"collide.doc": []byte("from spec F"),
+	})
+	zipG := makeZipWithFiles(t, map[string][]byte{
+		"collide.doc": []byte("from spec G"),
+	})
+
+	tsF := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipF)
+	}))
+	defer tsF.Close()
+	tsG := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipG)
+	}))
+	defer tsG.Close()
+
+	specs := []*SpecVersion{
+		{SpecID: "TS 88.006", URL: tsF.URL + "/f.zip"},
+		{SpecID: "TS 88.007", URL: tsG.URL + "/g.zip"},
+	}
+
+	outputDir := t.TempDir()
+	stats := DownloadSpecs(context.Background(), &http.Client{}, specs, outputDir, 2, true, 10*time.Second)
+
+	if stats["OK"] != 0 {
+		t.Errorf("OK = %d, want 0 (the surviving .doc can't be safely attributed to either spec)", stats["OK"])
+	}
+	if stats["DOC_ONLY"] != 2 {
+		t.Errorf("DOC_ONLY = %d, want 2 (both specs stay DOC_ONLY rather than risk a false OK)", stats["DOC_ONLY"])
+	}
+}
+
 // TestConvertDocFiles_NoDocFiles verifies ConvertDocFiles returns (0, nil)
 // when the directory contains no .doc files (happy but trivial path).
 func TestConvertDocFiles_NoDocFiles(t *testing.T) {
