@@ -2134,6 +2134,53 @@ func TestQueryMethodsHonorContext(t *testing.T) {
 	}
 }
 
+func TestExtractReferences_PluralKeyword(t *testing.T) {
+	// Regression test for #133: tsRefRE's keyword alternation must accept
+	// plurals ("clauses"), or it falls through to matching just "TS 23.402"
+	// with an empty TargetSection alongside the correct multi-section refs
+	// produced by tsMultiRefRE.
+	content := "See TS 23.402 clauses 8.2 and 16.11 for details."
+
+	refs := ExtractReferences("TS 24.229", "5.1", content, nil)
+
+	if len(refs) != 2 {
+		t.Fatalf("expected 2 references, got %d: %+v", len(refs), refs)
+	}
+	for _, want := range []string{"8.2", "16.11"} {
+		found := false
+		for _, r := range refs {
+			if r.TargetSpec == "TS 23.402" && r.TargetSection == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected reference to TS 23.402 section %s, got refs: %+v", want, refs)
+		}
+	}
+	for _, r := range refs {
+		if r.TargetSpec == "TS 23.402" && r.TargetSection == "" {
+			t.Errorf("unexpected reference with empty TargetSection: %+v", r)
+		}
+	}
+}
+
+func TestExtractReferences_PluralKeywordSingleSection(t *testing.T) {
+	// Direct exercise of tsRefRE's keyword alternation with a plural keyword
+	// but only one section number (no "and" list, so tsMultiRefRE does not
+	// match): the section must still be captured, not dropped.
+	content := "The procedures are described in TS 23.501 sections 5.1."
+
+	refs := ExtractReferences("TS 24.229", "5.1", content, nil)
+
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 reference, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].TargetSpec != "TS 23.501" || refs[0].TargetSection != "5.1" {
+		t.Errorf("expected TS 23.501 section 5.1, got %+v", refs[0])
+	}
+}
+
 func TestExtractReferences_CoordinatedList(t *testing.T) {
 	// Coordinated keyword-per-element list: every element belongs to the
 	// named spec and must be indexed.

@@ -1292,7 +1292,7 @@ const bareRefChain = `(?:` + sp + `*(?:[,;]` + sp + `*(?:and|or)?|and|or)` + sp 
 
 var (
 	// "TS 23.501 clause 5.1" or "3GPP TS 33.203 Annex H"
-	tsRefRE = regexp.MustCompile(`(?:3GPP` + sp + `+)?(TS|TR)` + sp + `+(\d+\.\d+)(?:` + sp + `*[,;]?` + sp + `*(?:clause|section|subclause|[Aa]nnex)` + sp + `+` + secNum + `)?`)
+	tsRefRE = regexp.MustCompile(`(?:3GPP` + sp + `+)?(TS|TR)` + sp + `+(\d+\.\d+)(?:` + sp + `*[,;]?` + sp + `*(?:clauses?|sections?|subclauses?|[Aa]nnexe?s?)` + sp + `+` + secNum + `)?`)
 	// "Annex H of 3GPP TS 33.203" or "subclause 5.1 of TS 23.228"
 	tsPrefixRefRE = regexp.MustCompile(`(?:clause|section|subclause|[Aa]nnex)` + sp + `+` + secNum + sp + `+of` + sp + `+(?:3GPP` + sp + `+)?(TS|TR)` + sp + `+(\d+\.\d+)`)
 	rfcRefRE      = regexp.MustCompile(`(?:IETF` + sp + `+)?RFC` + sp + `+(\d+)(?:` + sp + `*[,;]?` + sp + `*(?:section|clause)` + sp + `+(\d+(?:\.\d+)*))?`)
