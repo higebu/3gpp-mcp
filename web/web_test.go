@@ -267,6 +267,61 @@ func TestRenderMarkdown_DollarProseNotMath(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdown_MathInAttributeStaysText verifies that a formula that
+// ends up inside an HTML attribute — figure captions like
+// "![$x_1$](image://...)" put one in alt — is re-injected as plain text.
+// Injecting the <span> there truncated the <img> tag and leaked attribute
+// fragments into the page as visible text.
+func TestRenderMarkdown_MathInAttributeStaysText(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "sized image alt",
+			content: "![$x_1$](image://fig1.png?w=10&h=20)",
+			want:    `<img src="/specs/TS%2038.211/images/fig1.png" alt="$x_1$" width="10" height="20">`,
+		},
+		{
+			name:    "markdown image alt",
+			content: "![$x_1$](image://fig1.png)",
+			want:    `<img src="/specs/TS%2038.211/images/fig1.png" alt="$x_1$">`,
+		},
+		{
+			name:    "table cell image alt",
+			content: `<table><tbody><tr><td><img src="image://f.png" alt="$y^2$"></td></tr></tbody></table>`,
+			want:    `<img src="/specs/TS%2038.211/images/f.png" alt="$y^2$">`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := renderMarkdown(tt.content, renderOpts{specID: "TS 38.211"})
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("expected intact image %s, got:\n%s", tt.want, got)
+			}
+			if strings.Contains(got, `alt="&lt;span`) || strings.Contains(got, "&#34;&gt;") {
+				t.Errorf("no math element may be injected into an attribute, got:\n%s", got)
+			}
+			if strings.Contains(got, "math-inline") {
+				t.Errorf("attribute math must not become a span, got:\n%s", got)
+			}
+		})
+	}
+
+	// A formula in body text on the same page is still a KaTeX target.
+	t.Run("body math unaffected", func(t *testing.T) {
+		got := renderMarkdown("![$x_1$](image://fig1.png)\n\nwhere $x_1$ is the first value.",
+			renderOpts{specID: "TS 38.211"})
+		if !strings.Contains(got, `alt="$x_1$"`) {
+			t.Errorf("expected plain alt text, got:\n%s", got)
+		}
+		if !strings.Contains(got, `<span class="math-inline">x_1</span>`) {
+			t.Errorf("expected a math span in body text, got:\n%s", got)
+		}
+	})
+}
+
 func TestRefURL(t *testing.T) {
 	tests := []struct {
 		name string
