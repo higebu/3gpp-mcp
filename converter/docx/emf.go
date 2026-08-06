@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -380,13 +381,17 @@ const sofficeTimeout = 5 * time.Minute
 // file:///C:/Users/foo/AppData/Local/Temp/lo-profile-1 instead of the invalid
 // file://C:\Users\... that plain string concatenation used to produce. A
 // POSIX path already starts with "/", so it keeps the standard
-// file:///abs/path form unchanged.
+// file:///abs/path form unchanged. The path is then percent-encoded via
+// net/url: os.MkdirTemp resolves under the OS temp dir, which on Windows is
+// %TEMP% under the user's profile and commonly contains spaces (e.g.
+// `C:\Users\John Doe\AppData\...`) — an un-encoded space would make the
+// result an invalid URL per RFC 3986 that LibreOffice may reject or misparse.
 func fileURLForProfile(path string) string {
 	p := strings.ReplaceAll(path, `\`, "/")
 	if !strings.HasPrefix(p, "/") {
 		p = "/" + p
 	}
-	return "file://" + p
+	return (&url.URL{Scheme: "file", Path: p}).String()
 }
 
 // runSofficeBatch invokes `soffice --convert-to png` with the given inputs,

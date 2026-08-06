@@ -529,7 +529,9 @@ func TestRunSofficeBatch_Timeout(t *testing.T) {
 // plain "file://" + path concatenation gets wrong (issue #142): a backslash
 // path like `C:\Users\foo\AppData\Local\Temp\lo-profile-1` used to produce
 // the invalid file://C:\Users\... instead of the standard
-// file:///C:/Users/... form.
+// file:///C:/Users/... form. Also covers a Windows username containing a
+// space (a real os.MkdirTemp/%TEMP% path shape), which must be
+// percent-encoded to stay a valid URL per RFC 3986.
 func TestFileURLForProfile(t *testing.T) {
 	tests := []struct {
 		name string
@@ -550,6 +552,11 @@ func TestFileURLForProfile(t *testing.T) {
 			name: "windows path already using forward slashes",
 			path: "C:/Temp/lo-profile-123",
 			want: "file:///C:/Temp/lo-profile-123",
+		},
+		{
+			name: "windows username with a space is percent-encoded",
+			path: `C:\Users\John Doe\AppData\Local\Temp\lo-profile-123`,
+			want: "file:///C:/Users/John%20Doe/AppData/Local/Temp/lo-profile-123",
 		},
 	}
 	for _, tt := range tests {
