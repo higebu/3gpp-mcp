@@ -2133,3 +2133,24 @@ func TestQueryMethodsHonorContext(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractReferences_CoordinatedList(t *testing.T) {
+	// Coordinated keyword-per-element list: every element belongs to the
+	// named spec and must be indexed.
+	content := "Registration is described in clause 4.12.2 and in clause 4.12.2a of TS 23.502, respectively."
+
+	refs := ExtractReferences("TS 23.501", "4.2.8.1", content, nil)
+
+	for _, want := range []string{"4.12.2", "4.12.2a"} {
+		found := false
+		for _, r := range refs {
+			if r.TargetSpec == "TS 23.502" && r.TargetSection == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected reference to TS 23.502 section %s, got refs: %+v", want, refs)
+		}
+	}
+}

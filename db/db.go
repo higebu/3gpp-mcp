@@ -1487,6 +1487,21 @@ func tsCoordPrefixMRExtractor(m []int, content string, opts *LinkifyRefsOpts, mk
 	return linked + content[m[3]:m[4]] + specLink, true
 }
 
+// tsCoordPrefixSpecSections extracts spec and sections from a coordinated
+// keyword-per-element list for ExtractReferences.
+func tsCoordPrefixSpecSections(m []int, content string) (string, []string, bool) {
+	spec := content[m[4]:m[5]] + " " + content[m[6]:m[7]]
+	list := content[m[2]:m[3]]
+	var sections []string
+	for _, em := range coordElemRE.FindAllStringSubmatchIndex(list, -1) {
+		sections = append(sections, list[em[2]:em[3]])
+	}
+	if len(sections) < 2 {
+		return "", nil, false
+	}
+	return spec, sections, true
+}
+
 // tsMultiMRExtractor handles "TS 23.402 clauses 8.2 and 16.11".
 func tsMultiMRExtractor(m []int, content string, opts *LinkifyRefsOpts, mkLink func(text, url string) string) (string, bool) {
 	specType := content[m[2]:m[3]]
@@ -1563,6 +1578,7 @@ func ExtractReferences(sourceSpecID, sectionNumber, content string, bracketMap m
 		re      *regexp.Regexp
 		extract multiRefSpecSections
 	}{
+		{tsCoordPrefixRefRE, tsCoordPrefixSpecSections},
 		{tsMultiPrefixRefRE, tsMultiPrefixSpecSections},
 		{tsMultiRefRE, tsMultiSpecSections},
 	}
