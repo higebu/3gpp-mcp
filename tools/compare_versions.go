@@ -60,7 +60,7 @@ func compareStructure(ctx context.Context, src *Source, input CompareVersionsInp
 		}
 		return r
 	}
-	if r := checkComparable(ctx, src, input.SpecID, oldSecs, newSecs, oldRes, newRes); r != nil {
+	if r := checkComparable(ctx, src, input.SpecID, "", oldSecs, newSecs, oldRes, newRes); r != nil {
 		return r
 	}
 
@@ -121,7 +121,7 @@ func compareSection(ctx context.Context, src *Source, input CompareVersionsInput
 		}
 		return r
 	}
-	if r := checkComparable(ctx, src, input.SpecID, oldSecs, newSecs, oldRes, newRes); r != nil {
+	if r := checkComparable(ctx, src, input.SpecID, input.SectionNumber, oldSecs, newSecs, oldRes, newRes); r != nil {
 		return r
 	}
 
@@ -188,10 +188,19 @@ func familyPartsHint(ctx context.Context, src *Source, specID string, oldErr, ne
 	return nil
 }
 
-func checkComparable(ctx context.Context, src *Source, specID string, oldSecs, newSecs []db.Section, oldRes, newRes Resolution) *mcp.CallToolResult {
+func checkComparable(ctx context.Context, src *Source, specID, sectionNumber string, oldSecs, newSecs []db.Section, oldRes, newRes Resolution) *mcp.CallToolResult {
 	if len(oldSecs) == 0 && len(newSecs) == 0 {
 		if parts, err := src.DB.FindSpecIDsByFamily(ctx, specID); err == nil && len(parts) > 0 {
 			return errorResult(fmt.Sprintf("%s has multiple parts: %s — specify one", specID, strings.Join(parts, ", ")))
+		}
+		if sectionNumber != "" {
+			// Both sides came back empty because the requested section does
+			// not exist in either version, not because the spec itself
+			// failed to resolve — say so, rather than implying the whole
+			// specification is empty.
+			return errorResult(fmt.Sprintf(
+				"Section %s does not exist in %s in either version. Section numbers move between releases — run compare_versions without section_number, or get_toc, to locate it.",
+				sectionNumber, specID))
 		}
 		return errorResult(fmt.Sprintf("no sections found for %s in either version", specID))
 	}

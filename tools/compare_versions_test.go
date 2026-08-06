@@ -191,6 +191,36 @@ func TestCompareVersionsSectionMissingOnOneSide(t *testing.T) {
 	}
 }
 
+// TestCompareVersionsSectionMissingInBoth checks that comparing a section
+// number that does not exist in either version names the section, not the
+// whole specification — the earlier bug reported "no sections found for TS
+// 23.501 in either version" as if the whole spec were empty.
+func TestCompareVersionsSectionMissingInBoth(t *testing.T) {
+	d := setupTestDB(t)
+	seedOldVersion(t, d)
+	handler := HandleCompareVersions(NewSource(d))
+
+	result, _, err := handler(context.Background(), nil, CompareVersionsInput{
+		SpecID:        "TS 23.501",
+		OldVersion:    "17.9.0",
+		NewVersion:    "18.6.0",
+		SectionNumber: "99",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected an error result, got: %q", getTextContent(result))
+	}
+	text := getTextContent(result)
+	if !strings.Contains(text, "Section 99 does not exist in TS 23.501 in either version") {
+		t.Errorf("expected a section-specific message, got: %q", text)
+	}
+	if strings.Contains(text, "no sections found for TS 23.501 in either version") {
+		t.Errorf("message should not imply the whole spec is empty: %q", text)
+	}
+}
+
 func TestCompareVersionsSameVersion(t *testing.T) {
 	d := setupTestDB(t)
 	handler := HandleCompareVersions(NewSource(d))
