@@ -63,8 +63,10 @@ func init() {
 
 // renderMarkdown converts Markdown content to HTML, rewriting image:// URLs
 // and linkifying inline spec/RFC references. A non-empty version is carried
-// on every image URL so an archived version serves its own images.
-func renderMarkdown(content, specID, version string, bracketMap map[string]string) string {
+// on every image URL and every same-spec section link so an archived version
+// serves its own images and stays within itself when followed. sectionExists
+// gates bare same-document references ("clause 4.2"); pass nil to skip them.
+func renderMarkdown(content, specID, version string, bracketMap map[string]string, sectionExists func(string) bool) string {
 	// Linkify spec references before image/figure rewrites to avoid processing HTML attributes.
 	content = db.LinkifyRefs(content, bracketMap, func(spec, section string) string {
 		if strings.HasPrefix(spec, "RFC ") {
@@ -74,12 +76,18 @@ func renderMarkdown(content, specID, version string, bracketMap map[string]strin
 			}
 			return u
 		}
+		if spec == "" { // bare reference: the current spec
+			spec = specID
+		}
 		u := "/specs/" + url.PathEscape(spec)
 		if section != "" {
 			u += "/sections/" + section
 		}
+		if version != "" && spec == specID {
+			u += "?version=" + url.QueryEscape(version)
+		}
 		return u
-	})
+	}, sectionExists)
 	escapedSpec := url.PathEscape(specID)
 	imageURL := func(name string) string {
 		src := "/specs/" + escapedSpec + "/images/" + url.PathEscape(name)

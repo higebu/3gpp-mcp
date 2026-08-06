@@ -1250,6 +1250,12 @@ const secNum = `([A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 // secNumRaw is secNum without capture group, used for multi-section list matching.
 const secNumRaw = `(?:[A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 
+// bareRefChain matches zero or more coordinated references (", clause 4.3",
+// " and 4.4", ", and 4.4", "; or Annex B") so bareTrailingQualRE and
+// barePresentDocRE can see through a list to the "of"/"in" that qualifies its
+// every element.
+const bareRefChain = `(?:` + sp + `*(?:[,;]` + sp + `*(?:and|or)?|and|or)` + sp + `*(?:(?:[Cc]lauses?|[Ss]ections?|[Ss]ubclauses?|[Aa]nnexe?s?)` + sp + `+)?` + secNumRaw + `)*`
+
 var (
 	// "TS 23.501 clause 5.1" or "3GPP TS 33.203 Annex H"
 	tsRefRE = regexp.MustCompile(`(?:3GPP` + sp + `+)?(TS|TR)` + sp + `+(\d+\.\d+)(?:` + sp + `*[,;]?` + sp + `*(?:clause|section|subclause|[Aa]nnex)` + sp + `+` + secNum + `)?`)
@@ -1279,6 +1285,50 @@ var (
 
 	// secNumListRE extracts individual section numbers from a comma/and-separated list.
 	secNumListRE = regexp.MustCompile(secNumRaw)
+
+	// bareRefRE matches a reference with no spec designator: "clause 4.2",
+	// "Subclause 5.15.2", "Annex B". Such a reference means the current
+	// document, so it is linkified only when it does not overlap a qualified
+	// match and the surrounding context does not tie it to another document
+	// (bareLeadingSpecRE, bareTrailingQualRE). Sentence-initial capitals are
+	// common in this form, so both cases are accepted.
+	bareRefRE = regexp.MustCompile(`\b(?:[Cc]lause|[Ss]ection|[Ss]ubclause|[Aa]nnex)` + sp + `+` + secNum)
+
+	// bareMultiRefRE matches a bare multi-section list: "clauses 4.2, 4.3 and 4.4".
+	// Groups: 1=section-list.
+	bareMultiRefRE = regexp.MustCompile(
+		`\b(?:[Cc]lauses|[Ss]ubclauses|[Ss]ections|[Aa]nnexe?s)` + sp + `+` +
+			`(` + secNumRaw + `(?:,` + sp + `*` + secNumRaw + `)*` + sp + `+and` + sp + `+` + secNumRaw + `)\b`)
+
+	// bareTrailingQualRE matches an "of"/"in" continuation after a bare
+	// reference, which usually names another document ("clause 5.1 of
+	// TS 23.402", "clause 4.2 of [26]", "clause 4 of ITU-T Recommendation
+	// X.509"). The chain prefix looks through coordinated references so the
+	// first element of "clause 4.2 and clause 4.3 of TS 23.402" is rejected
+	// too. RE2 has no lookahead, so these are applied to the text after a
+	// bare match instead of being part of bareRefRE.
+	bareTrailingQualRE = regexp.MustCompile(`^` + bareRefChain + sp + `+(?:of|in)` + sp + `+`)
+
+	// barePresentDocRE matches the continuations that still mean the current
+	// document, re-allowing a bare reference bareTrailingQualRE would reject.
+	barePresentDocRE = regexp.MustCompile(`^` + bareRefChain + sp + `+(?:of|in)` + sp +
+		`+(?:the` + sp + `+present` + sp + `+(?:document|specification)|this` + sp + `+(?:specification|document))`)
+
+	// bareTrailingParenSpecRE matches a parenthesized designator right after a
+	// bare reference ("clause 4.2 (TS 23.402)"), tying it to that document.
+	bareTrailingParenSpecRE = regexp.MustCompile(`^` + sp + `*\(` + sp + `*(?:3GPP` + sp +
+		`+)?(?:(?:TS|TR)` + sp + `+\d+\.\d+|RFC` + sp + `+\d+|\[\d+[A-Za-z]*\])`)
+
+	// bareLeadingSpecRE matches a spec designator or bracket reference before
+	// a bare reference — directly ("TS 23.402 Clause 5.1", "RFC 3748
+	// Section 3.1", "[19] Clause 6") or across a coordinated list
+	// ("TS 23.402 clause 4.2 and clause 5.1") — qualified territory even when
+	// the lowercase-only qualified patterns (and thus the overlap gate) do
+	// not cover the element itself.
+	bareLeadingSpecRE = regexp.MustCompile(
+		`(?:(?:TS|TR)` + sp + `+\d+\.\d+|RFC` + sp + `+\d+|\[\d+[A-Za-z]*\])` +
+			`(?:` + sp + `+(?:(?:[Cc]lauses?|[Ss]ections?|[Ss]ubclauses?|[Aa]nnexe?s?)` + sp + `+)?` + secNumRaw + bareRefChain + `)?` +
+			sp + `*[,;:]?` + sp + `*(?:(?:and|or)` + sp + `+)?$`)
 )
 
 // refExtractor converts regex submatch indices into (targetSpec, targetSection, ok).

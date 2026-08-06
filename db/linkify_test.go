@@ -73,7 +73,7 @@ func TestLinkifyRefs_TS(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := LinkifyRefs(tt.input, nil, urlFor)
+			got := LinkifyRefs(tt.input, nil, urlFor, nil)
 			if got != tt.want {
 				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
 			}
@@ -105,7 +105,7 @@ func TestLinkifyRefs_RFC(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := LinkifyRefs(tt.input, nil, urlFor)
+			got := LinkifyRefs(tt.input, nil, urlFor, nil)
 			if got != tt.want {
 				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
 			}
@@ -148,7 +148,7 @@ func TestLinkifyRefs_Bracket(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := LinkifyRefs(tt.input, bracketMap, urlFor)
+			got := LinkifyRefs(tt.input, bracketMap, urlFor, nil)
 			if got != tt.want {
 				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
 			}
@@ -210,7 +210,7 @@ func TestLinkifyRefs_MultiSection(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := LinkifyRefs(tt.input, nil, urlFor)
+			got := LinkifyRefs(tt.input, nil, urlFor, nil)
 			if got != tt.want {
 				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
 			}
@@ -221,7 +221,7 @@ func TestLinkifyRefs_MultiSection(t *testing.T) {
 func TestLinkifyRefs_NilBracketMap(t *testing.T) {
 	// Bracket refs should NOT be replaced when bracketMap is nil.
 	input := "See [19] clause 6 for details."
-	got := LinkifyRefs(input, nil, urlFor)
+	got := LinkifyRefs(input, nil, urlFor, nil)
 	if got != input {
 		t.Errorf("expected no change with nil bracketMap, got %q", got)
 	}
@@ -230,7 +230,7 @@ func TestLinkifyRefs_NilBracketMap(t *testing.T) {
 func TestLinkifyRefs_ExistingLink(t *testing.T) {
 	// References inside existing Markdown links should not be double-replaced.
 	input := "See [TS 23.501 clause 5](/specs/TS%2023.501/sections/5) for details."
-	got := LinkifyRefs(input, nil, urlFor)
+	got := LinkifyRefs(input, nil, urlFor, nil)
 	if got != input {
 		t.Errorf("existing link was modified:\n got:  %q\n want: %q", got, input)
 	}
@@ -238,7 +238,7 @@ func TestLinkifyRefs_ExistingLink(t *testing.T) {
 
 func TestLinkifyRefs_NoRef(t *testing.T) {
 	input := "This text has no spec references."
-	got := LinkifyRefs(input, nil, urlFor)
+	got := LinkifyRefs(input, nil, urlFor, nil)
 	if got != input {
 		t.Errorf("expected no change, got %q", got)
 	}
@@ -246,7 +246,7 @@ func TestLinkifyRefs_NoRef(t *testing.T) {
 
 func TestLinkifyRefs_MultipleRefs(t *testing.T) {
 	input := "See TS 23.501 and RFC 3748 for details."
-	got := LinkifyRefs(input, nil, urlFor)
+	got := LinkifyRefs(input, nil, urlFor, nil)
 	want := "See [TS 23.501](/specs/TS 23.501) and [RFC 3748](https://www.rfc-editor.org/rfc/rfc3748) for details."
 	if got != want {
 		t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", input, got, want)
@@ -338,7 +338,7 @@ func TestLinkifyRefs_CodeRegions(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := LinkifyRefs(tt.input, nil, urlFor)
+			got := LinkifyRefs(tt.input, nil, urlFor, nil)
 			if got != tt.want {
 				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
 			}
@@ -377,7 +377,7 @@ func TestLinkifyRefs_InsideTable(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := LinkifyRefs(tt.input, nil, urlFor)
+			got := LinkifyRefs(tt.input, nil, urlFor, nil)
 			if got != tt.want {
 				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
 			}
@@ -405,5 +405,257 @@ func TestRegionHelpers(t *testing.T) {
 	}
 	if got := regionEnd(regs, 3); got != 4 {
 		t.Errorf("regionEnd(3) = %d, want 4 (pos+1 fallback)", got)
+	}
+}
+
+// bareSectionSet reports the section numbers the fake current document has.
+func bareSectionSet(section string) bool {
+	switch section {
+	case "4.2", "5.1", "5.15.2", "5.15.3", "B", "B.1":
+		return true
+	}
+	return false
+}
+
+// bareURLFor resolves the empty-spec sentinel to the current spec, mirroring
+// the web viewer's urlFor closure.
+func bareURLFor(spec, section string) string {
+	if spec == "" {
+		spec = "TS 23.501"
+	}
+	return urlFor(spec, section)
+}
+
+func TestLinkifyRefs_BareRefs(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "bare clause",
+			input: "as described in clause 4.2 with details.",
+			want:  "as described in [clause 4.2](/specs/TS 23.501/sections/4.2) with details.",
+		},
+		{
+			name:  "sentence-initial capital",
+			input: "Clause 4.2 describes this.",
+			want:  "[Clause 4.2](/specs/TS 23.501/sections/4.2) describes this.",
+		},
+		{
+			name:  "bare subclause",
+			input: "See subclause 5.15.2.",
+			want:  "See [subclause 5.15.2](/specs/TS 23.501/sections/5.15.2).",
+		},
+		{
+			name:  "bare annex",
+			input: "See Annex B for details.",
+			want:  "See [Annex B](/specs/TS 23.501/sections/B) for details.",
+		},
+		{
+			name:  "bare annex with subsection",
+			input: "See Annex B.1 for details.",
+			want:  "See [Annex B.1](/specs/TS 23.501/sections/B.1) for details.",
+		},
+		{
+			name:  "nonexistent section stays plain",
+			input: "See clause 9.9.9 for details.",
+			want:  "See clause 9.9.9 for details.",
+		},
+		{
+			name:  "keyword inside a longer word stays plain",
+			input: "the intersection 4.2 metres wide",
+			want:  "the intersection 4.2 metres wide",
+		},
+		{
+			name:  "of-TS form keeps qualified link",
+			input: "As defined in clause 5.1 of TS 23.402.",
+			want:  "As defined in [clause 5.1 of TS 23.402](/specs/TS 23.402/sections/5.1).",
+		},
+		{
+			name:  "spec-first form keeps qualified link",
+			input: "See TS 23.402 clause 5.1 for details.",
+			want:  "See [TS 23.402 clause 5.1](/specs/TS 23.402/sections/5.1) for details.",
+		},
+		{
+			name:  "capitalized of-TS form not linked bare",
+			input: "Clause 5.1 of TS 23.402 applies.",
+			want:  "Clause 5.1 of [TS 23.402](/specs/TS 23.402) applies.",
+		},
+		{
+			name:  "capitalized after spec not linked bare",
+			input: "See TS 23.402 Clause 5.1.",
+			want:  "See [TS 23.402](/specs/TS 23.402) Clause 5.1.",
+		},
+		{
+			name:  "capitalized after RFC not linked bare",
+			input: "See RFC 3748 Section 5.1.",
+			want:  "See [RFC 3748](https://www.rfc-editor.org/rfc/rfc3748) Section 5.1.",
+		},
+		{
+			name:  "in-TS form not linked bare",
+			input: "as specified in clause 4.2 in TS 23.502.",
+			want:  "as specified in clause 4.2 in [TS 23.502](/specs/TS 23.502).",
+		},
+		{
+			name:  "of ITU-T recommendation not linked",
+			input: "clause 4.2 of ITU-T Recommendation X.509 applies.",
+			want:  "clause 4.2 of ITU-T Recommendation X.509 applies.",
+		},
+		{
+			name:  "of present document links",
+			input: "as specified in clause 4.2 of the present document.",
+			want:  "as specified in [clause 4.2](/specs/TS 23.501/sections/4.2) of the present document.",
+		},
+		{
+			name:  "of present specification links",
+			input: "as specified in clause 4.2 of the present specification.",
+			want:  "as specified in [clause 4.2](/specs/TS 23.501/sections/4.2) of the present specification.",
+		},
+		{
+			name:  "coordinated list of TS not linked bare",
+			input: "See clause 4.2 and clause 5.1 of TS 23.402.",
+			want:  "See clause 4.2 and [clause 5.1 of TS 23.402](/specs/TS 23.402/sections/5.1).",
+		},
+		{
+			name:  "coordinated bare numbers of TS keep qualified links",
+			input: "See clause 4.2 and 5.1 of TS 23.402.",
+			want:  "See clause [4.2](/specs/TS 23.402/sections/4.2) and [5.1](/specs/TS 23.402/sections/5.1) of [TS 23.402](/specs/TS 23.402).",
+		},
+		{
+			name:  "trailing element after spec-first list not linked bare",
+			input: "See TS 23.402 clause 4.2 and clause 5.1 for details.",
+			want:  "See [TS 23.402 clause 4.2](/specs/TS 23.402/sections/4.2) and clause 5.1 for details.",
+		},
+		{
+			name:  "parenthesized designator not linked bare",
+			input: "See clause 4.2 (TS 23.402).",
+			want:  "See clause 4.2 ([TS 23.402](/specs/TS 23.402)).",
+		},
+		{
+			name:  "colon after spec not linked bare",
+			input: "See TS 23.402: Clause 5.1.",
+			want:  "See [TS 23.402](/specs/TS 23.402): Clause 5.1.",
+		},
+		{
+			name:  "mixed singular plural list of TS not linked bare",
+			input: "See clause 4.2 and clauses 5.1, 5.15.2 of TS 23.402.",
+			want:  "See clause 4.2 and clauses 5.1, 5.15.2 of [TS 23.402](/specs/TS 23.402).",
+		},
+		{
+			name:  "oxford comma list of TS not linked bare",
+			input: "See clause 4.2, 5.1, and 5.15.2 of TS 23.402.",
+			want:  "See clause 4.2, 5.1, and 5.15.2 of [TS 23.402](/specs/TS 23.402).",
+		},
+		{
+			name:  "coordinated list of present document links all",
+			input: "See clause 4.2 and clause 5.1 of the present document.",
+			want:  "See [clause 4.2](/specs/TS 23.501/sections/4.2) and [clause 5.1](/specs/TS 23.501/sections/5.1) of the present document.",
+		},
+		{
+			name:  "coordinated list without qualifier links all",
+			input: "See clause 4.2 and clause 5.1 for details.",
+			want:  "See [clause 4.2](/specs/TS 23.501/sections/4.2) and [clause 5.1](/specs/TS 23.501/sections/5.1) for details.",
+		},
+		{
+			name:  "in this specification links",
+			input: "as specified in clause 4.2 in this specification.",
+			want:  "as specified in [clause 4.2](/specs/TS 23.501/sections/4.2) in this specification.",
+		},
+		{
+			name:  "this clause without number stays plain",
+			input: "as described in this clause.",
+			want:  "as described in this clause.",
+		},
+		{
+			name:  "bare plural list",
+			input: "See clauses 5.15.2 and 5.15.3.",
+			want:  "See clauses [5.15.2](/specs/TS 23.501/sections/5.15.2) and [5.15.3](/specs/TS 23.501/sections/5.15.3).",
+		},
+		{
+			name:  "bare plural list with comma",
+			input: "See clauses 4.2, 5.15.2 and 5.15.3.",
+			want:  "See clauses [4.2](/specs/TS 23.501/sections/4.2), [5.15.2](/specs/TS 23.501/sections/5.15.2) and [5.15.3](/specs/TS 23.501/sections/5.15.3).",
+		},
+		{
+			name:  "bare plural links only existing sections",
+			input: "See clauses 5.15.2 and 9.9.",
+			want:  "See clauses [5.15.2](/specs/TS 23.501/sections/5.15.2) and 9.9.",
+		},
+		{
+			name:  "bare plural with no existing section stays plain",
+			input: "See clauses 9.8 and 9.9.",
+			want:  "See clauses 9.8 and 9.9.",
+		},
+		{
+			name:  "plural of-TS form keeps qualified links",
+			input: "See clauses 5.15.2 and 5.15.3 of TS 23.402.",
+			want:  "See clauses [5.15.2](/specs/TS 23.402/sections/5.15.2) and [5.15.3](/specs/TS 23.402/sections/5.15.3) of [TS 23.402](/specs/TS 23.402).",
+		},
+		{
+			name:  "bare ref in table cell becomes HTML anchor",
+			input: "<table><tr><td>see clause 4.2</td></tr></table>",
+			want:  `<table><tr><td>see <a href="/specs/TS 23.501/sections/4.2">clause 4.2</a></td></tr></table>`,
+		},
+		{
+			name:  "bare ref in fenced code stays plain",
+			input: "```\nclause 4.2\n```\n",
+			want:  "```\nclause 4.2\n```\n",
+		},
+		{
+			name:  "bare ref in existing link stays plain",
+			input: "[clause 4.2](/specs/TS%2023.501/sections/4.2)",
+			want:  "[clause 4.2](/specs/TS%2023.501/sections/4.2)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LinkifyRefs(tt.input, nil, bareURLFor, bareSectionSet)
+			if got != tt.want {
+				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLinkifyRefs_BareRefsWithBracketMap(t *testing.T) {
+	bracketMap := map[string]string{"19": "TS 33.203"}
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "bracket-first form keeps qualified link",
+			input: "See [19] clause 5.1 for details.",
+			want:  "See [[19] clause 5.1](/specs/TS 33.203/sections/5.1) for details.",
+		},
+		{
+			name:  "capitalized after bracket not linked bare",
+			input: "See [19] Clause 5.1.",
+			want:  "See [19] Clause 5.1.",
+		},
+		{
+			name:  "of-bracket form not linked bare",
+			input: "see clause 4.2 of [19].",
+			want:  "see clause 4.2 of [19].",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LinkifyRefs(tt.input, bracketMap, bareURLFor, bareSectionSet)
+			if got != tt.want {
+				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// A nil sectionExists must disable bare linkification entirely.
+func TestLinkifyRefs_BareRefsNilGate(t *testing.T) {
+	input := "as described in clause 4.2 with details."
+	got := LinkifyRefs(input, nil, bareURLFor, nil)
+	if got != input {
+		t.Errorf("expected no change with nil sectionExists, got %q", got)
 	}
 }
