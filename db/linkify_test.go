@@ -792,6 +792,24 @@ func TestLinkifyRefs_PrepositionNeedsKeyword(t *testing.T) {
 
 // URLFor is the one mandatory option; without it LinkifyRefs is a no-op
 // instead of a panic.
+// Regression test for #135: an unclosed "[" (e.g. an interval like "[0, 1)"
+// or an unterminated editor's note "[FFS ...") must not have existingLinkRE
+// treat everything up to a later, unrelated "](" — such as a real image
+// link several paragraphs down — as one giant existing link. That used to
+// swallow every reference in between, suppressing their linkification.
+func TestLinkifyRefs_UnclosedBracketDoesNotSuppressLaterRefs(t *testing.T) {
+	input := "The interval is [0, 1) as noted.\n\n" +
+		"See TS 23.501 for architecture details.\n\n" +
+		"![diagram](image://foo.png)"
+	want := "The interval is [0, 1) as noted.\n\n" +
+		"See [TS 23.501](/specs/TS 23.501) for architecture details.\n\n" +
+		"![diagram](image://foo.png)"
+	got := LinkifyRefs(input, LinkifyRefsOpts{URLFor: urlFor})
+	if got != want {
+		t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", input, got, want)
+	}
+}
+
 func TestLinkifyRefs_NilURLFor(t *testing.T) {
 	input := "See TS 23.501 clause 5.1."
 	if got := LinkifyRefs(input, LinkifyRefsOpts{}); got != input {

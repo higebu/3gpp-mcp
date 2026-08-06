@@ -1378,6 +1378,100 @@ func TestInsertSpecWithSections_References(t *testing.T) {
 	}
 }
 
+func TestInsertSpecWithSections_DeleteStaleReferencesError(t *testing.T) {
+	// Covers the "delete stale references" error branch added for #134: a
+	// BEFORE DELETE trigger on spec_references forces the DELETE issued
+	// ahead of re-extraction to fail, so InsertSpecWithSections must
+	// propagate that error instead of silently continuing. The trigger only
+	// fires per matched row, so a pre-existing reference row for the same
+	// (spec, version, section) is seeded first.
+	d := setupTestDB(t)
+
+	if err := d.Exec(
+		"INSERT INTO spec_references (source_spec_id, source_version, source_section, target_spec, target_section, context) VALUES (?, ?, ?, ?, ?, ?)",
+		"TS 99.003", "1.0.0", "1", "TS 23.501", "5.1", "seed",
+	); err != nil {
+		t.Fatalf("seed reference: %v", err)
+	}
+	if err := d.Exec(
+		"CREATE TRIGGER block_ref_delete BEFORE DELETE ON spec_references BEGIN SELECT RAISE(ABORT, 'blocked for test'); END",
+	); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	spec := Spec{ID: "TS 99.003", Version: "1.0.0", Title: "Test Spec", Series: "99"}
+	sections := []Section{
+		{
+			SpecID:  "TS 99.003",
+			Version: "1.0.0",
+			Number:  "1",
+			Title:   "Scope",
+			Level:   1,
+			Content: "# 1 Scope\nNo references here.",
+		},
+	}
+
+	err := d.InsertSpecWithSections(spec, sections)
+	if err == nil {
+		t.Fatal("expected error from blocked spec_references delete")
+	}
+	if !strings.Contains(err.Error(), "delete stale references") {
+		t.Errorf("expected \"delete stale references\" error, got: %v", err)
+	}
+}
+
+func TestInsertSpecWithSections_ReimportDropsStaleReferences(t *testing.T) {
+	// Regression test for #134: re-importing the same (spec, version) must
+	// drop references the new content no longer produces. INSERT OR REPLACE
+	// only overwrites rows whose (source, target) pair still matches, so a
+	// reference extracted from the old content but absent from the new
+	// content would otherwise survive forever.
+	d := setupTestDB(t)
+
+	spec := Spec{ID: "TS 99.002", Version: "1.0.0", Title: "Test Spec", Series: "99"}
+	sections := []Section{
+		{
+			SpecID:  "TS 99.002",
+			Version: "1.0.0",
+			Number:  "1",
+			Title:   "Scope",
+			Level:   1,
+			Content: "# 1 Scope\nThis spec references TS 23.501 clause 5.1.",
+		},
+	}
+	if err := d.InsertSpecWithSections(spec, sections); err != nil {
+		t.Fatalf("initial import: %v", err)
+	}
+
+	refs, err := d.GetReferences(t.Context(), "TS 99.002", "1.0.0", "1", "outgoing", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(refs) != 1 || refs[0].TargetSpec != "TS 23.501" || refs[0].TargetSection != "5.1" {
+		t.Fatalf("expected initial ref to TS 23.501 5.1, got %+v", refs)
+	}
+
+	// Re-import the same (spec, version, section) with content that no
+	// longer references TS 23.501.
+	sections[0].Content = "# 1 Scope\nThis spec references RFC 8259 instead."
+	if err := d.InsertSpecWithSections(spec, sections); err != nil {
+		t.Fatalf("re-import: %v", err)
+	}
+
+	refs, err = d.GetReferences(t.Context(), "TS 99.002", "1.0.0", "1", "outgoing", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(refs) != 1 || refs[0].TargetSpec != "RFC 8259" {
+		t.Fatalf("expected only RFC 8259 ref after re-import, got %+v", refs)
+	}
+	for _, r := range refs {
+		if r.TargetSpec == "TS 23.501" {
+			t.Errorf("stale reference to TS 23.501 survived re-import: %+v", r)
+		}
+	}
+}
+
 func TestParseBracketedRefMap(t *testing.T) {
 	content := `## 2 References
 
@@ -2253,6 +2347,53 @@ func TestQueryMethodsHonorContext(t *testing.T) {
 		if err := tc.call(); !errors.Is(err, context.Canceled) {
 			t.Errorf("%s with cancelled context: err = %v, want context.Canceled", tc.name, err)
 		}
+	}
+}
+
+func TestExtractReferences_PluralKeyword(t *testing.T) {
+	// Regression test for #133: tsRefRE's keyword alternation must accept
+	// plurals ("clauses"), or it falls through to matching just "TS 23.402"
+	// with an empty TargetSection alongside the correct multi-section refs
+	// produced by tsMultiRefRE.
+	content := "See TS 23.402 clauses 8.2 and 16.11 for details."
+
+	refs := ExtractReferences("TS 24.229", "5.1", content, nil)
+
+	if len(refs) != 2 {
+		t.Fatalf("expected 2 references, got %d: %+v", len(refs), refs)
+	}
+	for _, want := range []string{"8.2", "16.11"} {
+		found := false
+		for _, r := range refs {
+			if r.TargetSpec == "TS 23.402" && r.TargetSection == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected reference to TS 23.402 section %s, got refs: %+v", want, refs)
+		}
+	}
+	for _, r := range refs {
+		if r.TargetSpec == "TS 23.402" && r.TargetSection == "" {
+			t.Errorf("unexpected reference with empty TargetSection: %+v", r)
+		}
+	}
+}
+
+func TestExtractReferences_PluralKeywordSingleSection(t *testing.T) {
+	// Direct exercise of tsRefRE's keyword alternation with a plural keyword
+	// but only one section number (no "and" list, so tsMultiRefRE does not
+	// match): the section must still be captured, not dropped.
+	content := "The procedures are described in TS 23.501 sections 5.1."
+
+	refs := ExtractReferences("TS 24.229", "5.1", content, nil)
+
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 reference, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].TargetSpec != "TS 23.501" || refs[0].TargetSection != "5.1" {
+		t.Errorf("expected TS 23.501 section 5.1, got %+v", refs[0])
 	}
 }
 
