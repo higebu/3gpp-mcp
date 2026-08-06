@@ -360,6 +360,45 @@ func TestDownloadSpecs_ConvertDocPerSpec(t *testing.T) {
 	}
 }
 
+// TestDownloadSpecs_ConvertDocIgnoresStaleOutput verifies that a leftover
+// .docx from an earlier invocation of this command does not get mistaken for
+// evidence that this run's conversion succeeded (ocr review finding on
+// #143's fix). outputDir is the caller's persistent --output-dir and is
+// never cleared between runs, so a stale file can already sit at a spec's
+// expected output path before conversion even starts this time.
+func TestDownloadSpecs_ConvertDocIgnoresStaleOutput(t *testing.T) {
+	writeFakeLibreOffice(t)
+
+	zip := makeZipWithFiles(t, map[string][]byte{
+		"specC-fail.doc": []byte("c1"),
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zip)
+	}))
+	defer ts.Close()
+
+	specs := []*SpecVersion{
+		{SpecID: "TS 88.003", URL: ts.URL + "/c.zip"},
+	}
+
+	outputDir := t.TempDir()
+	// Plant a stale .docx at the exact path this spec's .doc file would
+	// convert to, simulating leftover output from an earlier run.
+	if err := os.WriteFile(filepath.Join(outputDir, "specC-fail.docx"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := DownloadSpecs(context.Background(), &http.Client{}, specs, outputDir, 2, true, 10*time.Second)
+
+	if stats["OK"] != 0 {
+		t.Errorf("OK = %d, want 0 (this run's conversion failed; the stale .docx must not count)", stats["OK"])
+	}
+	if stats["DOC_ONLY"] != 1 {
+		t.Errorf("DOC_ONLY = %d, want 1", stats["DOC_ONLY"])
+	}
+}
+
 // TestConvertDocFiles_NoDocFiles verifies ConvertDocFiles returns (0, nil)
 // when the directory contains no .doc files (happy but trivial path).
 func TestConvertDocFiles_NoDocFiles(t *testing.T) {
