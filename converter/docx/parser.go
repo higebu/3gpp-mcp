@@ -603,6 +603,14 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 						continue
 					case !isCodePara && len(info.Images) == 0 && matchXMLContinuation(info, &xmlTracker):
 						line := codeLineText(info)
+						// Observe on a copy first: whether this line closes an
+						// element decides where it and anything held belong, and
+						// that is only known after the line has been parsed.
+						// minDepth, not the depth left at the end of the line,
+						// is what answers it — "</a><b>" closes a and opens b.
+						probe := xmlTracker
+						probe.observe(line)
+						isMarkup := matchXMLLine(info, &xmlTracker)
 						switch {
 						case len(xmlHeld) > 0:
 							// Only the close of the element that was open when
@@ -611,26 +619,34 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 							// merely opens something new — is held as well, so
 							// document order survives and unrelated markup later
 							// in the clause cannot fence the prose in between.
-							probe := xmlTracker
-							probe.observe(line)
-							if probe.depth < xmlHeldDepth {
+							// Nesting opened and closed while holding never
+							// reaches below xmlHeldDepth, so it neither confirms
+							// nor disturbs the wait; comments, CDATA and
+							// self-closing tags leave the depth alone entirely.
+							if probe.minDepth < xmlHeldDepth {
 								commitXMLHeld()
 								xmlBuffer = append(xmlBuffer, line)
 							} else {
 								holdXMLLine(info, styleName)
 							}
-							xmlTracker = probe
-						case matchXMLLine(info, &xmlTracker):
+						case isMarkup:
 							// Markup in its own right: straight into the fence.
 							xmlBuffer = append(xmlBuffer, line)
-							xmlTracker.observe(line)
+						case probe.minDepth < xmlTracker.depth:
+							// Text absorbed by an open element that this very
+							// paragraph closes ("some text </a>"): already
+							// confirmed, so there is nothing to hold.
+							xmlBuffer = append(xmlBuffer, line)
 						default:
 							// Absorbed only on the strength of an open element,
-							// so hold it until that element closes.
+							// so hold it until that element closes. xmlHeldDepth
+							// is written whenever holding starts from empty and
+							// read only while xmlHeld is non-empty, so it can
+							// never be stale.
 							xmlHeldDepth = xmlTracker.depth
 							holdXMLLine(info, styleName)
-							xmlTracker.observe(line)
 						}
+						xmlTracker = probe
 						continue
 					default:
 						// First non-matching (or code-styled) paragraph ends

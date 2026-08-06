@@ -417,6 +417,102 @@ func TestParseSections_XMLMixedContentStaysFenced(t *testing.T) {
 	}
 }
 
+// A paragraph that closes an element and opens a sibling in one go ends at the
+// depth it started from, but it did close the element whose content preceded
+// it: that content belongs in the fence, while text absorbed by the sibling
+// that never closes does not (issue #136).
+func TestParseSections_XMLCloseAndSiblingOpenConfirmsContent(t *testing.T) {
+	elements := []bodyElement{
+		xmlTestHeading("6.8\tXML body"),
+		xmlTestPara(`<?xml version="1.0" encoding="UTF-8"?>`),
+		xmlTestPara(`<a>`),
+		xmlTestPara("Legit text content of a."),
+		xmlTestPara(`</a><b>`),
+		xmlTestPara("Prose absorbed by the unclosed sibling."),
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	content := sections[0].Content
+	if len(content) != 2 {
+		t.Fatalf("expected fence + prose, got %v", content)
+	}
+	if !strings.Contains(content[0], "Legit text content of a.\n</a><b>\n```") {
+		t.Errorf("expected the content confirmed by the close inside the fence, got %q", content[0])
+	}
+	if content[1] != "Prose absorbed by the unclosed sibling." {
+		t.Errorf("expected the unconfirmed paragraph replayed as prose, got %q", content[1])
+	}
+
+	// The same holds several levels in: closing back past the depth where
+	// holding started confirms the content, even in one paragraph.
+	elements = []bodyElement{
+		xmlTestHeading("6.9\tXML body"),
+		xmlTestPara(`<?xml version="1.0" encoding="UTF-8"?>`),
+		xmlTestPara(`<a><b><c>`),
+		xmlTestPara("Deeply nested text."),
+		xmlTestPara(`</c></b>`),
+		xmlTestPara("Trailing prose."),
+	}
+	sections = parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	content = sections[0].Content
+	if len(content) != 2 {
+		t.Fatalf("expected fence + prose, got %v", content)
+	}
+	if !strings.Contains(content[0], "Deeply nested text.\n</c></b>\n```") {
+		t.Errorf("expected the nested content inside the fence, got %q", content[0])
+	}
+}
+
+// Text that closes the element it was absorbed under, in the very paragraph
+// that would otherwise be held, needs no confirmation from a later line and
+// must keep its place in the fence.
+func TestParseSections_XMLContentClosingItsOwnElement(t *testing.T) {
+	elements := []bodyElement{
+		xmlTestHeading("6.10\tXML body"),
+		xmlTestPara(`<?xml version="1.0" encoding="UTF-8"?>`),
+		xmlTestPara(`<a>`),
+		xmlTestPara("some text </a>"),
+		xmlTestPara("Trailing prose."),
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	content := sections[0].Content
+	if len(content) != 2 {
+		t.Fatalf("expected fence + prose, got %v", content)
+	}
+	if !strings.Contains(content[0], "<a>\nsome text </a>\n```") {
+		t.Errorf("expected the self-closing content inside the fence, got %q", content[0])
+	}
+	if content[1] != "Trailing prose." {
+		t.Errorf("expected trailing prose outside the fence, got %q", content[1])
+	}
+}
+
+// Markup that leaves the element depth alone — a comment, a CDATA section, a
+// self-closing tag — proves nothing about the open element, so it must not
+// confirm the paragraphs held before it.
+func TestParseSections_XMLDepthNeutralMarkupDoesNotConfirm(t *testing.T) {
+	for _, neutral := range []string{`<!-- note -->`, `<![CDATA[x < y]]>`, `<br/>`} {
+		elements := []bodyElement{
+			xmlTestHeading("6.11\tXML body"),
+			xmlTestPara(`<?xml version="1.0" encoding="UTF-8"?>`),
+			xmlTestPara(`<a>`),
+			xmlTestPara("This clause text must stay prose."),
+			xmlTestPara(neutral),
+			xmlTestPara("Tail prose."),
+		}
+		sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+		content := sections[0].Content
+		if len(content) != 4 {
+			t.Fatalf("%s: expected fence + 3 replayed paragraphs, got %v", neutral, content)
+		}
+		if strings.Contains(content[0], "clause text") {
+			t.Errorf("%s: prose fenced by depth-neutral markup: %q", neutral, content[0])
+		}
+		if content[1] != "This clause text must stay prose." || content[2] != neutral {
+			t.Errorf("%s: expected the held paragraphs replayed in order, got %v", neutral, content[1:])
+		}
+	}
+}
+
 // Unconfirmed paragraphs must not be fenced by markup that merely turns up
 // later in the clause: an unrelated tag line does not close the element they
 // were absorbed under, so the clause text between the two stays prose.

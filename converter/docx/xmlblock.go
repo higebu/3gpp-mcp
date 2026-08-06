@@ -119,10 +119,18 @@ type xmlLineTracker struct {
 	inComment bool
 	depth     int    // element nesting depth of the captured lines
 	pending   string // unterminated tag text carried over from the previous line
+	// minDepth is the lowest depth reached while observing the most recent
+	// line, which is not the same as the depth left at its end: a paragraph
+	// that closes an element and opens a sibling in one go ("</a><b>") ends at
+	// the depth it started from, yet it did close the element whose content
+	// preceded it. Callers deciding whether an element has closed must read
+	// this rather than depth (issue #136).
+	minDepth int
 }
 
 // observe updates the tracker after line has been captured into the block.
 func (t *xmlLineTracker) observe(line string) {
+	t.minDepth = t.depth
 	rest := line
 	if t.inComment {
 		loc := xmlCommentCloseRE.FindStringIndex(rest)
@@ -247,6 +255,9 @@ func (t *xmlLineTracker) observeTag(tag string) {
 	if inner[0] == '/' {
 		if t.depth > 0 {
 			t.depth--
+		}
+		if t.depth < t.minDepth {
+			t.minDepth = t.depth
 		}
 		return
 	}
