@@ -16,6 +16,7 @@ import (
 	"github.com/higebu/3gpp-mcp/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/db"
 	"github.com/higebu/3gpp-mcp/versionstore"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // redirectTransport rewrites all request URLs to point at the test server,
@@ -462,6 +463,44 @@ func TestHandleListVersions(t *testing.T) {
 		if out.Versions[i] != w {
 			t.Errorf("versions[%d] = %+v, want %+v", i, out.Versions[i], w)
 		}
+	}
+}
+
+// TestHandleListVersionsSurfacesArchiveFailure checks that a failed archive
+// listing is reported alongside a partial version list — versions found via
+// the database or cache must not be presented as if they were the complete
+// set when the archive listing itself failed.
+func TestHandleListVersionsSurfacesArchiveFailure(t *testing.T) {
+	d := setupTestDB(t)
+	src := NewSource(d)
+	src.Client = unreachableArchiveClient(t)
+	src.UseCache = false
+	handler := HandleListVersions(src)
+
+	result, _, err := handler(context.Background(), nil, ListVersionsInput{SpecID: "TS 23.501"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("a partial list with a warning should not be a tool error: %s", getTextContent(result))
+	}
+
+	// The JSON payload must still parse and hold the versions that were
+	// found (from the database here), not be corrupted by the warning.
+	var out ListVersionsOutput
+	if err := json.Unmarshal([]byte(getTextContent(result)), &out); err != nil {
+		t.Fatalf("payload is not valid JSON: %v; got %q", err, getTextContent(result))
+	}
+	if len(out.Versions) != 1 || out.Versions[0].Version != "18.6.0" {
+		t.Fatalf("expected the one database version, got %+v", out.Versions)
+	}
+
+	if len(result.Content) != 2 {
+		t.Fatalf("expected the archive-failure warning as a second content item, got %d items", len(result.Content))
+	}
+	warning := result.Content[1].(*mcp.TextContent).Text
+	if !strings.Contains(warning, "failed to list archive versions") || !strings.Contains(warning, "TS 23.501") {
+		t.Errorf("expected a warning naming the archive failure, got: %q", warning)
 	}
 }
 
