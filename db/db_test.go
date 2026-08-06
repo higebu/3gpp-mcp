@@ -1256,6 +1256,58 @@ func TestInsertSpecWithSections_References(t *testing.T) {
 	}
 }
 
+func TestInsertSpecWithSections_ReimportDropsStaleReferences(t *testing.T) {
+	// Regression test for #134: re-importing the same (spec, version) must
+	// drop references the new content no longer produces. INSERT OR REPLACE
+	// only overwrites rows whose (source, target) pair still matches, so a
+	// reference extracted from the old content but absent from the new
+	// content would otherwise survive forever.
+	d := setupTestDB(t)
+
+	spec := Spec{ID: "TS 99.002", Version: "1.0.0", Title: "Test Spec", Series: "99"}
+	sections := []Section{
+		{
+			SpecID:  "TS 99.002",
+			Version: "1.0.0",
+			Number:  "1",
+			Title:   "Scope",
+			Level:   1,
+			Content: "# 1 Scope\nThis spec references TS 23.501 clause 5.1.",
+		},
+	}
+	if err := d.InsertSpecWithSections(spec, sections); err != nil {
+		t.Fatalf("initial import: %v", err)
+	}
+
+	refs, err := d.GetReferences(t.Context(), "TS 99.002", "1.0.0", "1", "outgoing", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(refs) != 1 || refs[0].TargetSpec != "TS 23.501" || refs[0].TargetSection != "5.1" {
+		t.Fatalf("expected initial ref to TS 23.501 5.1, got %+v", refs)
+	}
+
+	// Re-import the same (spec, version, section) with content that no
+	// longer references TS 23.501.
+	sections[0].Content = "# 1 Scope\nThis spec references RFC 8259 instead."
+	if err := d.InsertSpecWithSections(spec, sections); err != nil {
+		t.Fatalf("re-import: %v", err)
+	}
+
+	refs, err = d.GetReferences(t.Context(), "TS 99.002", "1.0.0", "1", "outgoing", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(refs) != 1 || refs[0].TargetSpec != "RFC 8259" {
+		t.Fatalf("expected only RFC 8259 ref after re-import, got %+v", refs)
+	}
+	for _, r := range refs {
+		if r.TargetSpec == "TS 23.501" {
+			t.Errorf("stale reference to TS 23.501 survived re-import: %+v", r)
+		}
+	}
+}
+
 func TestParseBracketedRefMap(t *testing.T) {
 	content := `## 2 References
 

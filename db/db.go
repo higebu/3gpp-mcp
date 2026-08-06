@@ -543,6 +543,18 @@ func (d *DB) InsertSpecWithSectionsAndImages(spec Spec, sections []Section, imag
 	}
 	defer refStmt.Close()
 
+	// Same-version re-import (e.g. after a reference-extraction fix) must not
+	// leave references that the new extraction no longer produces: INSERT OR
+	// REPLACE only overwrites rows whose (source, target) pair still matches,
+	// so a section's stale references need an explicit delete first.
+	delRefStmt, err := tx.Prepare(
+		"DELETE FROM spec_references WHERE source_spec_id = ? AND source_version = ? AND source_section = ?",
+	)
+	if err != nil {
+		return fmt.Errorf("prepare ref delete: %w", err)
+	}
+	defer delRefStmt.Close()
+
 	// Build bracketed reference map from the References section.
 	var bracketMap map[string]string
 	for _, s := range sections {
@@ -608,6 +620,10 @@ func (d *DB) InsertSpecWithSectionsAndImages(spec Spec, sections []Section, imag
 		_, err = insStmt.Exec(s.SpecID, spec.Version, s.Number, s.Title, s.Level, s.ParentNumber, s.Content)
 		if err != nil {
 			return fmt.Errorf("insert section: %w", err)
+		}
+
+		if _, err = delRefStmt.Exec(s.SpecID, spec.Version, s.Number); err != nil {
+			return fmt.Errorf("delete stale references: %w", err)
 		}
 
 		refs := ExtractReferences(s.SpecID, s.Number, s.Content, bracketMap)
