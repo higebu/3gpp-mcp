@@ -356,21 +356,44 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 	var xmlPending *paragraphInfo
 	var xmlPendingStyle string
 	inXML := false
+	// Paragraphs absorbed only because an element is still open (they carry no
+	// markup of their own) are held here instead of going straight into the
+	// fence: element text content is confirmed by the markup that follows it,
+	// while a block whose closing tag never comes must not turn the rest of the
+	// clause into code (issue #136). Held paragraphs join the fence as soon as
+	// another markup line arrives, and are replayed as ordinary paragraphs when
+	// the block ends before that happens.
+	var xmlHeld []paragraphInfo
+	var xmlHeldStyles []string
+	holdXMLLine := func(info paragraphInfo, styleName string) {
+		xmlHeld = append(xmlHeld, info)
+		xmlHeldStyles = append(xmlHeldStyles, styleName)
+	}
+	commitXMLHeld := func() {
+		for _, info := range xmlHeld {
+			xmlBuffer = append(xmlBuffer, codeLineText(info))
+		}
+		xmlHeld, xmlHeldStyles = nil, nil
+	}
 	flushXML := func() {
 		inXML = false
 		xmlTracker = xmlLineTracker{}
-		if len(xmlBuffer) == 0 || currentSection == nil {
-			xmlBuffer = nil
-			return
-		}
-		for len(xmlBuffer) > 0 && strings.TrimSpace(xmlBuffer[len(xmlBuffer)-1]) == "" {
-			xmlBuffer = xmlBuffer[:len(xmlBuffer)-1]
-		}
-		if len(xmlBuffer) > 0 {
-			currentSection.Content = append(currentSection.Content,
-				"```xml\n"+strings.Join(xmlBuffer, "\n")+"\n```")
+		held, heldStyles := xmlHeld, xmlHeldStyles
+		xmlHeld, xmlHeldStyles = nil, nil
+		if len(xmlBuffer) > 0 && currentSection != nil {
+			for len(xmlBuffer) > 0 && strings.TrimSpace(xmlBuffer[len(xmlBuffer)-1]) == "" {
+				xmlBuffer = xmlBuffer[:len(xmlBuffer)-1]
+			}
+			if len(xmlBuffer) > 0 {
+				currentSection.Content = append(currentSection.Content,
+					"```xml\n"+strings.Join(xmlBuffer, "\n")+"\n```")
+			}
 		}
 		xmlBuffer = nil
+		// The unconfirmed lines belong after the fence, as the prose they are.
+		for i, info := range held {
+			emitParagraph(info, heldStyles[i])
+		}
 	}
 	abandonXMLPending := func() {
 		if xmlPending == nil {
@@ -569,12 +592,26 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 						// Preserve blank lines inside a pending block
 						// (whitespace-only paragraphs included, so indentation
 						// filler does not split the fence); trailing ones are
-						// trimmed at flush.
-						xmlBuffer = append(xmlBuffer, "")
+						// trimmed at flush. A blank line after unconfirmed
+						// content is held with it, so the two keep their order.
+						if len(xmlHeld) > 0 {
+							holdXMLLine(info, styleName)
+						} else {
+							xmlBuffer = append(xmlBuffer, "")
+						}
 						continue
 					case !isCodePara && len(info.Images) == 0 && matchXMLContinuation(info, &xmlTracker):
 						line := codeLineText(info)
-						xmlBuffer = append(xmlBuffer, line)
+						if matchXMLLine(info, &xmlTracker) {
+							// A line that looks like XML by itself confirms
+							// whatever content was held before it.
+							commitXMLHeld()
+							xmlBuffer = append(xmlBuffer, line)
+						} else {
+							// Absorbed only on the strength of an open element:
+							// hold it until markup confirms it belongs inside.
+							holdXMLLine(info, styleName)
+						}
 						xmlTracker.observe(line)
 						continue
 					default:

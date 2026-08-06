@@ -107,45 +107,6 @@ func TestXMLLineTrackerUnterminatedNotSticky(t *testing.T) {
 	}
 }
 
-// An element that is never closed keeps depth above zero, but it only absorbs
-// a bounded run of markup-free paragraphs instead of every following one
-// (issue #136).
-func TestXMLLineTrackerUnbalancedDepthBounded(t *testing.T) {
-	prose := paragraphInfo{
-		Text: "Ordinary prose paragraph.",
-		Runs: []runInfo{{Text: "Ordinary prose paragraph."}},
-	}
-
-	var tr xmlLineTracker
-	tr.observe(`<root>`)
-	tr.observe(`<child>`)
-	if tr.depth != 2 {
-		t.Fatalf("expected depth 2 after two unclosed elements, got %d", tr.depth)
-	}
-	for i := 0; i < xmlMaxOpenElementPlainLines; i++ {
-		if !matchXMLContinuation(prose, &tr) {
-			t.Fatalf("expected element content line %d to be absorbed", i+1)
-		}
-		tr.observe(prose.Text)
-	}
-	if matchXMLContinuation(prose, &tr) {
-		t.Error("expected the unbalanced block to give up instead of absorbing prose without end")
-	}
-
-	// A markup line in between resets the allowance: genuine element content
-	// interleaved with tags keeps the block together.
-	tr = xmlLineTracker{}
-	tr.observe(`<xs:annotation><xs:documentation>Template of a`)
-	if !matchXMLContinuation(prose, &tr) {
-		t.Fatal("expected element content to be absorbed")
-	}
-	tr.observe(`Service XML Schema`)
-	tr.observe(`</xs:documentation>`)
-	if !matchXMLContinuation(prose, &tr) {
-		t.Error("expected the plain-line allowance to reset after a markup line")
-	}
-}
-
 // An unterminated "<…" joined with a line that opens markup of its own must
 // not be counted as a start element: the fabricated tag both inflates the depth
 // and swallows the close tag that would balance it, so the depth would never
@@ -351,8 +312,8 @@ func TestParseSections_XMLUnterminatedNotSwallowingProse(t *testing.T) {
 }
 
 // An XML block whose closing tags are missing must not turn the rest of the
-// clause into code: absorption stops after a bounded run of prose paragraphs
-// instead of running to the next heading or table (issue #136).
+// clause into code: paragraphs absorbed only because an element stayed open
+// are replayed as prose when no markup ever confirms them (issue #136).
 func TestParseSections_XMLUnbalancedStopsAbsorbingProse(t *testing.T) {
 	elements := []bodyElement{
 		xmlTestHeading("6.4\tXML body"),
@@ -369,22 +330,55 @@ func TestParseSections_XMLUnbalancedStopsAbsorbingProse(t *testing.T) {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
 	content := sections[0].Content
-	if len(content) < 2 || !strings.HasPrefix(content[0], "```xml\n") {
-		t.Fatalf("expected an xml fence followed by prose, got %v", content)
+	if len(content) != 1+proseCount {
+		t.Fatalf("expected the fence plus %d prose paragraphs, got %v", proseCount, content)
 	}
-	fenced := strings.Count(content[0], "Prose paragraph")
-	if fenced > xmlMaxOpenElementPlainLines {
-		t.Errorf("unbalanced block absorbed %d prose paragraphs, want at most %d: %q",
-			fenced, xmlMaxOpenElementPlainLines, content[0])
+	if !strings.HasPrefix(content[0], "```xml\n") || strings.Contains(content[0], "Prose paragraph") {
+		t.Errorf("expected an xml fence holding only the markup lines, got %q", content[0])
 	}
-	last := content[len(content)-1]
-	if last != fmt.Sprintf("Prose paragraph %d of the clause.", proseCount) {
-		t.Errorf("expected the trailing prose outside the fence, got %q", last)
-	}
-	for _, c := range content[1:] {
-		if strings.Contains(c, "```") {
-			t.Errorf("expected plain prose after the fence, got %q", c)
+	for i := 1; i <= proseCount; i++ {
+		want := fmt.Sprintf("Prose paragraph %d of the clause.", i)
+		if content[i] != want {
+			t.Errorf("content[%d] = %q, want %q", i, content[i], want)
 		}
+	}
+}
+
+// Element text content is confirmed by the markup that follows it, however
+// long the run: a well-formed element whose content spans many paragraphs
+// stays in one fence together with its closing tag (issue #136 follow-up).
+func TestParseSections_XMLLongElementContentStaysFenced(t *testing.T) {
+	elements := []bodyElement{
+		xmlTestHeading("6.4\tXML schema"),
+		xmlTestPara(`<?xml version="1.0" encoding="UTF-8"?>`),
+		xmlTestPara(`<xs:annotation><xs:documentation>`),
+	}
+	const contentLines = 6
+	for i := 1; i <= contentLines; i++ {
+		elements = append(elements, xmlTestPara(fmt.Sprintf("Documentation line %d.", i)))
+	}
+	elements = append(elements,
+		xmlTestPara(`</xs:documentation></xs:annotation>`),
+		xmlTestPara("Trailing prose."),
+	)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(sections))
+	}
+	content := sections[0].Content
+	if len(content) != 2 {
+		t.Fatalf("expected one fence + trailing prose, got %v", content)
+	}
+	for i := 1; i <= contentLines; i++ {
+		if !strings.Contains(content[0], fmt.Sprintf("Documentation line %d.", i)) {
+			t.Errorf("expected documentation line %d inside the fence, got %q", i, content[0])
+		}
+	}
+	if !strings.Contains(content[0], "</xs:documentation></xs:annotation>\n```") {
+		t.Errorf("expected the closing tags to end the fence, got %q", content[0])
+	}
+	if content[1] != "Trailing prose." {
+		t.Errorf("expected trailing prose outside the fence, got %q", content[1])
 	}
 }
 

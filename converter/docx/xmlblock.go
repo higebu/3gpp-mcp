@@ -90,29 +90,22 @@ func matchXMLLine(info paragraphInfo, tr *xmlLineTracker) bool {
 	return tr.open || xmlLooseLineRE.MatchString(t)
 }
 
-// xmlMaxOpenElementPlainLines bounds how many consecutive markup-free
-// paragraphs an element left open (depth > 0) may absorb. Element content
-// spilling onto its own paragraph is a short run of lines (see
-// matchXMLContinuation), while a block whose closing tag is missing keeps
-// depth above zero forever and would otherwise swallow every following
-// paragraph up to the next heading or table (issue #136) — the same runaway
-// the comment and pending-tag states already give up on.
-const xmlMaxOpenElementPlainLines = 2
-
 // matchXMLContinuation reports whether the paragraph continues an open XML/DTD
 // block. On top of matchXMLLine, an element left open (depth > 0) absorbs
 // plain text lines: element content regularly spills onto its own paragraph
-// (e.g. the <xs:documentation> text of TS 24.423 clause 6.4). Only a bounded
-// run of them, though: an unbalanced block must not absorb a section's prose.
+// (e.g. the <xs:documentation> text of TS 24.423 clause 6.4).
+//
+// Such a line is captured but not committed: the caller holds it until a line
+// that matchXMLLine accepts confirms it, because an element whose closing tag
+// never comes keeps the depth above zero for the rest of the clause (issue
+// #136). Confirming on markup rather than counting lines lets element content
+// run as long as it likes without a missing close tag turning prose into code.
 func matchXMLContinuation(info paragraphInfo, tr *xmlLineTracker) bool {
 	t := xmlTrimmedText(info)
 	if t == "" || strings.HasPrefix(t, "$") {
 		return false
 	}
-	if tr.open || xmlLooseLineRE.MatchString(t) {
-		return true
-	}
-	return tr.depth > 0 && tr.plainRun < xmlMaxOpenElementPlainLines
+	return tr.open || tr.depth > 0 || xmlLooseLineRE.MatchString(t)
 }
 
 // xmlLineTracker tracks parse state across the captured lines of a block:
@@ -126,18 +119,10 @@ type xmlLineTracker struct {
 	inComment bool
 	depth     int    // element nesting depth of the captured lines
 	pending   string // unterminated tag text carried over from the previous line
-	// plainRun counts the consecutive captured lines that carried no markup
-	// at all, bounding what an unbalanced element absorbs (issue #136).
-	plainRun int
 }
 
 // observe updates the tracker after line has been captured into the block.
 func (t *xmlLineTracker) observe(line string) {
-	if t.inComment || t.pending != "" || strings.ContainsRune(line, '<') {
-		t.plainRun = 0
-	} else {
-		t.plainRun++
-	}
 	rest := line
 	if t.inComment {
 		loc := xmlCommentCloseRE.FindStringIndex(rest)
