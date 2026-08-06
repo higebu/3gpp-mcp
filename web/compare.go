@@ -100,6 +100,11 @@ func (h *handler) renderCompareErrors(w http.ResponseWriter, oldErr, newErr erro
 func (h *handler) compareStructurePage(w http.ResponseWriter, r *http.Request, data compareData) {
 	oldSecs, oldRes, oldErr := h.src.AllSections(r.Context(), data.SpecID, data.OldParam)
 	newSecs, newRes, newErr := h.src.AllSections(r.Context(), data.SpecID, data.NewParam)
+	if notice := h.familyPartsNotice(r.Context(), data.SpecID, oldErr, newErr); notice != "" {
+		data.Notice = notice
+		h.renderCompare(w, data)
+		return
+	}
 	if h.renderCompareErrors(w, oldErr, newErr) {
 		return
 	}
@@ -127,6 +132,11 @@ func (h *handler) compareSectionPage(w http.ResponseWriter, r *http.Request, dat
 	}
 	oldSecs, oldRes, oldErr := h.src.GetSection(r.Context(), data.SpecID, data.OldParam, oldSection, false)
 	newSecs, newRes, newErr := h.src.GetSection(r.Context(), data.SpecID, data.NewParam, data.Section, false)
+	if notice := h.familyPartsNotice(r.Context(), data.SpecID, oldErr, newErr); notice != "" {
+		data.Notice = notice
+		h.renderCompare(w, data)
+		return
+	}
 	if h.renderCompareErrors(w, oldErr, newErr) {
 		return
 	}
@@ -160,6 +170,20 @@ func (h *handler) compareSectionPage(w http.ResponseWriter, r *http.Request, dat
 	}
 	data.DiffLines = classifyDiff(diff)
 	h.renderCompare(w, data)
+}
+
+// familyPartsNotice mirrors the compare_versions tool's family hint: when
+// both sides of a comparison failed and the spec has split-file parts, the
+// parts listing is the useful answer, not the resolve or fetch error — a
+// family ID like "TS 38.101" never resolves to content of its own.
+func (h *handler) familyPartsNotice(ctx context.Context, specID string, oldErr, newErr error) string {
+	if oldErr == nil || newErr == nil {
+		return ""
+	}
+	if parts, err := h.db.FindSpecIDsByFamily(ctx, specID); err == nil && len(parts) > 0 {
+		return fmt.Sprintf("%s has multiple parts: %s — specify one.", specID, strings.Join(parts, ", "))
+	}
+	return ""
 }
 
 // compareNotice mirrors the compare_versions tool's guards: nothing on either
