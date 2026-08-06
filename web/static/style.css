@@ -606,15 +606,14 @@ mark {
     border-radius: 3px;
 }
 
+/* The width/height attributes carry the DOCX display size, which rarely
+   matches the converted PNG's intrinsic size, so the height must stay auto
+   to keep the aspect ratio; a fixed box with object-fit would crop. */
 .section-body img {
     max-width: 100%;
+    height: auto;
     border: 1px solid var(--border);
     border-radius: var(--radius);
-}
-
-.section-body img[width][height] {
-    max-width: none;
-    object-fit: cover;
 }
 
 .section-body figure {
