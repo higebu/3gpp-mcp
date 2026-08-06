@@ -90,16 +90,29 @@ func matchXMLLine(info paragraphInfo, tr *xmlLineTracker) bool {
 	return tr.open || xmlLooseLineRE.MatchString(t)
 }
 
+// xmlMaxOpenElementPlainLines bounds how many consecutive markup-free
+// paragraphs an element left open (depth > 0) may absorb. Element content
+// spilling onto its own paragraph is a short run of lines (see
+// matchXMLContinuation), while a block whose closing tag is missing keeps
+// depth above zero forever and would otherwise swallow every following
+// paragraph up to the next heading or table (issue #136) — the same runaway
+// the comment and pending-tag states already give up on.
+const xmlMaxOpenElementPlainLines = 2
+
 // matchXMLContinuation reports whether the paragraph continues an open XML/DTD
 // block. On top of matchXMLLine, an element left open (depth > 0) absorbs
 // plain text lines: element content regularly spills onto its own paragraph
-// (e.g. the <xs:documentation> text of TS 24.423 clause 6.4).
+// (e.g. the <xs:documentation> text of TS 24.423 clause 6.4). Only a bounded
+// run of them, though: an unbalanced block must not absorb a section's prose.
 func matchXMLContinuation(info paragraphInfo, tr *xmlLineTracker) bool {
 	t := xmlTrimmedText(info)
 	if t == "" || strings.HasPrefix(t, "$") {
 		return false
 	}
-	return tr.open || tr.depth > 0 || xmlLooseLineRE.MatchString(t)
+	if tr.open || xmlLooseLineRE.MatchString(t) {
+		return true
+	}
+	return tr.depth > 0 && tr.plainRun < xmlMaxOpenElementPlainLines
 }
 
 // xmlLineTracker tracks parse state across the captured lines of a block:
@@ -113,10 +126,18 @@ type xmlLineTracker struct {
 	inComment bool
 	depth     int    // element nesting depth of the captured lines
 	pending   string // unterminated tag text carried over from the previous line
+	// plainRun counts the consecutive captured lines that carried no markup
+	// at all, bounding what an unbalanced element absorbs (issue #136).
+	plainRun int
 }
 
 // observe updates the tracker after line has been captured into the block.
 func (t *xmlLineTracker) observe(line string) {
+	if t.inComment || t.pending != "" || strings.ContainsRune(line, '<') {
+		t.plainRun = 0
+	} else {
+		t.plainRun++
+	}
 	rest := line
 	if t.inComment {
 		loc := xmlCommentCloseRE.FindStringIndex(rest)
@@ -131,7 +152,8 @@ func (t *xmlLineTracker) observe(line string) {
 		joined := t.pending + rest
 		t.pending = ""
 		i := xmlTagEnd(joined)
-		if i < 0 {
+		switch {
+		case i < 0:
 			// The tag did not close on this line either. Carrying the state
 			// further would absorb every following paragraph until a stray
 			// ">" turns up (issue #95), so give up on the tag instead — the
@@ -139,9 +161,17 @@ func (t *xmlLineTracker) observe(line string) {
 			// next line.
 			t.open = false
 			return
+		case xmlTagHasInnerLT(joined[:i+1]):
+			// The join only "closed" because this line opens a construct of
+			// its own: a tag body never contains an unquoted "<". Counting
+			// the join as a start element would inflate the depth and eat the
+			// very close tag that ends it, leaving depth stuck above zero and
+			// absorbing the following prose (issue #136). Drop the carried-over
+			// "<…" and read this line on its own terms instead.
+		default:
+			t.observeTag(joined[:i+1])
+			rest = joined[i+1:]
 		}
-		t.observeTag(joined[:i+1])
-		rest = joined[i+1:]
 	}
 	for {
 		i := strings.IndexByte(rest, '<')
@@ -194,6 +224,27 @@ func xmlTagEnd(s string) int {
 		}
 	}
 	return -1
+}
+
+// xmlTagHasInnerLT reports whether the "<…>" tag in s carries another unquoted
+// "<" after its opening one — the signature of a bogus join between an
+// unterminated "<…" and a line that starts markup of its own, since a
+// well-formed tag body cannot contain "<" (issue #136).
+func xmlTagHasInnerLT(s string) bool {
+	var quote byte
+	for i := 1; i < len(s); i++ {
+		switch c := s[i]; {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '<':
+			return true
+		}
+	}
+	return false
 }
 
 // observeTag adjusts the element depth for one complete "<…>" tag.

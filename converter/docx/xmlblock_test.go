@@ -1,6 +1,7 @@
 package docx
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -103,6 +104,87 @@ func TestXMLLineTrackerUnterminatedNotSticky(t *testing.T) {
 	}
 	if matchXMLContinuation(prose, &tr) {
 		t.Error("expected prose not to continue the block after the tag is abandoned")
+	}
+}
+
+// An element that is never closed keeps depth above zero, but it only absorbs
+// a bounded run of markup-free paragraphs instead of every following one
+// (issue #136).
+func TestXMLLineTrackerUnbalancedDepthBounded(t *testing.T) {
+	prose := paragraphInfo{
+		Text: "Ordinary prose paragraph.",
+		Runs: []runInfo{{Text: "Ordinary prose paragraph."}},
+	}
+
+	var tr xmlLineTracker
+	tr.observe(`<root>`)
+	tr.observe(`<child>`)
+	if tr.depth != 2 {
+		t.Fatalf("expected depth 2 after two unclosed elements, got %d", tr.depth)
+	}
+	for i := 0; i < xmlMaxOpenElementPlainLines; i++ {
+		if !matchXMLContinuation(prose, &tr) {
+			t.Fatalf("expected element content line %d to be absorbed", i+1)
+		}
+		tr.observe(prose.Text)
+	}
+	if matchXMLContinuation(prose, &tr) {
+		t.Error("expected the unbalanced block to give up instead of absorbing prose without end")
+	}
+
+	// A markup line in between resets the allowance: genuine element content
+	// interleaved with tags keeps the block together.
+	tr = xmlLineTracker{}
+	tr.observe(`<xs:annotation><xs:documentation>Template of a`)
+	if !matchXMLContinuation(prose, &tr) {
+		t.Fatal("expected element content to be absorbed")
+	}
+	tr.observe(`Service XML Schema`)
+	tr.observe(`</xs:documentation>`)
+	if !matchXMLContinuation(prose, &tr) {
+		t.Error("expected the plain-line allowance to reset after a markup line")
+	}
+}
+
+// An unterminated "<…" joined with a line that opens markup of its own must
+// not be counted as a start element: the fabricated tag both inflates the depth
+// and swallows the close tag that would balance it, so the depth would never
+// return to zero and the following prose would be absorbed (issue #136).
+func TestXMLLineTrackerPendingJoinNotAnElement(t *testing.T) {
+	prose := paragraphInfo{
+		Text: "Ordinary prose paragraph.",
+		Runs: []runInfo{{Text: "Ordinary prose paragraph."}},
+	}
+
+	var tr xmlLineTracker
+	tr.observe(`<a><b`)
+	if !tr.open || tr.depth != 1 {
+		t.Fatalf("expected open tracker at depth 1, got open=%v depth=%d", tr.open, tr.depth)
+	}
+	tr.observe(`</a>`)
+	if tr.open || tr.depth != 0 {
+		t.Errorf("expected the close tag to balance the block, got open=%v depth=%d", tr.open, tr.depth)
+	}
+	if matchXMLContinuation(prose, &tr) {
+		t.Error("expected prose not to continue the balanced block")
+	}
+
+	// The same join against a comment line: the comment is consumed normally
+	// and leaves the depth alone.
+	tr = xmlLineTracker{}
+	tr.observe(`<tuple id="t1"`)
+	tr.observe(`<!-- the tag above lost its ">" -->`)
+	if tr.open || tr.inComment || tr.depth != 0 {
+		t.Errorf("expected the comment consumed with no depth change, got open=%v inComment=%v depth=%d",
+			tr.open, tr.inComment, tr.depth)
+	}
+
+	// A quoted "<" inside a genuine attribute spill is not a bogus join.
+	tr = xmlLineTracker{}
+	tr.observe(`<elem attr="a`)
+	tr.observe(`< b">`)
+	if tr.open || tr.depth != 1 {
+		t.Errorf("expected the quoted '<' to complete one start element, got open=%v depth=%d", tr.open, tr.depth)
 	}
 }
 
@@ -265,6 +347,76 @@ func TestParseSections_XMLUnterminatedNotSwallowingProse(t *testing.T) {
 	}
 	if content[1] != "This prose paragraph must stay outside the fence." {
 		t.Errorf("expected first prose paragraph intact, got %q", content[1])
+	}
+}
+
+// An XML block whose closing tags are missing must not turn the rest of the
+// clause into code: absorption stops after a bounded run of prose paragraphs
+// instead of running to the next heading or table (issue #136).
+func TestParseSections_XMLUnbalancedStopsAbsorbingProse(t *testing.T) {
+	elements := []bodyElement{
+		xmlTestHeading("6.4\tXML body"),
+		xmlTestPara(`<?xml version="1.0" encoding="UTF-8"?>`),
+		xmlTestPara(`<presence>`),
+		xmlTestPara(`<tuple id="t1">`),
+	}
+	const proseCount = 5
+	for i := 1; i <= proseCount; i++ {
+		elements = append(elements, xmlTestPara(fmt.Sprintf("Prose paragraph %d of the clause.", i)))
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(sections))
+	}
+	content := sections[0].Content
+	if len(content) < 2 || !strings.HasPrefix(content[0], "```xml\n") {
+		t.Fatalf("expected an xml fence followed by prose, got %v", content)
+	}
+	fenced := strings.Count(content[0], "Prose paragraph")
+	if fenced > xmlMaxOpenElementPlainLines {
+		t.Errorf("unbalanced block absorbed %d prose paragraphs, want at most %d: %q",
+			fenced, xmlMaxOpenElementPlainLines, content[0])
+	}
+	last := content[len(content)-1]
+	if last != fmt.Sprintf("Prose paragraph %d of the clause.", proseCount) {
+		t.Errorf("expected the trailing prose outside the fence, got %q", last)
+	}
+	for _, c := range content[1:] {
+		if strings.Contains(c, "```") {
+			t.Errorf("expected plain prose after the fence, got %q", c)
+		}
+	}
+}
+
+// An unterminated tag joined with the next line's comment must not fabricate
+// an element: the block stays balanced and the trailing prose stays out of the
+// fence (issue #136).
+func TestParseSections_XMLPendingJoinKeepsDepthBalanced(t *testing.T) {
+	elements := []bodyElement{
+		xmlTestHeading("6.5\tXML body"),
+		xmlTestPara(`<?xml version="1.0" encoding="UTF-8"?>`),
+		xmlTestPara(`<presence><tuple id="t1"`),
+		xmlTestPara(`<!-- the tag above lost its ">" -->`),
+		xmlTestPara(`</presence>`),
+		xmlTestPara("Trailing prose."),
+		xmlTestPara("More trailing prose."),
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(sections))
+	}
+	content := sections[0].Content
+	if len(content) != 3 {
+		t.Fatalf("expected fence + two prose paragraphs, got %v", content)
+	}
+	if !strings.Contains(content[0], `<!-- the tag above lost its ">" -->`) {
+		t.Errorf("expected the comment line inside the fence, got %q", content[0])
+	}
+	if strings.Contains(content[0], "Trailing prose.") {
+		t.Errorf("prose swallowed into the fence: %q", content[0])
+	}
+	if content[1] != "Trailing prose." || content[2] != "More trailing prose." {
+		t.Errorf("expected both prose paragraphs intact, got %v", content[1:])
 	}
 }
 
