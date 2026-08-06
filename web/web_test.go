@@ -1815,11 +1815,38 @@ func TestHandleCompare_RenumberedSectionDiff(t *testing.T) {
 	if !strings.Contains(body2, "7 &rarr; 5.1.1") {
 		t.Errorf("expected the header to show the renumbering, got:\n%s", body2)
 	}
-	// #154: the filter form must carry old_section as a hidden field, or
-	// resubmitting it (e.g. clicking Compare again unchanged) drops the old
-	// number and the old side wrongly resolves against the new number.
-	if !strings.Contains(body2, `<input type="hidden" name="old_section" value="7">`) {
-		t.Errorf("expected the filter form to preserve old_section as a hidden field, got:\n%s", body2)
+	// #154: the filter form must carry old_section, or resubmitting it (e.g.
+	// clicking Compare again unchanged) drops the old number and the old side
+	// wrongly resolves against the new number. It must be a visible, editable
+	// field rather than hidden (Greptile flagged the earlier hidden-field fix
+	// as a trap: editing the visible Section field and resubmitting would
+	// silently carry the stale old_section along with it) so the user can see
+	// and clear/update it like every other field in this form.
+	if !strings.Contains(body2, `<input type="text" name="old_section" id="old_section" value="7"`) {
+		t.Errorf("expected the filter form to preserve old_section in a visible, editable field, got:\n%s", body2)
+	}
+	if strings.Contains(body2, `type="hidden" name="old_section"`) {
+		t.Errorf("old_section must not be a hidden field: editing Section and resubmitting would silently reuse a stale value, got:\n%s", body2)
+	}
+}
+
+// TestHandleCompare_OldSectionBlankWhenNotRenumbered checks that a plain
+// section comparison (no renumbering involved) renders the old_section field
+// empty rather than carrying over some other value, so the placeholder ("same
+// as section") reflects reality and the field starts each page load in sync
+// with the URL, not stale client-side form state.
+func TestHandleCompare_OldSectionBlankWhenNotRenumbered(t *testing.T) {
+	ts, _ := setupVersionedServer(t, cannedFetcher, nil)
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=19.5.0&section=5.1")
+	if err != nil {
+		t.Fatalf("GET compare section: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if !strings.Contains(body, `<input type="text" name="old_section" id="old_section" value=""`) {
+		t.Errorf("expected an empty old_section field when the request carried none, got:\n%s", body)
 	}
 }
 
