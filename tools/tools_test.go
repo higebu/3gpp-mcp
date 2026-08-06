@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -576,6 +577,26 @@ func TestPaginateText(t *testing.T) {
 		text := getTextContent(result)
 		if !strings.Contains(text, "[Lines 1-2 of 3]") {
 			t.Errorf("expected 2 lines within a 12-character budget, got: %s", text)
+		}
+	})
+
+	t.Run("does not panic on overflowing max_lines", func(t *testing.T) {
+		// offset+maxLines must not be computed directly: with
+		// maxLines=math.MaxInt64 the sum wraps negative and lines[i] below
+		// panics (issue #128). Any non-zero offset reproduces it.
+		result := paginateText(content, 1, math.MaxInt64, 0)
+		text := getTextContent(result)
+		if !strings.Contains(text, "[Lines 2-5 of 5]") {
+			t.Errorf("expected pagination header, got: %s", text)
+		}
+	})
+
+	t.Run("does not panic on overflowing max_lines with max_chars", func(t *testing.T) {
+		// Same overflow risk with the max_chars branch active.
+		result := paginateText(content, 1, math.MaxInt64, math.MaxInt64)
+		text := getTextContent(result)
+		if !strings.Contains(text, "[Lines 2-5 of 5]") {
+			t.Errorf("expected pagination header, got: %s", text)
 		}
 	})
 
