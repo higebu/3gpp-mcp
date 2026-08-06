@@ -380,6 +380,61 @@ func TestStripEMFPlus_ShortOutput(t *testing.T) {
 	}
 }
 
+// TestStripEMFPlus_MalformedRecordAfterValidEMFPlus verifies that a malformed
+// record following at least one already-stripped EMF+ record makes
+// stripEMFPlus return the entire input buffer byte-for-byte unchanged,
+// instead of the malformed-record contract violation reported in issue #138:
+// silently truncating the output to only the records seen before the
+// malformed one (reproduced there as a 124-byte input collapsing to an
+// 88-byte output). Also checks that a well-formed record placed after the
+// malformed one is not silently dropped, which only the "return unchanged"
+// fallback preserves.
+func TestStripEMFPlus_MalformedRecordAfterValidEMFPlus(t *testing.T) {
+	emfPlusPayload := make([]byte, 12)
+	binary.LittleEndian.PutUint32(emfPlusPayload[0:4], 8) // DataSize
+	binary.LittleEndian.PutUint32(emfPlusPayload[4:8], emfPlusSignature)
+
+	regularData := make([]byte, 4)
+	binary.LittleEndian.PutUint32(regularData[0:4], 1)
+
+	emf := buildTestEMF([]struct {
+		typ  uint32
+		data []byte
+	}{
+		{emrComment, emfPlusPayload}, // EMF+ comment — would normally be stripped
+		{0x12, regularData},          // valid record after the EMF+ comment
+	})
+
+	// Corrupt the second record's declared size in-place, simulating a
+	// truncated/corrupted record with valid data both before and after it
+	// in the original buffer. Offsets are computed structurally (rather
+	// than scanned) to avoid matching stray bytes elsewhere in the header:
+	// the 108-byte EMR_HEADER is followed by the 20-byte EMF+ comment
+	// record (recSize = 8 + 12 payload bytes, already 4-byte aligned), so
+	// the second record's Size field sits at offset 108+20+4 = 132.
+	const secondRecordSizeOffset = 108 + 20 + 4
+	if got := binary.LittleEndian.Uint32(emf[secondRecordSizeOffset-4 : secondRecordSizeOffset]); got != 0x12 {
+		t.Fatalf("test setup: expected the SETBKMODE record type (0x12) at offset %d, got %#x", secondRecordSizeOffset-4, got)
+	}
+	binary.LittleEndian.PutUint32(emf[secondRecordSizeOffset:secondRecordSizeOffset+4], 0xFFFFFFF0) // bogus oversized recSize
+	corrupted := make([]byte, len(emf))
+	copy(corrupted, emf) // snapshot of the malformed input as passed to stripEMFPlus
+
+	result := stripEMFPlus(emf)
+
+	// stripEMFPlus must hand back the malformed input exactly as given — not
+	// a "repaired" version and, per issue #138, not silently truncated to
+	// only the records seen before the malformed one.
+	if len(result) != len(corrupted) {
+		t.Fatalf("expected the %d-byte malformed input back unchanged, got %d bytes (truncated, per issue #138)", len(corrupted), len(result))
+	}
+	for i := range corrupted {
+		if result[i] != corrupted[i] {
+			t.Fatalf("result diverges from the input at byte %d: got %#x, want %#x", i, result[i], corrupted[i])
+		}
+	}
+}
+
 // sofficeCanConvertImages checks whether LibreOffice Draw is available by
 // attempting a trivial SVG-to-PNG conversion.
 func sofficeCanConvertImages(t *testing.T) bool {

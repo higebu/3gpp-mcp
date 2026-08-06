@@ -187,8 +187,10 @@ const (
 // stripEMFPlus removes EMF+ data embedded in EMR_COMMENT records from EMF
 // binary data. This forces LibreOffice to use the legacy EMR rendering path,
 // avoiding crashes on corrupted EMF+ records. The returned data contains only
-// legacy EMR records. If the input is not a valid EMF or contains no EMF+
-// data, it is returned unchanged.
+// legacy EMR records. If the input is not a valid EMF, contains no EMF+ data,
+// or contains a malformed record anywhere in the stream (including after
+// valid EMF+ data has already been found), it is returned unchanged rather
+// than truncated at the malformed point.
 //
 // Background: Some 3GPP spec documents contain EMF images with malformed EMF+
 // records. For example, TS 33.501 v19 (33501-j60.docx) Figure 16.4-1
@@ -233,7 +235,12 @@ func stripEMFPlus(data []byte) []byte {
 		recSize := binary.LittleEndian.Uint32(data[offset+4 : offset+8])
 		end, ok := emrRecordEnd(offset, recSize, len(data))
 		if !ok {
-			break
+			// A malformed record means the rest of the stream cannot be
+			// parsed reliably. Returning `out` here would silently drop
+			// every record after this point instead of honoring the "return
+			// unchanged on malformed input" contract, so hand back the
+			// original bytes untouched.
+			return data
 		}
 
 		isEMFPlus := false
@@ -253,6 +260,11 @@ func stripEMFPlus(data []byte) []byte {
 		offset = end
 	}
 
+	if offset != len(data) {
+		// Trailing bytes too short to form a record header (truncated
+		// file): the same "return unchanged" contract applies.
+		return data
+	}
 	if !hasEMFPlus {
 		return data
 	}
