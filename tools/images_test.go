@@ -189,6 +189,34 @@ func TestHandleGetImage(t *testing.T) {
 		if !result.IsError {
 			t.Error("expected error result for missing image")
 		}
+		text := getTextContent(result)
+		if !strings.Contains(text, `image "nonexistent.png" not found in TS 23.501`) {
+			t.Errorf("expected a clean not-found message, got: %s", text)
+		}
+		// The raw driver error ("sql: no rows in result set") must not leak.
+		if strings.Contains(text, "sql:") {
+			t.Errorf("message leaks a SQL error: %s", text)
+		}
+	})
+
+	t.Run("real failure is not labeled not-found", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetImageInput{
+			SpecID: "TS 99.999",
+			Name:   "image1.png",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError {
+			t.Fatal("expected error result for an unknown spec")
+		}
+		text := getTextContent(result)
+		if !strings.HasPrefix(text, "failed to get image") {
+			t.Errorf("expected a neutral failure prefix, got: %s", text)
+		}
+		if strings.Contains(text, "image not found") {
+			t.Errorf("a lookup failure must not read as a definitive not-found: %s", text)
+		}
 	})
 
 	t.Run("empty spec_id", func(t *testing.T) {

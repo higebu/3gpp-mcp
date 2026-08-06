@@ -5,7 +5,11 @@ import "regexp"
 // SpecMetadata holds metadata extracted from a 3GPP specification document.
 type SpecMetadata struct {
 	SpecID string // e.g., "TS 23.501"
-	Title  string
+	// DocType is "TS" or "TR" when the document names its own type, and ""
+	// when nothing in the document says (archive filenames never do). SpecID
+	// defaults to a "TS " prefix in that case.
+	DocType string
+	Title   string
 	// Version is the canonical dotted form, e.g. "18.6.0".
 	Version string
 	// VersionToken is the base-36 archive form, e.g. "i60". It is empty when

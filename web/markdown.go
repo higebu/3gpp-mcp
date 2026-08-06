@@ -2,11 +2,15 @@ package web
 
 import (
 	"bytes"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"fmt"
 	htmlpkg "html"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/alecthomas/chroma/v2"
 	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
@@ -25,6 +29,10 @@ var (
 	// mathRE matches LaTeX math emitted by the DOCX converter: display
 	// ($$...$$) is tried before inline ($...$). Inline math may not span lines.
 	mathRE = regexp.MustCompile(`\$\$([^$]+)\$\$|\$([^$\n]+)\$`)
+
+	// fallbackTokenCount disambiguates math tokens minted in the same
+	// nanosecond when crypto/rand is unavailable.
+	fallbackTokenCount atomic.Uint64
 )
 
 var md goldmark.Markdown
@@ -44,6 +52,10 @@ func init() {
 			),
 		),
 		goldmark.WithRendererOptions(
+			// WithUnsafe is required because the DOCX converter emits raw HTML
+			// on purpose (tables, <sub>/<sup>, <img>). It is safe only because
+			// renderMarkdown escapes non-allowlisted tags before conversion and
+			// sanitizeHTML allowlists the final output.
 			html.WithUnsafe(),
 		),
 	)
@@ -98,7 +110,26 @@ func renderMarkdown(content, specID, version string, bracketMap map[string]strin
 	// <span> that the client-side KaTeX renderer targets. The inner LaTeX is
 	// normalized to single HTML-escaping so both raw (paragraph) and
 	// pre-escaped (table cell) math produce correct textContent.
-	content, mathSpans := protectMath(content)
+	//
+	// Both math protection and raw-HTML escaping are applied only to text
+	// outside fenced code blocks and inline code spans: a '$' inside a code
+	// fence is code, not math, and goldmark escapes code content itself. The
+	// placeholder token is random per render so literal text can never collide
+	// with a placeholder.
+	token := newMathToken()
+	var mathSpans []string
+	segs := splitCodeSegments(content)
+	var sb strings.Builder
+	sb.Grow(len(content))
+	for _, seg := range segs {
+		if seg.code {
+			sb.WriteString(seg.text)
+			continue
+		}
+		text := protectMath(seg.text, token, &mathSpans)
+		sb.WriteString(escapeUnknownHTML(text))
+	}
+	content = sb.String()
 
 	var buf bytes.Buffer
 	if err := md.Convert([]byte(content), &buf); err != nil {
@@ -106,22 +137,45 @@ func renderMarkdown(content, specID, version string, bracketMap map[string]strin
 	}
 	out := buf.String()
 	for i, span := range mathSpans {
-		out = strings.ReplaceAll(out, mathPlaceholder(i), span)
+		out = strings.Replace(out, mathPlaceholder(token, i), span, 1)
 	}
-	return out
+	return sanitizeHTML(out)
+}
+
+// randRead is cryptorand.Read, injectable so tests can exercise the
+// fallback branch.
+var randRead = cryptorand.Read
+
+// newMathToken returns a random alphanumeric token for this render's math
+// placeholders. Randomness guarantees document text cannot contain a
+// placeholder lookalike, so re-injection only ever hits real placeholders.
+func newMathToken() string {
+	var b [12]byte
+	if _, err := randRead(b[:]); err != nil {
+		return fallbackMathToken()
+	}
+	return "katexmath" + hex.EncodeToString(b[:])
+}
+
+// fallbackMathToken keeps the token unpredictable even without crypto/rand: a
+// constant fallback would let literal document text collide with a
+// placeholder on every render.
+func fallbackMathToken() string {
+	return fmt.Sprintf("katexmath%xt%dc", time.Now().UnixNano(), fallbackTokenCount.Add(1))
 }
 
 // mathPlaceholder returns an inert token that survives goldmark conversion
-// unchanged (plain alphanumerics trigger no Markdown syntax).
-func mathPlaceholder(i int) string {
-	return fmt.Sprintf("xxkatexmathxx%dxxkatexmathxx", i)
+// unchanged (plain alphanumerics trigger no Markdown syntax). The trailing
+// "x" delimits the index so no placeholder is a substring of another.
+func mathPlaceholder(token string, i int) string {
+	return fmt.Sprintf("%s%dx", token, i)
 }
 
-// protectMath extracts LaTeX math spans, replacing each with a placeholder, and
-// returns the rewritten content plus the <span> HTML to re-inject afterwards.
-func protectMath(content string) (string, []string) {
-	var spans []string
-	rewritten := mathRE.ReplaceAllStringFunc(content, func(match string) string {
+// protectMath extracts LaTeX math spans from text, replacing each with a
+// placeholder built from token, and appends the <span> HTML to re-inject
+// after conversion to spans.
+func protectMath(text, token string, spans *[]string) string {
+	return mathRE.ReplaceAllStringFunc(text, func(match string) string {
 		sub := mathRE.FindStringSubmatch(match)
 		display := sub[1] != ""
 		latex, class := sub[2], "math-inline"
@@ -129,11 +183,10 @@ func protectMath(content string) (string, []string) {
 			latex, class = sub[1], "math-display"
 		}
 		latex = htmlpkg.EscapeString(htmlpkg.UnescapeString(latex))
-		i := len(spans)
-		spans = append(spans, fmt.Sprintf(`<span class="%s">%s</span>`, class, latex))
-		return mathPlaceholder(i)
+		i := len(*spans)
+		*spans = append(*spans, fmt.Sprintf(`<span class="%s">%s</span>`, class, latex))
+		return mathPlaceholder(token, i)
 	})
-	return rewritten, spans
 }
 
 // highlightYAML applies Chroma syntax highlighting to YAML content.
@@ -156,5 +209,7 @@ func highlightYAML(content string) string {
 	if err := formatter.Format(&buf, style, iterator); err != nil {
 		return "<pre><code>" + htmlpkg.EscapeString(content) + "</code></pre>"
 	}
-	return buf.String()
+	// Same defense as renderMarkdown: the YAML comes from third-party spec
+	// archives, so the highlighted HTML is reduced to the allowlist too.
+	return sanitizeHTML(buf.String())
 }

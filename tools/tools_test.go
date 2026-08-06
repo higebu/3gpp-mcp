@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -555,6 +556,29 @@ func TestPaginateText(t *testing.T) {
 		}
 	})
 
+	t.Run("max_chars is not exceeded when the window fits it exactly", func(t *testing.T) {
+		// Five 5-char lines fill the 30-char budget without truncation, so
+		// the budget never "decided the cut" — the smart cut must still not
+		// extend to the paragraph boundary at line 6, which would exceed it.
+		exactContent := "11111\n22222\n33333\n44444\n55555\n\nrest here"
+		result := paginateText(exactContent, 0, 5, 30)
+		text := getTextContent(result)
+		if !strings.Contains(text, "[Lines 1-5 of 7]") {
+			t.Errorf("expected the exact-fit budget to hold at 5 lines, got: %s", text)
+		}
+	})
+
+	t.Run("max_chars counts characters, not bytes", func(t *testing.T) {
+		// Each line is 5 runes (15 bytes); a 12-char budget must fit two
+		// lines (2 x (5+1) = 12), not cut after one as byte counting would.
+		runeContent := "あいうえお\nかきくけこ\nさしすせそ"
+		result := paginateText(runeContent, 0, 10, 12)
+		text := getTextContent(result)
+		if !strings.Contains(text, "[Lines 1-2 of 3]") {
+			t.Errorf("expected 2 lines within a 12-character budget, got: %s", text)
+		}
+	})
+
 	t.Run("max_chars is not exceeded by smart cut", func(t *testing.T) {
 		// The char budget cuts at line 5 (5 lines x 6 chars = 30); the
 		// paragraph boundary at line 6 is within the smart-cut lookahead
@@ -631,6 +655,22 @@ func TestHandleGetReferences(t *testing.T) {
 		}
 		if !result.IsError {
 			t.Error("expected error result for empty spec_id")
+		}
+	})
+
+	t.Run("invalid direction", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetReferencesInput{
+			SpecID:    "TS 24.229",
+			Direction: "sideways",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError {
+			t.Error("expected error result for an invalid direction")
+		}
+		if text := getTextContent(result); !strings.Contains(text, "invalid direction") {
+			t.Errorf("expected the direction error, got: %s", text)
 		}
 	})
 
@@ -924,8 +964,9 @@ func TestHandleGetOpenAPI_FilteredPagination(t *testing.T) {
 }
 
 // TestHandleGetReferences_Truncation verifies the response cap: a spec-wide
-// incoming query over a heavily-cited spec is cut at MaxReferences with a
-// notice instead of serializing every row.
+// incoming query over a heavily-cited spec is cut at MaxReferences, the JSON
+// payload stays parseable, the truncation notice travels as its own content
+// item, and offset reaches the rows beyond the cap.
 func TestHandleGetReferences_Truncation(t *testing.T) {
 	d := setupTestDB(t)
 	handler := HandleGetReferences(d)
@@ -949,10 +990,92 @@ func TestHandleGetReferences_Truncation(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	text := getTextContent(result)
-	if !strings.Contains(text, fmt.Sprintf("[Truncated: showing %d of %d references", MaxReferences, MaxReferences+10)) {
-		t.Errorf("expected a truncation notice, got tail: %s", text[len(text)-200:])
+	var page []map[string]any
+	if err := json.Unmarshal([]byte(text), &page); err != nil {
+		t.Fatalf("truncated payload is not valid JSON: %v", err)
 	}
-	if got := strings.Count(text, `"source_spec_id"`); got != MaxReferences {
-		t.Errorf("expected %d serialized references, got %d", MaxReferences, got)
+	if len(page) != MaxReferences {
+		t.Errorf("expected %d serialized references, got %d", MaxReferences, len(page))
 	}
+	if len(result.Content) != 2 {
+		t.Fatalf("expected the notice as a second content item, got %d items", len(result.Content))
+	}
+	notice := result.Content[1].(*mcp.TextContent).Text
+	want := fmt.Sprintf("[Showing references 1-%d of %d. Use offset=%d to continue", MaxReferences, MaxReferences+10, MaxReferences)
+	if !strings.Contains(notice, want) {
+		t.Errorf("notice = %q, want it to contain %q", notice, want)
+	}
+
+	t.Run("offset reaches the remaining references", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetReferencesInput{
+			SpecID: "TS 23.501", Direction: "incoming", Offset: MaxReferences,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var rest []map[string]any
+		if err := json.Unmarshal([]byte(getTextContent(result)), &rest); err != nil {
+			t.Fatalf("offset payload is not valid JSON: %v", err)
+		}
+		if len(rest) != 10 {
+			t.Errorf("expected the 10 remaining references, got %d", len(rest))
+		}
+		if len(result.Content) != 2 {
+			t.Fatalf("expected a range notice, got %d content items", len(result.Content))
+		}
+		notice := result.Content[1].(*mcp.TextContent).Text
+		if !strings.Contains(notice, fmt.Sprintf("[Showing references %d-%d of %d.]", MaxReferences+1, MaxReferences+10, MaxReferences+10)) {
+			t.Errorf("notice = %q, want the final range without a continue hint", notice)
+		}
+	})
+
+	t.Run("negative offset treated as zero", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetReferencesInput{
+			SpecID: "TS 23.501", Direction: "incoming", Offset: -7,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var page []map[string]any
+		if err := json.Unmarshal([]byte(getTextContent(result)), &page); err != nil {
+			t.Fatalf("payload is not valid JSON: %v", err)
+		}
+		if len(page) != MaxReferences {
+			t.Errorf("expected the first page of %d references, got %d", MaxReferences, len(page))
+		}
+		if len(result.Content) != 2 || !strings.Contains(result.Content[1].(*mcp.TextContent).Text, "[Showing references 1-") {
+			t.Errorf("expected the first-page notice, got: %+v", result.Content)
+		}
+	})
+
+	t.Run("offset past the end", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetReferencesInput{
+			SpecID: "TS 23.501", Direction: "incoming", Offset: MaxReferences * 10,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if text := getTextContent(result); text != "[]" {
+			t.Errorf("expected an empty JSON array payload, got: %s", text)
+		}
+		if len(result.Content) != 2 || !strings.Contains(result.Content[1].(*mcp.TextContent).Text, "No references at offset") {
+			t.Errorf("expected an out-of-range notice, got: %+v", result.Content)
+		}
+	})
+
+	t.Run("untruncated result has a single JSON content item", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetReferencesInput{
+			SpecID: "TS 33.203", Direction: "incoming",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Content) != 1 {
+			t.Errorf("expected no notice for an untruncated result, got %d content items", len(result.Content))
+		}
+		var page []map[string]any
+		if err := json.Unmarshal([]byte(getTextContent(result)), &page); err != nil {
+			t.Fatalf("payload is not valid JSON: %v", err)
+		}
+	})
 }

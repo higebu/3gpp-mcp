@@ -66,7 +66,7 @@ func TestExtractMetadata_FilenameVariants(t *testing.T) {
 			wantToken:   "i30",
 		},
 		{
-			name:        "TR series with hyphen and letter version",
+			name:        "24 series with hyphen and letter version",
 			filename:    "24229-h50.doc",
 			wantSpecID:  "TS 24.229",
 			wantVersion: "17.5.0",
@@ -90,6 +90,15 @@ func TestExtractMetadata_FilenameVariants(t *testing.T) {
 			name:        "non-standard falls back to stem",
 			filename:    "weirdname.docx",
 			wantSpecID:  "weirdname",
+			wantVersion: "",
+			wantToken:   "",
+		},
+		{
+			// The stem pattern stays permissive: a type token glued to the
+			// preceding word still normalizes.
+			name:        "spec token glued to a word in the stem",
+			filename:    "draftTS23.501.docx",
+			wantSpecID:  "TS 23.501",
 			wantVersion: "",
 			wantToken:   "",
 		},
@@ -161,6 +170,121 @@ func TestExtractMetadata_FilenameVariants(t *testing.T) {
 			}
 			if meta.VersionToken != tt.wantToken {
 				t.Errorf("VersionToken = %q, want %q", meta.VersionToken, tt.wantToken)
+			}
+		})
+	}
+}
+
+// coverPara builds a cover-page paragraph body element for doc-type tests.
+func coverPara(style, text string) bodyElement {
+	return bodyElement{
+		Tag: "p",
+		Paragraph: paragraphInfo{
+			StyleID: style,
+			Text:    text,
+			Runs:    []runInfo{{Text: text}},
+		},
+	}
+}
+
+// The archive filename never distinguishes a Technical Specification from a
+// Technical Report, so the document itself has to say which it is (#110).
+func TestExtractMetadata_DocTypeDetection(t *testing.T) {
+	tests := []struct {
+		name       string
+		filename   string
+		props      coreProperties
+		body       []bodyElement
+		wantSpecID string
+		wantType   string
+	}{
+		{
+			name:       "TR marker on cover page",
+			filename:   "21905-h20.docx",
+			body:       []bodyElement{coverPara("ZA", "3GPP TR 21.905 V17.2.0 (2022-03)")},
+			wantSpecID: "TR 21.905",
+			wantType:   "TR",
+		},
+		{
+			name:       "TS marker on cover page",
+			filename:   "23501-i30.docx",
+			body:       []bodyElement{coverPara("ZA", "3GPP TS 23.501 V18.3.0 (2023-09)")},
+			wantSpecID: "TS 23.501",
+			wantType:   "TS",
+		},
+		{
+			name:       "multi-part TR keeps its part suffix",
+			filename:   "23700-49-i00.docx",
+			body:       []bodyElement{coverPara("ZA", "3GPP TR 23.700-49 V18.0.0 (2023-03)")},
+			wantSpecID: "TR 23.700-49",
+			wantType:   "TR",
+		},
+		{
+			name:       "standalone Technical Report line",
+			filename:   "21905-h20.docx",
+			body:       []bodyElement{coverPara("ZB", "Technical Report")},
+			wantSpecID: "TR 21.905",
+			wantType:   "TR",
+		},
+		{
+			name:       "standalone Technical Specification line with punctuation",
+			filename:   "23501-i30.docx",
+			body:       []bodyElement{coverPara("ZB", "technical specification.")},
+			wantSpecID: "TS 23.501",
+			wantType:   "TS",
+		},
+		{
+			name:       "standalone type line with punctuation and casing",
+			filename:   "21905-h20.docx",
+			body:       []bodyElement{coverPara("ZB", "technical report.")},
+			wantSpecID: "TR 21.905",
+			wantType:   "TR",
+		},
+		{
+			name:     "TSG name does not decide the type",
+			filename: "21905-h20.docx",
+			body: []bodyElement{
+				coverPara("ZT", "Technical Specification Group Services and System Aspects;"),
+				coverPara("ZB", "Technical Report"),
+			},
+			wantSpecID: "TR 21.905",
+			wantType:   "TR",
+		},
+		{
+			name:       "marker naming another spec is ignored",
+			filename:   "23501-i30.docx",
+			body:       []bodyElement{coverPara("Normal", "based on 3GPP TR 99.999")},
+			wantSpecID: "TS 23.501",
+			wantType:   "",
+		},
+		{
+			name:       "type from document properties",
+			filename:   "21905-h20.docx",
+			props:      coreProperties{Title: "3GPP TR 21.905"},
+			wantSpecID: "TR 21.905",
+			wantType:   "TR",
+		},
+		{
+			name:       "no signal defaults to TS",
+			filename:   "21905-h20.docx",
+			wantSpecID: "TS 21.905",
+			wantType:   "",
+		},
+		{
+			name:       "type spelled in the filename stem",
+			filename:   "TR 21.905.docx",
+			wantSpecID: "TR 21.905",
+			wantType:   "TR",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := extractMetadata(tt.filename, tt.props, tt.body, map[string]string{})
+			if meta.SpecID != tt.wantSpecID {
+				t.Errorf("SpecID = %q, want %q", meta.SpecID, tt.wantSpecID)
+			}
+			if meta.DocType != tt.wantType {
+				t.Errorf("DocType = %q, want %q", meta.DocType, tt.wantType)
 			}
 		})
 	}

@@ -1676,9 +1676,12 @@ func TestImageCRUD(t *testing.T) {
 		t.Errorf("image bytes length = %d, want %d", len(got.Data), len(payload))
 	}
 
-	// Missing image.
-	if _, err := d.GetImage(t.Context(), "TS 23.501", "", "missing.png"); err == nil {
-		t.Error("expected error for missing image")
+	// A missing image is nil without an error, so callers can distinguish
+	// "no such image" from a real failure.
+	if missing, err := d.GetImage(t.Context(), "TS 23.501", "", "missing.png"); err != nil {
+		t.Errorf("GetImage(missing) returned error: %v", err)
+	} else if missing != nil {
+		t.Errorf("GetImage(missing) = %+v, want nil", missing)
 	}
 
 	// ListImages returns only the inserted image.
@@ -1818,6 +1821,142 @@ func TestInsertSpec_DropsSupersededVersions(t *testing.T) {
 	if len(page.Results) != 1 {
 		t.Errorf("expected exactly 1 search hit after supersede, got %d", len(page.Results))
 	}
+}
+
+// TestAlternateDocTypeID pins the prefix swap the relabel cleanup relies on:
+// both document types map to each other, and an ID without a type prefix has
+// no alternate label to clean up.
+func TestAlternateDocTypeID(t *testing.T) {
+	cases := []struct {
+		id, want string
+		ok       bool
+	}{
+		{"TS 21.905", "TR 21.905", true},
+		{"TR 21.905", "TS 21.905", true},
+		{"TS 38.101-1", "TR 38.101-1", true},
+		{"weirdname", "", false},
+		{"", "", false},
+	}
+	for _, tt := range cases {
+		got, ok := alternateDocTypeID(tt.id)
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("alternateDocTypeID(%q) = %q, %v; want %q, %v", tt.id, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+// TestInsertSpec_DropsStaleDocTypeLabel: a spec number names either a TS or a
+// TR, never both. Databases built before TR detection stored every spec as
+// "TS ...", so an update that imports the corrected "TR ..." label must drop
+// the rows under the old prefix or the spec would be duplicated under both
+// labels and double every search hit (#110).
+func TestInsertSpec_DropsStaleDocTypeLabel(t *testing.T) {
+	d := setupTestDB(t)
+
+	insert := func(id, version string) {
+		t.Helper()
+		err := d.InsertSpecWithSectionsAndImages(
+			Spec{ID: id, Version: version, Title: "Vocabulary", Series: "21"},
+			[]Section{{
+				SpecID: id, Version: version, Number: "1", Title: "Scope",
+				Level: 1, Content: "relabelprobe vocabulary content",
+			}},
+			[]Image{{SpecID: id, Version: version, Name: "img.png", MIMEType: "image/png", Data: []byte{1}}},
+		)
+		if err != nil {
+			t.Fatalf("insert %s v%s: %v", id, version, err)
+		}
+	}
+
+	insert("TS 21.905", "17.0.0") // pre-detection build's stale label
+	insert("TR 21.905", "18.0.0") // corrected label from an update
+
+	result, err := d.ListSpecs(t.Context(), "", "21.905", -1, 0)
+	if err != nil {
+		t.Fatalf("ListSpecs: %v", err)
+	}
+	if len(result.Specs) != 1 || result.Specs[0].ID != "TR 21.905" {
+		t.Fatalf("expected only TR 21.905 to remain, got %+v", result.Specs)
+	}
+
+	// The stale label's sections must be gone from search too.
+	page, err := d.Search(t.Context(), "relabelprobe", nil, 10, 0)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(page.Results) != 1 {
+		t.Fatalf("expected exactly 1 search hit after relabel, got %d", len(page.Results))
+	}
+	if page.Results[0].SpecID != "TR 21.905" {
+		t.Errorf("search hit SpecID = %q, want %q", page.Results[0].SpecID, "TR 21.905")
+	}
+
+	// Images follow the same rule.
+	if _, err := d.GetImage(t.Context(), "TS 21.905", "17.0.0", "img.png"); err == nil {
+		t.Error("expected the stale label's image to be gone")
+	}
+	img, err := d.GetImage(t.Context(), "TR 21.905", "18.0.0", "img.png")
+	if err != nil || img == nil {
+		t.Errorf("expected the relabeled spec's image to exist, got %v", err)
+	}
+
+	// An ID without a type prefix has no alternate label to clean up and
+	// must insert unharmed.
+	insert("weirdname", "1.0.0")
+	if _, err := d.GetImage(t.Context(), "weirdname", "1.0.0", "img.png"); err != nil {
+		t.Errorf("expected the unprefixed spec to insert cleanly, got %v", err)
+	}
+}
+
+// TestInsertSpec_RelabelCleanupErrors drives the relabel cleanup's DELETEs
+// into failure via conditional triggers that abort only the stale label's
+// rows, proving the errors surface wrapped instead of being swallowed. The
+// happy path up to the injected statement is untouched, so the failure hits
+// exactly the branch under test.
+func TestInsertSpec_RelabelCleanupErrors(t *testing.T) {
+	newSpec := func(id, version string) (Spec, []Section) {
+		return Spec{ID: id, Version: version, Title: "Vocabulary", Series: "21"},
+			[]Section{{
+				SpecID: id, Version: version, Number: "1", Title: "Scope",
+				Level: 1, Content: "vocabulary content",
+			}}
+	}
+
+	seed := func(t *testing.T) *DB {
+		t.Helper()
+		d := setupTestDB(t)
+		spec, sections := newSpec("TS 21.905", "17.0.0")
+		if err := d.InsertSpecWithSections(spec, sections); err != nil {
+			t.Fatalf("seed stale label: %v", err)
+		}
+		return d
+	}
+
+	t.Run("child table cleanup failure", func(t *testing.T) {
+		d := seed(t)
+		if err := d.ExecScript(`CREATE TRIGGER fail_relabel_sections BEFORE DELETE ON sections
+WHEN old.spec_id = 'TS 21.905' BEGIN SELECT RAISE(ABORT, 'injected'); END;`); err != nil {
+			t.Fatalf("create trigger: %v", err)
+		}
+		spec, sections := newSpec("TR 21.905", "18.0.0")
+		err := d.InsertSpecWithSections(spec, sections)
+		if err == nil || !strings.Contains(err.Error(), "drop relabeled sections") {
+			t.Fatalf("err = %v, want a 'drop relabeled sections' error", err)
+		}
+	})
+
+	t.Run("spec row cleanup failure", func(t *testing.T) {
+		d := seed(t)
+		if err := d.ExecScript(`CREATE TRIGGER fail_relabel_spec BEFORE DELETE ON specs
+WHEN old.id = 'TS 21.905' BEGIN SELECT RAISE(ABORT, 'injected'); END;`); err != nil {
+			t.Fatalf("create trigger: %v", err)
+		}
+		spec, sections := newSpec("TR 21.905", "18.0.0")
+		err := d.InsertSpecWithSections(spec, sections)
+		if err == nil || !strings.Contains(err.Error(), "drop relabeled spec:") {
+			t.Fatalf("err = %v, want a 'drop relabeled spec' error", err)
+		}
+	})
 }
 
 func TestSearch_HyphenatedIdentifierTokenization(t *testing.T) {
