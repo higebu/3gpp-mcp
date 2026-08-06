@@ -2128,3 +2128,31 @@ func TestRenderMarkdown_LiteralSpanCloserEscaped(t *testing.T) {
 		t.Errorf("stray </span> in prose must stay visible text, got:\n%s", got)
 	}
 }
+
+// TestEscapeOutsideTables pins the table-region boundary conditions: a
+// word-prefix lookalike or an unclosed opener must not disable escaping.
+func TestEscapeOutsideTables(t *testing.T) {
+	t.Run("prose word starting with table does not open a region", func(t *testing.T) {
+		got := renderMarkdown("a <tablet> device and a <SUPI> placeholder", renderOpts{specID: "TS 23.501"})
+		if !strings.Contains(got, "&lt;tablet&gt;") || !strings.Contains(got, "&lt;SUPI&gt;") {
+			t.Errorf("placeholders must stay visible text, got:\n%s", got)
+		}
+	})
+
+	t.Run("unclosed table opener does not disable escaping", func(t *testing.T) {
+		got := renderMarkdown("mentioning <table> without closing it, then <SUPI>", renderOpts{specID: "TS 23.501"})
+		if !strings.Contains(got, "&lt;SUPI&gt;") {
+			t.Errorf("placeholder after unclosed <table> must stay visible text, got:\n%s", got)
+		}
+	})
+}
+
+// A marker-shaped fragment in document prose must not admit stray closers on
+// later lines: marker state resets at newlines.
+func TestEscapeUnknownHTML_MarkerStateResetsAtNewline(t *testing.T) {
+	in := "forged <span class=\"ref-unresolved\" title=\"x\">text\nnext line literal </span> here"
+	got := escapeUnknownHTML(in)
+	if !strings.Contains(got, "&lt;/span>") {
+		t.Errorf("stray closer on a later line must be escaped, got:\n%s", got)
+	}
+}

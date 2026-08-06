@@ -236,6 +236,9 @@ func (o *LinkifyRefsOpts) resolveTarget(spec, section string) (url, title string
 // code spans are not replaced: goldmark renders code verbatim, so a rewritten
 // reference there would show up as literal link syntax.
 func LinkifyRefs(content string, opts LinkifyRefsOpts) string {
+	if opts.URLFor == nil { // URLFor is the one mandatory option
+		return content
+	}
 	bracketMap, urlFor, sectionExists := opts.BracketMap, opts.URLFor, opts.SectionExists
 	// Build list of excluded regions: existing Markdown links, fenced code
 	// blocks and inline code spans.

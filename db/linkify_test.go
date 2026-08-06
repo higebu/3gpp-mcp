@@ -778,3 +778,23 @@ func TestLinkifyRefs_CoordPluralKeyword(t *testing.T) {
 		t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", input, got, want)
 	}
 }
+
+// A bare number directly after a preposition is not a section reference:
+// the coordinated patterns require a keyword after "of"/"in".
+func TestLinkifyRefs_PrepositionNeedsKeyword(t *testing.T) {
+	input := "See clause 4.1 and in 2024 of TS 23.501."
+	want := "See clause 4.1 and in 2024 of [TS 23.501](/specs/TS 23.501)."
+	got := LinkifyRefs(input, LinkifyRefsOpts{URLFor: urlFor})
+	if got != want {
+		t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", input, got, want)
+	}
+}
+
+// URLFor is the one mandatory option; without it LinkifyRefs is a no-op
+// instead of a panic.
+func TestLinkifyRefs_NilURLFor(t *testing.T) {
+	input := "See TS 23.501 clause 5.1."
+	if got := LinkifyRefs(input, LinkifyRefsOpts{}); got != input {
+		t.Errorf("expected no change with nil URLFor, got %q", got)
+	}
+}

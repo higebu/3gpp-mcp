@@ -47,6 +47,12 @@ func escapeUnknownHTML(text string) string {
 			return b.String()
 		}
 		b.WriteString(text[:i])
+		// LinkifyRefs markers never span lines, so marker state resets at
+		// every newline: a marker-shaped fragment in document prose cannot
+		// keep admitting stray closers for the rest of the document.
+		if strings.IndexByte(text[:i], '\n') >= 0 {
+			clear(open)
+		}
 		text = text[i:]
 		if m := markerOpenRE.FindStringSubmatch(text); m != nil {
 			open[m[1]]++

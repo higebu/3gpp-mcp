@@ -601,11 +601,12 @@ func renderSections(sections []db.Section, o renderOpts) []sectionRendered {
 }
 
 // targetInfo returns a per-request validator of cross-spec section references
-// against the database's version of each target spec, with the TOCs fetched
-// lazily and cached for the request. References to the spec being viewed are
-// validated against the viewed version's own TOC instead, so archived pages
-// do not judge their self-references by the database version. A spec that is
-// not in the database reports ok=false and is not validated.
+// against the database's version of each target spec, with the section-number
+// sets fetched lazily and cached for the request. References to the spec
+// being viewed are validated against the viewed version's own TOC instead, so
+// archived pages do not judge their self-references by the database version.
+// A spec that is not in the database — or whose lookup fails, which is logged
+// — reports ok=false and is not validated.
 func (h *handler) targetInfo(ctx context.Context, specID, version string, secNums map[string]bool) func(spec, section string) (bool, string, bool) {
 	type entry struct {
 		set     map[string]bool
@@ -618,13 +619,12 @@ func (h *handler) targetInfo(ctx context.Context, specID, version string, secNum
 		}
 		e, ok := cache[spec]
 		if !ok {
-			toc, err := h.db.GetTOC(ctx, spec, "")
-			if err == nil && len(toc) > 0 {
-				e.set = make(map[string]bool, len(toc))
-				for _, s := range toc {
-					e.set[s.Number] = true
-				}
-				e.version = toc[0].Version
+			set, ver, err := h.db.SectionNumbers(ctx, spec)
+			if err != nil {
+				log.Printf("cross-reference validation for %s: %v", spec, err)
+			} else if len(set) > 0 {
+				e.set = set
+				e.version = ver
 			}
 			cache[spec] = e
 		}

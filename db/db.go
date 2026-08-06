@@ -743,6 +743,33 @@ func (d *DB) GetTOC(ctx context.Context, specID, version string) ([]Section, err
 // AllSections returns every section of a spec version, content included, in
 // document order. An empty version resolves to the version this database
 // holds; a version it does not hold yields no rows.
+// SectionNumbers returns the set of section numbers of the database version
+// of a spec and that version — a light existence index for cross-reference
+// validation, without loading titles or content. An unknown spec returns an
+// empty set and no error.
+func (d *DB) SectionNumbers(ctx context.Context, specID string) (map[string]bool, string, error) {
+	rows, err := d.conn.QueryContext(ctx,
+		"SELECT number, version FROM sections WHERE spec_id = ?", specID)
+	if err != nil {
+		return nil, "", fmt.Errorf("section numbers: %w", err)
+	}
+	defer rows.Close()
+
+	numbers := make(map[string]bool)
+	version := ""
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n, &version); err != nil {
+			return nil, "", fmt.Errorf("scan section number: %w", err)
+		}
+		numbers[n] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("section numbers: iterate: %w", err)
+	}
+	return numbers, version, nil
+}
+
 func (d *DB) AllSections(ctx context.Context, specID, version string) ([]Section, error) {
 	version, err := d.ResolveVersion(ctx, specID, version)
 	if errors.Is(err, ErrNoVersion) {
@@ -1250,11 +1277,18 @@ const secNum = `([A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 // secNumRaw is secNum without capture group, used for multi-section list matching.
 const secNumRaw = `(?:[A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 
+// coordElemTail matches the reference part of one coordinated-list element:
+// an optional preposition-plus-keyword or bare keyword, then a section
+// number. A preposition requires a keyword after it ("and in clause 4.12.2a"
+// but not "and in 2024") so a bare number after "of"/"in" is never read as a
+// section reference.
+const coordElemTail = `(?:(?:of|in)` + sp + `+(?:[Cc]lauses?|[Ss]ections?|[Ss]ubclauses?|[Aa]nnexe?s?)` + sp + `+|(?:(?:[Cc]lauses?|[Ss]ections?|[Ss]ubclauses?|[Aa]nnexe?s?)` + sp + `+)?)` + secNumRaw
+
 // bareRefChain matches zero or more coordinated references (", clause 4.3",
 // " and 4.4", ", and 4.4", "; or Annex B", " and in clause 4.12.2a") so
 // bareTrailingQualRE and barePresentDocRE can see through a list to the
 // "of"/"in" that qualifies its every element.
-const bareRefChain = `(?:` + sp + `*(?:[,;]` + sp + `*(?:and|or)?|and|or)` + sp + `*(?:(?:of|in)` + sp + `+)?(?:(?:[Cc]lauses?|[Ss]ections?|[Ss]ubclauses?|[Aa]nnexe?s?)` + sp + `+)?` + secNumRaw + `)*`
+const bareRefChain = `(?:` + sp + `*(?:[,;]` + sp + `*(?:and|or)?|and|or)` + sp + `*` + coordElemTail + `)*`
 
 var (
 	// "TS 23.501 clause 5.1" or "3GPP TS 33.203 Annex H"
@@ -1293,7 +1327,7 @@ var (
 	// Groups: 1=reference-list, 2=TS|TR, 3=spec-number.
 	tsCoordPrefixRefRE = regexp.MustCompile(
 		`((?:[Cc]lauses?|[Ss]ubclauses?|[Ss]ections?|[Aa]nnexe?s?)` + sp + `+` + secNumRaw +
-			`(?:` + sp + `*(?:,|and|or)` + sp + `*(?:(?:of|in)` + sp + `+)?(?:(?:[Cc]lauses?|[Ss]ubclauses?|[Ss]ections?|[Aa]nnexe?s?)` + sp + `+)?` + secNumRaw + `)+)` +
+			`(?:` + sp + `*(?:,|and|or)` + sp + `*` + coordElemTail + `)+)` +
 			sp + `+(?:of|in)` + sp + `+(?:3GPP` + sp + `+)?(TS|TR)` + sp + `+(\d+\.\d+)`)
 
 	// secNumListRE extracts individual section numbers from a comma/and-separated list.

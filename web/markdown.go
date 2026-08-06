@@ -174,31 +174,38 @@ func renderMarkdown(content string, o renderOpts) string {
 	return sanitizeHTML(out)
 }
 
+// tableOpenRE matches the start of a converter-emitted table region. The
+// boundary character keeps prose like "<tables" or "<tabletop" from opening
+// a region.
+var tableOpenRE = regexp.MustCompile(`<table[\s>]`)
+
 // escapeOutsideTables applies escapeUnknownHTML to text outside
 // <table>...</table> regions and passes table regions through verbatim.
 // Table markup is pipeline-generated — the DOCX converter's tags with cell
 // text already entity-escaped at build time, plus db.LinkifyRefs's raw
 // anchors — so escaping there would turn the anchors into visible text
-// (and did, before this function existed). sanitizeHTML still attribute-
-// sanitizes everything afterwards.
+// (and did, before this function existed). An opener with no closer is not
+// treated as a region: the rest is escaped normally, which keeps document
+// prose mentioning "<table>" from disabling escaping. sanitizeHTML still
+// attribute-sanitizes everything afterwards.
 func escapeOutsideTables(text string) string {
 	var b strings.Builder
 	for {
-		open := strings.Index(text, "<table")
-		if open < 0 {
+		loc := tableOpenRE.FindStringIndex(text)
+		if loc == nil {
 			if b.Len() == 0 {
 				return escapeUnknownHTML(text)
 			}
 			b.WriteString(escapeUnknownHTML(text))
 			return b.String()
 		}
-		b.WriteString(escapeUnknownHTML(text[:open]))
-		rest := text[open:]
+		rest := text[loc[0]:]
 		end := strings.Index(rest, "</table>")
 		if end < 0 {
-			b.WriteString(rest)
+			b.WriteString(escapeUnknownHTML(text))
 			return b.String()
 		}
+		b.WriteString(escapeUnknownHTML(text[:loc[0]]))
 		end += len("</table>")
 		b.WriteString(rest[:end])
 		text = rest[end:]
