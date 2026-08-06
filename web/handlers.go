@@ -163,6 +163,31 @@ func (h *handler) initTemplates() {
 		"add": func(a, b int) int {
 			return a + b
 		},
+		// headingLevel maps a section level to the heading element that
+		// carries it. The page title is <h1>, so a section sits one level
+		// below, clamped to <h6>: 3GPP numbering goes deeper than HTML has
+		// headings (TS 36.523-1 has 7.1.13.1.1.2), and <h7> is not an element
+		// — browsers treat it as unknown, dropping both the heading semantics
+		// and the styling. The depth stays visible in the section number and
+		// in the sectionDepth class.
+		"headingLevel": func(level int) int {
+			switch {
+			case level < 1:
+				return 1
+			case level > 5:
+				return 6
+			default:
+				return level + 1
+			}
+		},
+		// sectionDepth keeps the visual hierarchy of levels the heading
+		// elements can no longer distinguish.
+		"sectionDepth": func(level int) int {
+			if level > 6 {
+				return 6
+			}
+			return level
+		},
 		"sub": func(a, b int) int {
 			return a - b
 		},

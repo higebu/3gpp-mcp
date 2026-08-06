@@ -536,6 +536,71 @@ func TestHandleSection_RawHTMLEscaped(t *testing.T) {
 	}
 }
 
+// TestHandleSection_DeepHeadingClamped verifies that a section deeper than
+// HTML has heading elements — TS 36.523-1 numbers clauses like 7.1.13.1.1.2 —
+// renders as a real <h6> instead of an unknown <h7> element.
+func TestHandleSection_DeepHeadingClamped(t *testing.T) {
+	ts, d := setupTestServer(t)
+
+	if err := d.UpsertSection(db.Section{
+		SpecID:  "TS 23.501",
+		Version: "18.6.0",
+		Number:  "7.1.13.1.1.2",
+		Title:   "Deeply nested test procedure",
+		Level:   6,
+		Content: "Body text of a level 6 section.",
+	}); err != nil {
+		t.Fatalf("UpsertSection: %v", err)
+	}
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/sections/7.1.13.1.1.2")
+	if err != nil {
+		t.Fatalf("GET section error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	for _, bad := range []string{"<h7", "</h7", "<h8", "</h8"} {
+		if strings.Contains(body, bad) {
+			t.Errorf("no %s element may be emitted, got:\n%s", bad, body)
+		}
+	}
+	if !strings.Contains(body, `<h6 class="section-heading depth-6" id="section-7.1.13.1.1.2">`) {
+		t.Errorf("expected the deep section to render as <h6>, got:\n%s", body)
+	}
+	if !strings.Contains(body, "</h6>") {
+		t.Errorf("expected a matching </h6> closer, got:\n%s", body)
+	}
+	if !strings.Contains(body, "Deeply nested test procedure") {
+		t.Errorf("expected the section title in the heading, got:\n%s", body)
+	}
+}
+
+// TestHandleSection_HeadingLevels checks the unclamped levels still map one
+// step below the page title.
+func TestHandleSection_HeadingLevels(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	for _, tt := range []struct {
+		section string
+		want    string
+	}{
+		{"5", `<h2 class="section-heading depth-1" id="section-5">`},
+		{"5.1", `<h3 class="section-heading depth-2" id="section-5.1">`},
+		{"5.1.1", `<h4 class="section-heading depth-3" id="section-5.1.1">`},
+	} {
+		resp, err := http.Get(ts.URL + "/specs/TS 23.501/sections/" + tt.section)
+		if err != nil {
+			t.Fatalf("GET section %s error: %v", tt.section, err)
+		}
+		body := readBody(t, resp)
+		resp.Body.Close()
+		if !strings.Contains(body, tt.want) {
+			t.Errorf("section %s: expected %s, got:\n%s", tt.section, tt.want, body)
+		}
+	}
+}
+
 func TestHandleSection_PrevNext(t *testing.T) {
 	ts, _ := setupTestServer(t)
 
