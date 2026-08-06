@@ -2156,3 +2156,16 @@ func TestEscapeUnknownHTML_MarkerStateResetsAtNewline(t *testing.T) {
 		t.Errorf("stray closer on a later line must be escaped, got:\n%s", got)
 	}
 }
+
+// Prose mentioning a literal <table> before a real table must not open a
+// region early: everything up to the real table stays escaped.
+func TestEscapeOutsideTables_ProseMentionBeforeRealTable(t *testing.T) {
+	content := "prose mentions <table> and <SUPI> here\n\n<table><tr><td>TS 23.501 clause 5.1</td></tr></table>"
+	got := renderMarkdown(content, renderOpts{specID: "TS 23.502"})
+	if !strings.Contains(got, "&lt;SUPI&gt;") {
+		t.Errorf("prose before the real table must stay escaped, got:\n%s", got)
+	}
+	if want := `<a href="/specs/TS%2023.501/sections/5.1">TS 23.501 clause 5.1</a>`; !strings.Contains(got, want) {
+		t.Errorf("the real table must keep its anchor, got:\n%s", got)
+	}
+}

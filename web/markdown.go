@@ -174,10 +174,12 @@ func renderMarkdown(content string, o renderOpts) string {
 	return sanitizeHTML(out)
 }
 
-// tableOpenRE matches the start of a converter-emitted table region. The
-// boundary character keeps prose like "<tables" or "<tabletop" from opening
-// a region.
-var tableOpenRE = regexp.MustCompile(`<table[\s>]`)
+// tableOpenRE matches the start of a converter-emitted table region: the
+// converter emits each table as its own block, so a real opener sits at the
+// start of a line. The anchor and boundary character keep prose mentioning
+// "<table>" mid-sentence — or words like "<tabletop" — from opening a region
+// and letting the text up to a real table's closer bypass escaping.
+var tableOpenRE = regexp.MustCompile(`(?m)^<table[\s>]`)
 
 // escapeOutsideTables applies escapeUnknownHTML to text outside
 // <table>...</table> regions and passes table regions through verbatim.

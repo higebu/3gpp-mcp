@@ -798,3 +798,14 @@ func TestLinkifyRefs_NilURLFor(t *testing.T) {
 		t.Errorf("expected no change with nil URLFor, got %q", got)
 	}
 }
+
+// A reference matched across a line break must not produce a multi-line
+// marker: the web sanitizer relies on markers staying on one line.
+func TestLinkifyRefs_MarkerFoldsNewline(t *testing.T) {
+	input := "See clause\n9.9 for details."
+	want := `See <span class="ref-unresolved" title="Section 9.9 does not exist in this document — possibly a stale or incorrect reference in the source text">clause 9.9</span> for details.`
+	got := LinkifyRefs(input, LinkifyRefsOpts{URLFor: bareURLFor, SectionExists: bareSectionSet})
+	if got != want {
+		t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", input, got, want)
+	}
+}

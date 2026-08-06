@@ -10,6 +10,10 @@ import (
 // existingLinkRE matches Markdown link syntax [text](url) to avoid double-linking.
 var existingLinkRE = regexp.MustCompile(`\[[^\]]*\]\([^)]*\)`)
 
+// tableRegionOpenRE matches a converter-emitted table opener: each table is
+// its own block, so a real opener sits at the start of a line.
+var tableRegionOpenRE = regexp.MustCompile(`(?m)^<table[\s>]`)
+
 // region is a half-open byte range [start, end) within a content string.
 type region struct{ start, end int }
 
@@ -143,6 +147,16 @@ func htmlLink(text, url string) string {
 	return `<a href="` + htmlpkg.EscapeString(url) + `">` + htmlpkg.EscapeString(text) + `</a>`
 }
 
+// markerText escapes reference text for use inside an unresolved-reference
+// marker, folding newlines to spaces: the reference regexes can match across
+// a line break (sp includes \s), but the web sanitizer relies on markers
+// never spanning lines, so the invariant is enforced here at generation.
+func markerText(text string) string {
+	text = strings.ReplaceAll(text, "\r", " ")
+	text = strings.ReplaceAll(text, "\n", " ")
+	return htmlpkg.EscapeString(text)
+}
+
 // unresolvedLink renders an anchor for a reference whose target section does
 // not exist in the stored version of the target spec: the URL degrades to the
 // spec's top page and the title explains why. Emitted as raw HTML in both
@@ -151,7 +165,7 @@ func htmlLink(text, url string) string {
 // exactly this form.
 func unresolvedLink(text, url, title string) string {
 	return `<a class="ref-unresolved" href="` + htmlpkg.EscapeString(url) +
-		`" title="` + htmlpkg.EscapeString(title) + `">` + htmlpkg.EscapeString(text) + `</a>`
+		`" title="` + htmlpkg.EscapeString(title) + `">` + markerText(text) + `</a>`
 }
 
 // unresolvedSpan marks reference text whose target section does not exist,
@@ -160,7 +174,7 @@ func unresolvedLink(text, url, title string) string {
 // class and title on span.
 func unresolvedSpan(text, title string) string {
 	return `<span class="ref-unresolved" title="` + htmlpkg.EscapeString(title) + `">` +
-		htmlpkg.EscapeString(text) + `</span>`
+		markerText(text) + `</span>`
 }
 
 // crossRefTitle explains a cross-spec reference whose section is missing from
@@ -262,16 +276,19 @@ func LinkifyRefs(content string, opts LinkifyRefsOpts) string {
 	// Build list of raw-HTML block regions (tables). goldmark does not process
 	// Markdown link syntax inside raw HTML blocks, so references in these regions
 	// must be emitted as HTML anchors instead of Markdown links. The DOCX→HTML
-	// pipeline always emits lowercase <table>/</table> tags, so search content
-	// directly: lowercasing first could shift byte offsets for rare Unicode
-	// characters whose lowercase form has a different byte length.
+	// pipeline always emits lowercase <table>/</table> tags with each table as
+	// its own block, so a real opener sits at the start of a line (see
+	// tableRegionOpenRE) — prose mentioning "<table>" mid-sentence does not
+	// open a region. Search content directly: lowercasing first could shift
+	// byte offsets for rare Unicode characters whose lowercase form has a
+	// different byte length.
 	var htmlRegions []region
 	for i := 0; i < len(content); {
-		open := strings.Index(content[i:], "<table")
-		if open < 0 {
+		loc := tableRegionOpenRE.FindStringIndex(content[i:])
+		if loc == nil {
 			break
 		}
-		open += i
+		open := i + loc[0]
 		rel := strings.Index(content[open:], "</table>")
 		if rel < 0 {
 			htmlRegions = append(htmlRegions, region{open, len(content)})
