@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -308,28 +309,86 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 		}
 	}
 
-	// docPathClaimants maps each shared docDir path to every DOC_ONLY spec
-	// that recorded it. Two specs whose .doc files share a basename both
-	// extract into the same path in the flat, shared docDir, so the second
-	// extraction silently overwrites the first: only one spec's content
-	// physically survives to be converted, but both specs' docFilesBySpec
-	// entries still point at that same surviving path. An existence check
-	// on the converted output can't tell whose file actually made it
-	// through, so any path claimed by more than one spec is treated as
-	// unattributable for all of them rather than risk crediting a spec
-	// whose own file was clobbered before conversion ever ran.
-	docPathClaimants := make(map[string][]string)
+	// _doc_files (holding every DOC_ONLY spec's extracted .doc files) and
+	// outputDir (holding every direct .docx and every published conversion
+	// result) are both flat and shared across the whole batch, and
+	// outputDir persists across separate invocations of this command too.
+	// That flatness makes a basename collision possible in several distinct
+	// shapes; each is called out below with how it's handled or why it
+	// doesn't need to be, since review has surfaced a new one on each of
+	// several passes and the reasoning needs to live somewhere durable:
+	//
+	//  1. direct .docx x direct .docx (two different specs' archives each
+	//     already ship a .docx with the same basename): NOT specially
+	//     handled. DownloadAndExtract writes straight into outputDir with a
+	//     plain overwrite, same as it always has -- including on a second
+	//     invocation of this command, where overwriting previously
+	//     downloaded specs to refresh them is the intended behavior.
+	//     Guarding this would either break that refresh or require
+	//     namespacing outputDir per spec, both bigger changes than this
+	//     collision-handling pass is scoped to. It also cannot occur in
+	//     practice: every 3GPP archive filename is prefixed with that
+	//     spec's own series+number (e.g. "23501-i30.docx"), so two
+	//     *different* specs never produce the same basename.
+	//  2. direct .docx x converted .doc->.docx (one spec's archive ships a
+	//     .docx directly; a different DOC_ONLY spec's .doc converts to that
+	//     same basename): handled by the no-clobber publish below -- a
+	//     converted file is never allowed to overwrite an existing file in
+	//     outputDir. The spec that lost the race stays DOC_ONLY with a
+	//     logged warning instead of destroying the other spec's real
+	//     output.
+	//  3. converted .doc x converted .doc, different specs (two DOC_ONLY
+	//     specs' .doc files share a basename): handled below via
+	//     unattributable -- both extract into the same _doc_files path, so
+	//     only one spec's content survives extraction to be converted, and
+	//     an existence check on the result can't tell whose it was. Neither
+	//     spec is promoted.
+	//  4. duplicate basenames within one spec's OWN archive (e.g. two zip
+	//     entries under different subfolders that both flatten to the same
+	//     name): handled by deduplicating each spec's own doc-file list
+	//     before counting claimants below, so a spec doesn't collide with
+	//     itself and get wrongly excluded as "shared with another spec".
+	//     Only one of the duplicate contents survives extraction (same
+	//     flat-directory constraint as case 3), but that's the existing
+	//     "partial success still counts as OK" rule already used elsewhere
+	//     in this file, not a new attribution risk: the survivor still
+	//     definitely belongs to this spec, since no other spec claims it.
+	//  5. this run's converted output vs. a stale file already sitting at
+	//     the same outputDir path (a leftover from an earlier invocation,
+	//     since outputDir is never cleared between runs): handled by the
+	//     same no-clobber publish as case 2; a spec is only promoted when
+	//     its own file actually lands in outputDir this run.
+	//
+	// docPathClaimants maps each shared docDir path to the set of distinct
+	// DOC_ONLY specs that recorded it (case 3), after deduplicating each
+	// spec's own list first (case 4) so a spec's repeated claim on its own
+	// path never inflates the count past 1.
+	docPathClaimants := make(map[string]map[string]bool)
 	for specID, docFiles := range docFilesBySpec {
+		claimedByThisSpec := make(map[string]bool)
 		for _, docPath := range docFiles {
-			docPathClaimants[docPath] = append(docPathClaimants[docPath], specID)
+			if claimedByThisSpec[docPath] {
+				continue
+			}
+			claimedByThisSpec[docPath] = true
+			if docPathClaimants[docPath] == nil {
+				docPathClaimants[docPath] = make(map[string]bool)
+			}
+			docPathClaimants[docPath][specID] = true
 		}
 	}
 	unattributable := make(map[string]bool)
-	for docPath, specIDs := range docPathClaimants {
-		if len(specIDs) > 1 {
-			unattributable[docPath] = true
-			log.Printf("  warning: %s share a same-named .doc file (%s); none will be promoted from it", strings.Join(specIDs, ", "), filepath.Base(docPath))
+	for docPath, specIDSet := range docPathClaimants {
+		if len(specIDSet) <= 1 {
+			continue
 		}
+		unattributable[docPath] = true
+		specIDs := make([]string, 0, len(specIDSet))
+		for specID := range specIDSet {
+			specIDs = append(specIDs, specID)
+		}
+		sort.Strings(specIDs)
+		log.Printf("  warning: %s share a same-named .doc file (%s); none will be promoted from it", strings.Join(specIDs, ", "), filepath.Base(docPath))
 	}
 
 	if convertDoc {
@@ -369,21 +428,34 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 				// actually made it there. Deciding OK from mere existence
 				// in convDir (as an earlier version of this fix did) could
 				// report a spec OK and then have the evidence vanish: if
-				// the rename below failed for that file -- outputDir
-				// already holds a same-named directory, a permissions
-				// problem, anything -- the .docx never reached outputDir,
-				// yet the scratch-dir cleanup at the end of this block
-				// would delete the only copy that had ever existed,
+				// publishing failed for that file, the .docx never reached
+				// outputDir, yet the scratch-dir cleanup at the end of this
+				// block would delete the only copy that had ever existed,
 				// leaving the reported OK status orphaned from any real
-				// file. Only a file that is confirmed moved counts as
+				// file. Only a file that is confirmed published counts as
 				// evidence a spec's conversion succeeded.
+				//
+				// Publishing uses os.Link (not os.Rename) so it fails
+				// closed on an existing destination instead of silently
+				// overwriting it (collision cases 2 and 5 in the survey
+				// above): a converted file may not be the only thing that
+				// ever wanted that outputDir path -- another spec's own
+				// .docx may already be sitting there from this very run, or
+				// from an earlier invocation of this command. Since convDir
+				// is a subdirectory of outputDir (same filesystem), the
+				// hard link always succeeds or fails atomically; there is
+				// no separate existence check to race against.
 				published := make(map[string]bool)
 				if convEntries, err := os.ReadDir(convDir); err == nil {
 					for _, e := range convEntries {
 						src := filepath.Join(convDir, e.Name())
 						dst := filepath.Join(outputDir, e.Name())
-						if err := os.Rename(src, dst); err != nil {
-							log.Printf("  publish converted %s: %v", e.Name(), err)
+						if err := os.Link(src, dst); err != nil {
+							if os.IsExist(err) {
+								log.Printf("  publish converted %s: skipped, %s already exists in outputDir", e.Name(), e.Name())
+							} else {
+								log.Printf("  publish converted %s: %v", e.Name(), err)
+							}
 							continue
 						}
 						published[e.Name()] = true

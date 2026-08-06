@@ -360,12 +360,14 @@ func TestDownloadSpecs_ConvertDocPerSpec(t *testing.T) {
 	}
 }
 
-// TestDownloadSpecs_ConvertDocIgnoresStaleOutput verifies that a leftover
-// .docx from an earlier invocation of this command does not get mistaken for
-// evidence that this run's conversion succeeded (ocr review finding on
-// #143's fix). outputDir is the caller's persistent --output-dir and is
-// never cleared between runs, so a stale file can already sit at a spec's
-// expected output path before conversion even starts this time.
+// TestDownloadSpecs_ConvertDocIgnoresStaleOutput covers collision matrix
+// case 5 (this run's converted output vs. a stale leftover from an earlier
+// invocation): a leftover .docx from an earlier invocation of this command
+// does not get mistaken for evidence that this run's conversion succeeded
+// (ocr review finding on #143's fix). outputDir is the caller's persistent
+// --output-dir and is never cleared between runs, so a stale file can
+// already sit at a spec's expected output path before conversion even
+// starts this time.
 func TestDownloadSpecs_ConvertDocIgnoresStaleOutput(t *testing.T) {
 	writeFakeLibreOffice(t)
 
@@ -399,18 +401,19 @@ func TestDownloadSpecs_ConvertDocIgnoresStaleOutput(t *testing.T) {
 	}
 }
 
-// TestDownloadSpecs_ConvertDocSameBatchBasenameCollision verifies that a
-// same-batch, different spec's freshly-extracted .docx does not block a
-// DOC_ONLY spec's own promotion just because it happens to share a basename
-// (Greptile review finding on the stale-output fix above). SpecD's archive
+// TestDownloadSpecs_ConvertDocDirectVsConvertedCollision_PreservesExisting
+// covers collision matrix case 2 (direct .docx vs. converted .doc->.docx,
+// same batch): a converted file must never overwrite another spec's real
+// output that happens to share its basename (Greptile review finding on an
+// earlier version of this fix, which let the rename through as long as it
+// happened "this run" -- landing at the right path wasn't enough, it also
+// must not destroy someone else's file already there). SpecD's archive
 // ships an already-converted "shared.docx" directly (its DownloadAndExtract
 // call returns OK), landing in outputDir before SpecE's .doc conversion
 // runs. SpecE's own .doc file happens to convert to that very path
-// ("shared.doc" -> "shared.docx"); an existence check alone cannot tell that
-// apart from a stale leftover and would wrongly leave SpecE at DOC_ONLY, so
-// the promotion must be based on whether the file was written at or after
-// conversion started, not merely on whether it exists.
-func TestDownloadSpecs_ConvertDocSameBatchBasenameCollision(t *testing.T) {
+// ("shared.doc" -> "shared.docx"); SpecE must lose that race and stay
+// DOC_ONLY, and SpecD's original content must survive untouched.
+func TestDownloadSpecs_ConvertDocDirectVsConvertedCollision_PreservesExisting(t *testing.T) {
 	writeFakeLibreOffice(t)
 
 	zipD := makeZipWithFiles(t, map[string][]byte{
@@ -439,22 +442,32 @@ func TestDownloadSpecs_ConvertDocSameBatchBasenameCollision(t *testing.T) {
 	outputDir := t.TempDir()
 	stats := DownloadSpecs(context.Background(), &http.Client{}, specs, outputDir, 2, true, 10*time.Second)
 
-	if stats["OK"] != 2 {
-		t.Errorf("OK = %d, want 2 (SpecD's own .docx plus SpecE's converted .doc)", stats["OK"])
+	if stats["OK"] != 1 {
+		t.Errorf("OK = %d, want 1 (only SpecD's own direct .docx)", stats["OK"])
 	}
-	if stats["DOC_ONLY"] != 0 {
-		t.Errorf("DOC_ONLY = %d, want 0 (SpecE's conversion succeeded despite the basename collision)", stats["DOC_ONLY"])
+	if stats["DOC_ONLY"] != 1 {
+		t.Errorf("DOC_ONLY = %d, want 1 (SpecE loses the publish race and stays DOC_ONLY)", stats["DOC_ONLY"])
+	}
+
+	got, err := os.ReadFile(filepath.Join(outputDir, "shared.docx"))
+	if err != nil {
+		t.Fatalf("read shared.docx: %v", err)
+	}
+	if string(got) != "already a docx" {
+		t.Errorf("shared.docx content = %q, want %q (SpecE's conversion must not have overwritten it)", got, "already a docx")
 	}
 }
 
-// TestDownloadSpecs_ConvertDocSameBasenameAcrossSpecsStaysDocOnly verifies
-// that two DOC_ONLY specs whose .doc files share a basename are never both
-// promoted to OK (2nd Greptile review finding). Both extract into the same
-// path in the shared, flat _doc_files directory, so one extraction silently
-// overwrites the other and only one spec's content survives to be
-// converted; an existence check on the single resulting .docx cannot tell
-// which spec it actually belongs to, so neither should be credited.
-func TestDownloadSpecs_ConvertDocSameBasenameAcrossSpecsStaysDocOnly(t *testing.T) {
+// TestDownloadSpecs_ConvertDocConvertedVsConvertedCollision_NeitherPromoted
+// covers collision matrix case 3 (converted .doc vs. converted .doc, two
+// different specs): two DOC_ONLY specs whose .doc files share a basename
+// must never both be promoted to OK (Greptile review finding). Both extract
+// into the same path in the shared, flat _doc_files directory, so one
+// extraction silently overwrites the other and only one spec's content
+// survives to be converted; an existence check on the single resulting
+// .docx cannot tell which spec it actually belongs to, so neither should be
+// credited.
+func TestDownloadSpecs_ConvertDocConvertedVsConvertedCollision_NeitherPromoted(t *testing.T) {
 	writeFakeLibreOffice(t)
 
 	zipF := makeZipWithFiles(t, map[string][]byte{
@@ -488,6 +501,44 @@ func TestDownloadSpecs_ConvertDocSameBasenameAcrossSpecsStaysDocOnly(t *testing.
 	}
 	if stats["DOC_ONLY"] != 2 {
 		t.Errorf("DOC_ONLY = %d, want 2 (both specs stay DOC_ONLY rather than risk a false OK)", stats["DOC_ONLY"])
+	}
+}
+
+// TestDownloadSpecs_ConvertDocDuplicateBasenameWithinOneSpec covers
+// collision matrix case 4 (duplicate basenames within one spec's OWN
+// archive): a single spec's zip has two different .doc entries under
+// different subfolders that both flatten to the same basename on
+// extraction ("partA/dup.doc" and "partB/dup.doc" both become "dup.doc").
+// Before this fix, docPathClaimants counted the spec's own repeated claim
+// on that one path as if two different specs had claimed it, wrongly
+// treating the spec as colliding with itself and leaving it at DOC_ONLY
+// even though its own (single surviving) .doc file converts and publishes
+// cleanly with no other spec involved at all.
+func TestDownloadSpecs_ConvertDocDuplicateBasenameWithinOneSpec(t *testing.T) {
+	writeFakeLibreOffice(t)
+
+	zip := makeZipWithFiles(t, map[string][]byte{
+		"partA/dup.doc": []byte("from partA"),
+		"partB/dup.doc": []byte("from partB"),
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zip)
+	}))
+	defer ts.Close()
+
+	specs := []*SpecVersion{
+		{SpecID: "TS 88.009", URL: ts.URL + "/i.zip"},
+	}
+
+	outputDir := t.TempDir()
+	stats := DownloadSpecs(context.Background(), &http.Client{}, specs, outputDir, 2, true, 10*time.Second)
+
+	if stats["OK"] != 1 {
+		t.Errorf("OK = %d, want 1 (the spec's own duplicate .doc basenames must not look like a cross-spec collision)", stats["OK"])
+	}
+	if stats["DOC_ONLY"] != 0 {
+		t.Errorf("DOC_ONLY = %d, want 0", stats["DOC_ONLY"])
 	}
 }
 
