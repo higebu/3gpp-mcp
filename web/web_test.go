@@ -175,6 +175,98 @@ func TestRenderMarkdown_PlaceholderLiteralUntouched(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdown_DollarProseNotMath verifies that prose carrying two
+// dollar signs on one line — the JSON Schema "$ref" keyword, which TS 29.501
+// clause 5.3.9 mentions repeatedly — stays visible text instead of being
+// swallowed into a math span, while real math on the same page still renders.
+func TestRenderMarkdown_DollarProseNotMath(t *testing.T) {
+	proseCases := []struct {
+		name    string
+		content string
+	}{
+		{
+			name:    "double-quoted $ref mentions",
+			content: `a reference to the data type schema, i.e. "$ref: '#/components/schemas/ExType'" if that schema is in the same file and "$ref: 'other.yaml#/components/schemas/ExType'" otherwise;`,
+		},
+		{
+			name:    "single-quoted $ref mentions",
+			content: `the '$ref' keyword must be the only attribute of the JSON object, so no description may sit next to the '$ref' keyword.`,
+		},
+		{
+			name:    "table-cell $ref mentions are escaped before rendering",
+			content: `<table><tbody><tr><td><p>&quot;$ref: &#39;#/components/schemas/A&#39;&quot; or &quot;$ref: &#39;#/components/schemas/B&#39;&quot;</p></td></tr></tbody></table>`,
+		},
+		{
+			name:    "spaced dollars around prose",
+			content: `the value $ x $ is written with padding and $ y $ too.`,
+		},
+	}
+	for _, tt := range proseCases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := renderMarkdown(tt.content, renderOpts{specID: "TS 29.501"})
+			if strings.Contains(got, "math-inline") || strings.Contains(got, "math-display") {
+				t.Errorf("prose must not become math, got:\n%s", got)
+			}
+			if !strings.Contains(got, "$") {
+				t.Errorf("the literal dollar signs must stay visible, got:\n%s", got)
+			}
+		})
+	}
+
+	mathCases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "modulo formula",
+			content: `the value $n \bmod 2$ is used`,
+			want:    `<span class="math-inline">n \bmod 2</span>`,
+		},
+		{
+			name:    "single symbol",
+			content: `on antenna port $p$ and subcarrier spacing $\mu$`,
+			want:    `<span class="math-inline">p</span>`,
+		},
+		{
+			name:    "math with inner spaces",
+			content: `$\left\{\begin{matrix} 0 & l=0 \\ 1 & otherwise \end{matrix}\right.$`,
+			want:    `<span class="math-inline">\left\{\begin{matrix} 0 &amp; l=0 \\ 1 &amp; otherwise \end{matrix}\right.</span>`,
+		},
+		{
+			name:    "prose and math on the same line",
+			content: `the '$ref' keyword and the '$ref' value, but $x^2$ is math`,
+			want:    `<span class="math-inline">x^2</span>`,
+		},
+		{
+			// The converter renders U+2032/U+2033 as ASCII apostrophes
+			// (converter/docx/omml.go mathSymbols), so primes must not read
+			// as prose quoting.
+			name:    "prime derivative",
+			content: `the derivative ${f}'\left(x\right)$ of the function`,
+			want:    `<span class="math-inline">{f}&#39;\left(x\right)</span>`,
+		},
+		{
+			name:    "bare prime",
+			content: `the value $f'$ follows`,
+			want:    `<span class="math-inline">f&#39;</span>`,
+		},
+		{
+			name:    "double prime",
+			content: `the second derivative $f''(x)$ follows`,
+			want:    `<span class="math-inline">f&#39;&#39;(x)</span>`,
+		},
+	}
+	for _, tt := range mathCases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := renderMarkdown(tt.content, renderOpts{specID: "TS 38.211"})
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("expected math span %s, got:\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestRefURL(t *testing.T) {
 	tests := []struct {
 		name string

@@ -27,8 +27,12 @@ var (
 	imageRE     = regexp.MustCompile(`!\[([^\]]*)\]\(image://([^?)]+)(?:\?w=(\d+)&h=(\d+))?\)`)
 	htmlImageRE = regexp.MustCompile(`(<img\s+[^>]*?\bsrc=")image://([^"?]+)(?:\?[^"]*)?("[^>]*>)`)
 	// mathRE matches LaTeX math emitted by the DOCX converter: display
-	// ($$...$$) is tried before inline ($...$). Inline math may not span lines.
-	mathRE = regexp.MustCompile(`\$\$([^$]+)\$\$|\$([^$\n]+)\$`)
+	// ($$...$$) is tried before inline ($...$). Inline math may not span
+	// lines and — following the usual convention for dollar-delimited math —
+	// may not carry whitespace just inside its delimiters, so a sentence with
+	// two spaced-out dollar signs is not swallowed whole. isInlineMath
+	// rejects the rest.
+	mathRE = regexp.MustCompile(`\$\$([^$]+)\$\$|\$([^\s$](?:[^$\n]*[^\s$])?)\$`)
 
 	// fallbackTokenCount disambiguates math tokens minted in the same
 	// nanosecond when crypto/rand is unavailable.
@@ -245,20 +249,58 @@ func mathPlaceholder(token string, i int) string {
 
 // protectMath extracts LaTeX math spans from text, replacing each with a
 // placeholder built from token, and appends the <span> HTML to re-inject
-// after conversion to spans.
+// after conversion to spans. A $...$ span isInlineMath rejects is left alone,
+// so its dollar signs stay visible text.
 func protectMath(text, token string, spans *[]string) string {
-	return mathRE.ReplaceAllStringFunc(text, func(match string) string {
-		sub := mathRE.FindStringSubmatch(match)
-		display := sub[1] != ""
-		latex, class := sub[2], "math-inline"
+	locs := mathRE.FindAllStringSubmatchIndex(text, -1)
+	if locs == nil {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text))
+	last := 0
+	for _, loc := range locs {
+		display := loc[2] >= 0
+		class := "math-inline"
+		var latex string
 		if display {
-			latex, class = sub[1], "math-display"
+			latex, class = text[loc[2]:loc[3]], "math-display"
+		} else {
+			latex = text[loc[4]:loc[5]]
+			if !isInlineMath(text[last:loc[0]], latex) {
+				continue // prose, not math: leave the dollars as text
+			}
 		}
 		latex = htmlpkg.EscapeString(htmlpkg.UnescapeString(latex))
 		i := len(*spans)
 		*spans = append(*spans, fmt.Sprintf(`<span class="%s">%s</span>`, class, latex))
-		return mathPlaceholder(token, i)
-	})
+		b.WriteString(text[last:loc[0]])
+		b.WriteString(mathPlaceholder(token, i))
+		last = loc[1]
+	}
+	b.WriteString(text[last:])
+	return b.String()
+}
+
+// quoteBeforeRE matches a quote character — literal or entity — at the end of
+// the text preceding a math span.
+var quoteBeforeRE = regexp.MustCompile(`(?:["']|&(?:quot|apos|#34|#39);)$`)
+
+// isInlineMath reports whether the $...$ span latex, preceded by before, is
+// LaTeX rather than prose that happens to carry two dollar signs on one line.
+// 3GPP prose quotes the JSON Schema "$ref" keyword — '$ref', "$ref:
+// '#/components/schemas/X'" — and the text between two such mentions has no
+// whitespace at its edges, so the delimiter convention alone lets a whole
+// sentence render as math (TS 29.501 clause 5.3.9). Two shapes mark that
+// prose: an opening delimiter that a quote introduces, and a double quote
+// inside the span, which the converter's LaTeX never produces (a prime is an
+// apostrophe, so apostrophes stay legal). Both are checked after unescaping
+// because table-cell text reaches here already HTML-escaped.
+func isInlineMath(before, latex string) bool {
+	if quoteBeforeRE.MatchString(before) {
+		return false
+	}
+	return !strings.Contains(htmlpkg.UnescapeString(latex), `"`)
 }
 
 // highlightYAML applies Chroma syntax highlighting to YAML content.
