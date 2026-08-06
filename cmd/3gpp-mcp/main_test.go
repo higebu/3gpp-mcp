@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -1227,6 +1228,570 @@ func TestFinalizeWorkingCopy_RemoveError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "remove") {
 		t.Errorf("error = %v, want a remove failure report", err)
+	}
+}
+
+// A run killed mid-update leaves the working copy's -wal and -shm behind, and
+// SQLite binds a write-ahead log to its database by file name alone: removing
+// only the database file lets the stale WAL be replayed into the copy the next
+// run builds at the same path (#129).
+func TestRemoveWorkingCopy_ClearsStaleSidecars(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "3gpp.db")
+	newPath := live + ".new"
+
+	src := seedWorkingCopy(t, live)
+	if err := finalizeWorkingCopy(src, live); err != nil {
+		t.Fatalf("finalizeWorkingCopy: %v", err)
+	}
+
+	// Debris of the killed run: a half-written copy and both sidecars.
+	debris := []string{newPath, newPath + "-wal", newPath + "-shm"}
+	for _, p := range debris {
+		if err := os.WriteFile(p, []byte("stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := removeWorkingCopy(newPath); err != nil {
+		t.Fatalf("removeWorkingCopy: %v", err)
+	}
+	for _, p := range debris {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s survived cleanup (stat err %v)", p, err)
+		}
+	}
+
+	// The rebuild has to land on a clean path: VACUUM INTO refuses an existing
+	// target, and any sidecar left next to the result follows it into the
+	// rename.
+	d, err := db.OpenReadWrite(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.VacuumInto(newPath); err != nil {
+		_ = d.Close()
+		t.Fatalf("VACUUM INTO after cleanup: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, sidecar := range []string{newPath + "-wal", newPath + "-shm"} {
+		if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+			t.Errorf("%s exists next to the rebuilt copy (stat err %v)", sidecar, err)
+		}
+	}
+
+	conn, err := sql.Open("sqlite", "file:"+newPath+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var n int
+	if err := conn.QueryRow("SELECT count(*) FROM t").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 200 {
+		t.Errorf("row count in rebuilt copy = %d, want 200", n)
+	}
+}
+
+// Nothing to clean up is not a failure: the first run of 'update' finds no
+// working copy at all.
+func TestRemoveWorkingCopy_NoFiles(t *testing.T) {
+	if err := removeWorkingCopy(filepath.Join(t.TempDir(), "3gpp.db.new")); err != nil {
+		t.Errorf("removeWorkingCopy on a missing working copy = %v, want nil", err)
+	}
+}
+
+// A sidecar that cannot be removed has to be reported, and the database it
+// belongs to has to stay: deleting a removable database out from under a
+// surviving WAL orphans that WAL onto the copy the next run writes here, which
+// is the corruption this cleanup exists to prevent.
+func TestRemoveWorkingCopy_SidecarError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "3gpp.db.new")
+	if err := os.WriteFile(path, []byte("working copy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A non-empty directory in the sidecar's place makes os.Remove fail with
+	// ENOTEMPTY, an error that is not os.ErrNotExist.
+	if err := os.MkdirAll(filepath.Join(path+"-wal", "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := removeWorkingCopy(path)
+	if err == nil {
+		t.Fatal("expected an error when a stale sidecar cannot be removed")
+	}
+	if !strings.Contains(err.Error(), "-wal") {
+		t.Errorf("error = %v, want it to name the -wal sidecar", err)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Errorf("the database was deleted while its -wal survived: %v", statErr)
+	}
+}
+
+// The -shm goes the same way: the cleanup stops at the first sidecar it cannot
+// remove instead of working down to the database.
+func TestRemoveWorkingCopy_KeepsDatabaseWhenSHMSurvives(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "3gpp.db.new")
+	if err := os.WriteFile(path, []byte("working copy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+"-wal", []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(path+"-shm", "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeWorkingCopy(path); err == nil {
+		t.Fatal("expected an error when the -shm sidecar cannot be removed")
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Errorf("the database was deleted while its -shm survived: %v", statErr)
+	}
+}
+
+// The database itself can be the file that will not go. VACUUM INTO refuses
+// an existing target, so a working copy left in place has to be reported
+// rather than run into on the next line.
+func TestRemoveWorkingCopy_DatabaseError(t *testing.T) {
+	// A non-empty directory in the working copy's place: there are no sidecars
+	// to remove, and os.Remove on the path itself fails with ENOTEMPTY.
+	path := filepath.Join(t.TempDir(), "3gpp.db.new")
+	if err := os.MkdirAll(filepath.Join(path, "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := removeWorkingCopy(path)
+	if err == nil {
+		t.Fatal("expected an error when the working copy cannot be removed")
+	}
+	if !strings.Contains(err.Error(), "3gpp.db.new") {
+		t.Errorf("error = %v, want it to name the working copy", err)
+	}
+}
+
+// A stale sidecar that cannot be cleared has to stop the run before VACUUM
+// INTO writes a working copy next to it, since that copy would inherit the
+// leftover write-ahead log (#129). Run as a subprocess because the failure
+// path calls log.Fatalf.
+func TestCmdUpdate_StaleSidecarStopsRun(t *testing.T) {
+	if dbPath := os.Getenv("CMD_UPDATE_STALE_SIDECAR_HELPER"); dbPath != "" {
+		cmdUpdate([]string{"-db", dbPath})
+		return
+	}
+	dbPath := filepath.Join(t.TempDir(), "update.db")
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := d.InitSchema(); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	d.Close()
+	// Debris of a killed run, with a -wal that cannot be removed.
+	if err := os.MkdirAll(filepath.Join(dbPath+".new-wal", "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestCmdUpdate_StaleSidecarStopsRun")
+	cmd.Env = append(os.Environ(), "CMD_UPDATE_STALE_SIDECAR_HELPER="+dbPath)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected a non-zero exit when a stale sidecar survives, got: %s", out)
+	}
+	if !strings.Contains(string(out), "Failed to remove stale working copy") {
+		t.Errorf("expected the stale working copy failure to be reported, got: %s", out)
+	}
+}
+
+// A run that aborts after VACUUM INTO has to take its working copy with it,
+// sidecars included: whatever it leaves behind is what the next run has to
+// clear before it can start. Run as a subprocess because the failure path
+// calls log.Fatalf.
+func TestCmdUpdate_SpecListFailureDropsWorkingCopy(t *testing.T) {
+	if dbPath := os.Getenv("CMD_UPDATE_SPEC_LIST_HELPER"); dbPath != "" {
+		missing := filepath.Join(filepath.Dir(dbPath), "missing-list.txt")
+		cmdUpdate([]string{"-db", dbPath, "-spec-list", missing})
+		return
+	}
+	dbPath := filepath.Join(t.TempDir(), "update.db")
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := d.InitSchema(); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	if err := d.UpsertSpec(db.Spec{
+		ID:           "TS 23.501",
+		Title:        "System architecture",
+		Version:      "20.1.0",
+		VersionToken: "k10",
+		Release:      "20",
+		Series:       "23",
+	}); err != nil {
+		t.Fatalf("upsert spec: %v", err)
+	}
+	d.Close()
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestCmdUpdate_SpecListFailureDropsWorkingCopy")
+	cmd.Env = append(os.Environ(), "CMD_UPDATE_SPEC_LIST_HELPER="+dbPath)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected a non-zero exit for an unreadable spec list, got: %s", out)
+	}
+	if !strings.Contains(string(out), "Failed to fetch spec list") {
+		t.Errorf("expected the spec list failure to be reported, got: %s", out)
+	}
+	for _, p := range []string{dbPath + ".new", dbPath + ".new-wal", dbPath + ".new-shm"} {
+		if _, statErr := os.Stat(p); !os.IsNotExist(statErr) {
+			t.Errorf("%s left behind by the aborted run (stat err %v)", p, statErr)
+		}
+	}
+	assertNoWALSidecars(t, dbPath)
+}
+
+// The same goes for a run that gets as far as downloading and then fails:
+// the half-updated working copy and its WAL must not survive into the next
+// run. Run as a subprocess because the failure path calls log.Fatalf.
+func TestCmdUpdate_PipelineFailureDropsWorkingCopy(t *testing.T) {
+	if dbPath := os.Getenv("CMD_UPDATE_PIPELINE_HELPER"); dbPath != "" {
+		// The listing offers a NEWER version (k20 = v20.2.0), so the run has
+		// something to update; the archive then serves HTML instead of a zip
+		// and every spec fails.
+		ts := partialArchive(t, "23501-k20.zip")
+		origClient := newHTTPClient
+		newHTTPClient = func(timeout time.Duration) *http.Client {
+			return &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+		}
+		defer func() { newHTTPClient = origClient }()
+		cmdUpdate([]string{"-db", dbPath, "-no-cache", "-workers", "1", "-timeout", "5s"})
+		return
+	}
+	dbPath := filepath.Join(t.TempDir(), "update.db")
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := d.InitSchema(); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	if err := d.UpsertSpec(db.Spec{
+		ID:           "TS 23.501",
+		Title:        "System architecture",
+		Version:      "20.1.0",
+		VersionToken: "k10",
+		Release:      "20",
+		Series:       "23",
+	}); err != nil {
+		t.Fatalf("upsert spec: %v", err)
+	}
+	d.Close()
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestCmdUpdate_PipelineFailureDropsWorkingCopy")
+	cmd.Env = append(os.Environ(), "CMD_UPDATE_PIPELINE_HELPER="+dbPath)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected a non-zero exit when every download fails, got: %s", out)
+	}
+	if !strings.Contains(string(out), "Update failed") {
+		t.Errorf("expected the pipeline failure to be reported, got: %s", out)
+	}
+	for _, p := range []string{dbPath + ".new", dbPath + ".new-wal", dbPath + ".new-shm"} {
+		if _, statErr := os.Stat(p); !os.IsNotExist(statErr) {
+			t.Errorf("%s left behind by the failed run (stat err %v)", p, statErr)
+		}
+	}
+}
+
+// specArchive serves a minimal 3GPP archive whose 23.501 listing offers one
+// zip, holding a .docx the converter can parse, so an update runs to
+// completion without touching the network.
+func specArchive(t *testing.T, zipName string) *httptest.Server {
+	t.Helper()
+	doc := `<?xml version="1.0"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:body>
+<w:p><w:r><w:t>3GPP TS 23.501 V20.2.0 (2026-06)</w:t></w:r></w:p>
+<w:p><w:r><w:t>1	Scope</w:t></w:r></w:p>
+<w:p><w:r><w:t>The present document specifies the system architecture.</w:t></w:r></w:p>
+</w:body>
+</w:document>`
+	var docx bytes.Buffer
+	dw := zip.NewWriter(&docx)
+	f, err := dw.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte(doc)); err != nil {
+		t.Fatal(err)
+	}
+	if err := dw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var archive bytes.Buffer
+	aw := zip.NewWriter(&archive)
+	af, err := aw.Create(strings.TrimSuffix(zipName, ".zip") + ".docx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := af.Write(docx.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := aw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ftp/Specs/archive/" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `<a href="23_series/">23_series</a>`+"\n")
+	})
+	mux.HandleFunc("/ftp/Specs/archive/23_series/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="23.501/">23.501</a>`+"\n")
+	})
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `<a href="%s">%s</a>`+"\n", zipName, zipName)
+	})
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/"+zipName, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		_, _ = w.Write(archive.Bytes())
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// seedUpdatableDB writes a database holding one spec at v20.1.0, which the
+// archive's k20 listing (v20.2.0) supersedes.
+func seedUpdatableDB(t *testing.T, dbPath string) {
+	t.Helper()
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := d.InitSchema(); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	if err := d.UpsertSpec(db.Spec{
+		ID:           "TS 23.501",
+		Title:        "System architecture",
+		Version:      "20.1.0",
+		VersionToken: "k10",
+		Release:      "20",
+		Series:       "23",
+	}); err != nil {
+		t.Fatalf("upsert spec: %v", err)
+	}
+	d.Close()
+}
+
+// A completed update has to leave the live path free of the replaced
+// database's sidecars: they are named after that path, so the rename would
+// otherwise hand the old write-ahead log to the file that just took its
+// name (#129).
+func TestCmdUpdate_ReplaceClearsLiveSidecars(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "update.db")
+	seedUpdatableDB(t, dbPath)
+	// Sidecars of the database about to be replaced, as a serve process
+	// reading through them would leave.
+	for _, sidecar := range []string{dbPath + "-wal", dbPath + "-shm"} {
+		if err := os.WriteFile(sidecar, []byte("stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ts := specArchive(t, "23501-k20.zip")
+	origClient := newHTTPClient
+	newHTTPClient = func(timeout time.Duration) *http.Client {
+		return &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+	}
+	t.Cleanup(func() { newHTTPClient = origClient })
+
+	out := captureStdout(t, func() {
+		cmdUpdate([]string{"-db", dbPath, "-no-cache", "-workers", "1", "-timeout", "5s"})
+	})
+	if !strings.Contains(out, "Database updated successfully") {
+		t.Fatalf("output = %q, want a completed update", out)
+	}
+	assertNoWALSidecars(t, dbPath)
+	if _, err := os.Stat(dbPath + ".new"); !os.IsNotExist(err) {
+		t.Errorf("working copy survived the replacement (stat err %v)", err)
+	}
+
+	// The replacement has to be the updated database, not the old one.
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	result, err := d.ListSpecs(context.Background(), "", "", -1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Specs) != 1 || result.Specs[0].Version != "20.2.0" {
+		t.Errorf("specs after update = %+v, want a single spec at 20.2.0", result.Specs)
+	}
+}
+
+// When the rename lands but a sidecar of the replaced database will not go,
+// the run has to say the database was replaced and is unsafe to serve — not
+// that the replacement failed. Run as a subprocess because that path calls
+// log.Fatalf.
+func TestCmdUpdate_ReplaceSidecarFailureReported(t *testing.T) {
+	if dbPath := os.Getenv("CMD_UPDATE_REPLACE_SIDECAR_HELPER"); dbPath != "" {
+		ts := specArchive(t, "23501-k20.zip")
+		origClient := newHTTPClient
+		newHTTPClient = func(timeout time.Duration) *http.Client {
+			return &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+		}
+		defer func() { newHTTPClient = origClient }()
+		cmdUpdate([]string{"-db", dbPath, "-no-cache", "-workers", "1", "-timeout", "5s"})
+		return
+	}
+	dbPath := filepath.Join(t.TempDir(), "update.db")
+	seedUpdatableDB(t, dbPath)
+	// A non-empty directory in the -shm's place survives os.Remove.
+	if err := os.MkdirAll(filepath.Join(dbPath+"-shm", "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestCmdUpdate_ReplaceSidecarFailureReported")
+	cmd.Env = append(os.Environ(), "CMD_UPDATE_REPLACE_SIDECAR_HELPER="+dbPath)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected a non-zero exit when a sidecar of the replaced database survives, got: %s", out)
+	}
+	if !strings.Contains(string(out), "Database replaced, but") {
+		t.Errorf("expected the replacement to be reported as done, got: %s", out)
+	}
+	if strings.Contains(string(out), "Failed to replace database") {
+		t.Errorf("a completed replacement was reported as a failed one: %s", out)
+	}
+	// The rename did happen, so the working copy is gone and the live path
+	// holds the updated database.
+	if _, statErr := os.Stat(dbPath + ".new"); !os.IsNotExist(statErr) {
+		t.Errorf("working copy still present after the rename (stat err %v)", statErr)
+	}
+}
+
+// The paths that walk away from a working copy — an aborting run, and the
+// "all specs are up to date" return — cannot act on a cleanup failure, but
+// they must not hide it either: the debris is what stops the next run before
+// it can start.
+func TestDiscardWorkingCopy_ReportsFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "3gpp.db.new")
+	if err := os.WriteFile(path, []byte("working copy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(path+"-wal", "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureLog(t, func() { discardWorkingCopy(path) })
+	if !strings.Contains(out, "-wal") {
+		t.Errorf("log = %q, want a warning naming the sidecar it could not remove", out)
+	}
+}
+
+// The rename leaves the replaced database's sidecars next to the file that
+// just took its name, so they have to go with it.
+func TestReplaceDatabase_ClearsPreviousSidecars(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "3gpp.db")
+	newPath := live + ".new"
+
+	if err := os.WriteFile(live, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, sidecar := range []string{live + "-wal", live + "-shm"} {
+		if err := os.WriteFile(sidecar, []byte("stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(newPath, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := replaceDatabase(newPath, live); err != nil {
+		t.Fatalf("replaceDatabase: %v", err)
+	}
+
+	got, err := os.ReadFile(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new" {
+		t.Errorf("live database content = %q, want the working copy's", got)
+	}
+	for _, p := range []string{live + "-wal", live + "-shm", newPath} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s survived the replacement (stat err %v)", p, err)
+		}
+	}
+}
+
+// A failed rename leaves the live database alone and is reported.
+func TestReplaceDatabase_RenameError(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "3gpp.db")
+	if err := os.WriteFile(live, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := replaceDatabase(live+".new", live)
+	if err == nil {
+		t.Fatal("expected an error when the working copy is missing")
+	}
+	if !strings.Contains(err.Error(), "rename working copy") {
+		t.Errorf("error = %v, want a rename failure report", err)
+	}
+	if errors.Is(err, errSidecarsRemain) {
+		t.Errorf("error = %v, want it not to claim the database was replaced", err)
+	}
+	got, readErr := os.ReadFile(live)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "old" {
+		t.Errorf("live database content = %q, want it untouched", got)
+	}
+}
+
+// A sidecar the replacement cannot delete is a corruption hazard on the live
+// path, so it is surfaced instead of being swallowed by the success message.
+func TestReplaceDatabase_SidecarError(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "3gpp.db")
+	newPath := live + ".new"
+	if err := os.WriteFile(newPath, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(live+"-shm", "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := replaceDatabase(newPath, live)
+	if err == nil {
+		t.Fatal("expected an error when a sidecar of the replaced database survives")
+	}
+	if !strings.Contains(err.Error(), "-shm") {
+		t.Errorf("error = %v, want it to name the -shm sidecar", err)
+	}
+	// The rename did land, so the caller must not report a failed replacement
+	// or try to delete a working copy that no longer exists.
+	if !errors.Is(err, errSidecarsRemain) {
+		t.Errorf("error = %v, want it to report that the replacement already happened", err)
+	}
+	if _, statErr := os.Stat(newPath); !os.IsNotExist(statErr) {
+		t.Errorf("working copy still at %s (stat err %v)", newPath, statErr)
 	}
 }
 
