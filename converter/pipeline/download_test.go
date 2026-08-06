@@ -399,6 +399,54 @@ func TestDownloadSpecs_ConvertDocIgnoresStaleOutput(t *testing.T) {
 	}
 }
 
+// TestDownloadSpecs_ConvertDocSameBatchBasenameCollision verifies that a
+// same-batch, different spec's freshly-extracted .docx does not block a
+// DOC_ONLY spec's own promotion just because it happens to share a basename
+// (Greptile review finding on the stale-output fix above). SpecD's archive
+// ships an already-converted "shared.docx" directly (its DownloadAndExtract
+// call returns OK), landing in outputDir before SpecE's .doc conversion
+// runs. SpecE's own .doc file happens to convert to that very path
+// ("shared.doc" -> "shared.docx"); an existence check alone cannot tell that
+// apart from a stale leftover and would wrongly leave SpecE at DOC_ONLY, so
+// the promotion must be based on whether the file was written at or after
+// conversion started, not merely on whether it exists.
+func TestDownloadSpecs_ConvertDocSameBatchBasenameCollision(t *testing.T) {
+	writeFakeLibreOffice(t)
+
+	zipD := makeZipWithFiles(t, map[string][]byte{
+		"shared.docx": []byte("already a docx"),
+	})
+	zipE := makeZipWithFiles(t, map[string][]byte{
+		"shared.doc": []byte("needs conversion"),
+	})
+
+	tsD := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipD)
+	}))
+	defer tsD.Close()
+	tsE := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipE)
+	}))
+	defer tsE.Close()
+
+	specs := []*SpecVersion{
+		{SpecID: "TS 88.004", URL: tsD.URL + "/d.zip"},
+		{SpecID: "TS 88.005", URL: tsE.URL + "/e.zip"},
+	}
+
+	outputDir := t.TempDir()
+	stats := DownloadSpecs(context.Background(), &http.Client{}, specs, outputDir, 2, true, 10*time.Second)
+
+	if stats["OK"] != 2 {
+		t.Errorf("OK = %d, want 2 (SpecD's own .docx plus SpecE's converted .doc)", stats["OK"])
+	}
+	if stats["DOC_ONLY"] != 0 {
+		t.Errorf("DOC_ONLY = %d, want 0 (SpecE's conversion succeeded despite the basename collision)", stats["DOC_ONLY"])
+	}
+}
+
 // TestConvertDocFiles_NoDocFiles verifies ConvertDocFiles returns (0, nil)
 // when the directory contains no .doc files (happy but trivial path).
 func TestConvertDocFiles_NoDocFiles(t *testing.T) {

@@ -311,48 +311,64 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 	if convertDoc {
 		docDir := filepath.Join(outputDir, "_doc_files")
 		if entries, err := os.ReadDir(docDir); err == nil && len(entries) > 0 {
-			// outputDir is the caller's persistent --output-dir: it is
-			// created but never cleared between runs (see cmdDownload), so
-			// a .docx left over from an earlier invocation can already sit
-			// at a spec's expected output path before conversion even
-			// starts. Record which expected outputs pre-date this run so a
-			// stale file is never mistaken for evidence that this run's
-			// LibreOffice conversion succeeded.
-			preExisting := make(map[string]bool)
-			for _, docFiles := range docFilesBySpec {
-				for _, docPath := range docFiles {
-					out := convertedDocxPath(docPath, outputDir)
-					if _, statErr := os.Stat(out); statErr == nil {
-						preExisting[out] = true
+			// Convert into a fresh, run-scoped scratch directory instead of
+			// outputDir directly. outputDir is the caller's persistent
+			// --output-dir (never cleared between runs, see cmdDownload)
+			// and can already hold a .docx at a spec's expected output path
+			// before conversion even starts this time — either a stale
+			// leftover from an earlier invocation, or, within this very
+			// run, another spec's own .docx that its download already
+			// extracted directly into outputDir (every spec's download and
+			// extraction completes before this block runs). A wall-clock
+			// "written since conversion started" check was tried and
+			// discarded: under load, this environment's file mtimes were
+			// observed landing before the in-process marker that preceded
+			// the write, so mtime cannot be trusted here either. Converting
+			// into an empty directory sidesteps all of that: any file
+			// appearing in it is unambiguously this run's output, no
+			// timing assumptions required. The results are moved into
+			// outputDir afterward to keep the flat layout other commands
+			// (e.g. import-dir) expect.
+			convDir, mkErr := os.MkdirTemp(outputDir, ".doc-convert-*")
+			if mkErr != nil {
+				log.Printf("doc conversion scratch dir error: %v", mkErr)
+			} else {
+				log.Println("Converting .doc files to .docx...")
+				n, err := ConvertDocFiles(ctx, docDir, convDir)
+				if err != nil {
+					log.Printf("ConvertDocFiles error: %v", err)
+				}
+				log.Printf("Converted %d files", n)
+				// A spec is promoted from DOC_ONLY to OK only when one of
+				// its own .doc files produced a .docx in convDir this run
+				// (partial success still counts, matching the .docx branch
+				// above). The old code used
+				// min(convertedFileCount, docOnlySpecCount), which
+				// conflates a file count with a spec count: a spec with
+				// several .doc files could absorb the whole converted-file
+				// budget and drag an unrelated, fully-failed spec's status
+				// up to OK along with it.
+				for _, docFiles := range docFilesBySpec {
+					for _, docPath := range docFiles {
+						if _, statErr := os.Stat(convertedDocxPath(docPath, convDir)); statErr == nil {
+							stats["DOC_ONLY"]--
+							stats["OK"]++
+							break
+						}
 					}
 				}
-			}
 
-			log.Println("Converting .doc files to .docx...")
-			n, err := ConvertDocFiles(ctx, docDir, outputDir)
-			if err != nil {
-				log.Printf("ConvertDocFiles error: %v", err)
-			}
-			log.Printf("Converted %d files", n)
-			// A spec is promoted from DOC_ONLY to OK only when one of its
-			// own .doc files produced a new .docx this run (partial success
-			// still counts, matching the .docx branch above). The old code
-			// used min(convertedFileCount, docOnlySpecCount), which
-			// conflates a file count with a spec count: a spec with several
-			// .doc files could absorb the whole converted-file budget and
-			// drag an unrelated, fully-failed spec's status up to OK along
-			// with it.
-			for _, docFiles := range docFilesBySpec {
-				for _, docPath := range docFiles {
-					out := convertedDocxPath(docPath, outputDir)
-					if preExisting[out] {
-						continue
+				if convEntries, err := os.ReadDir(convDir); err == nil {
+					for _, e := range convEntries {
+						src := filepath.Join(convDir, e.Name())
+						dst := filepath.Join(outputDir, e.Name())
+						if err := os.Rename(src, dst); err != nil {
+							log.Printf("  move converted %s: %v", e.Name(), err)
+						}
 					}
-					if _, statErr := os.Stat(out); statErr == nil {
-						stats["DOC_ONLY"]--
-						stats["OK"]++
-						break
-					}
+				}
+				if err := os.RemoveAll(convDir); err != nil {
+					log.Printf("  cleanup doc conversion scratch dir: %v", err)
 				}
 			}
 		}
