@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,14 +50,46 @@ func ConvertImages(ctx context.Context, images map[string]*EmbeddedImage) int {
 		return 0
 	}
 
+	return assignConvertedImages(images, items)
+}
+
+// assignConvertedImages writes each successfully converted item's PNG data
+// back into images, keyed by the item's original map key. It is split out
+// from ConvertImages so the name-collision handling below can be unit
+// tested without invoking soffice. Returns the number of images assigned.
+func assignConvertedImages(images map[string]*EmbeddedImage, items []*batchItem) int {
+	// Two images that differ only by extension (e.g. image1.emf and
+	// image1.wmf, kept side by side per the batchItem doc comment above)
+	// would otherwise both convert to "image1.png" and collide: whichever
+	// is assigned last in the map below silently discards the other's image
+	// data. Count how many successfully converted items want each plain PNG
+	// name so colliding items can be given a name that keeps them distinct.
+	nameCount := make(map[string]int, len(items))
+	for _, item := range items {
+		if item.err != nil {
+			continue
+		}
+		nameCount[toPNGName(item.original.Name)]++
+	}
+
 	converted := 0
 	for _, item := range items {
 		if item.err != nil {
 			log.Printf("  image conversion failed for %s: %v", item.original.Name, item.err)
 			continue
 		}
+		finalName := toPNGName(item.original.Name)
+		if nameCount[finalName] > 1 {
+			// Keep the full original filename (including its extension) as
+			// the stem so siblings sharing a base name stay distinct after
+			// conversion. UpdateImagePlaceholders matches on this exact
+			// stem before falling back to base-name matching, so it still
+			// resolves image://image1.emf and image://image1.wmf to their
+			// own converted file instead of whichever converted last.
+			finalName = item.original.Name + ".png"
+		}
 		images[item.key] = &EmbeddedImage{
-			Name:        toPNGName(item.original.Name),
+			Name:        finalName,
 			MIMEType:    "image/png",
 			Data:        item.pngData,
 			LLMReadable: true,
@@ -98,14 +131,23 @@ var imageRefRE = regexp.MustCompile(`image://([^?"')\s]+)`)
 // UpdateImagePlaceholders rewrites image:// references in section content to
 // point at the converted PNG filenames after EMF/WMF conversion. Only the
 // filename is replaced; alt text and any ?w=&h= suffix are kept.
+//
+// The lookup map is keyed by the PNG name's stem (everything before the
+// final ".png"). For a plain conversion that stem is just the base name
+// ("image1"), which is enough to match the original reference's base name.
+// For a collision-disambiguated conversion (see ConvertImages) the stem is
+// the full original filename including its extension ("image1.wmf"), which
+// disambiguates it from a sibling like "image1.emf" that shares the same
+// base name — matching on base name alone would otherwise resolve both
+// references to whichever conversion happens to be in the map.
 func UpdateImagePlaceholders(result *ParseResult) {
-	converted := make(map[string]string) // base name (without ext) → new PNG name
+	converted := make(map[string]string) // PNG stem → new PNG name
 	for _, img := range result.Images {
 		if !img.LLMReadable {
 			continue
 		}
-		base := strings.TrimSuffix(img.Name, filepath.Ext(img.Name))
-		converted[base] = img.Name
+		stem := strings.TrimSuffix(img.Name, filepath.Ext(img.Name))
+		converted[stem] = img.Name
 	}
 	if len(converted) == 0 {
 		return
@@ -119,8 +161,14 @@ func UpdateImagePlaceholders(result *ParseResult) {
 					return match
 				}
 				filename := sub[1]
-				base := strings.TrimSuffix(filename, filepath.Ext(filename))
-				newName, ok := converted[base]
+				// Try the exact original filename first (disambiguated
+				// collision case), then fall back to the base name alone
+				// (plain conversion case).
+				newName, ok := converted[filename]
+				if !ok {
+					base := strings.TrimSuffix(filename, filepath.Ext(filename))
+					newName, ok = converted[base]
+				}
 				if !ok || newName == filename {
 					return match
 				}
@@ -140,8 +188,10 @@ const (
 // stripEMFPlus removes EMF+ data embedded in EMR_COMMENT records from EMF
 // binary data. This forces LibreOffice to use the legacy EMR rendering path,
 // avoiding crashes on corrupted EMF+ records. The returned data contains only
-// legacy EMR records. If the input is not a valid EMF or contains no EMF+
-// data, it is returned unchanged.
+// legacy EMR records. If the input is not a valid EMF, contains no EMF+ data,
+// or contains a malformed record anywhere in the stream (including after
+// valid EMF+ data has already been found), it is returned unchanged rather
+// than truncated at the malformed point.
 //
 // Background: Some 3GPP spec documents contain EMF images with malformed EMF+
 // records. For example, TS 33.501 v19 (33501-j60.docx) Figure 16.4-1
@@ -186,7 +236,12 @@ func stripEMFPlus(data []byte) []byte {
 		recSize := binary.LittleEndian.Uint32(data[offset+4 : offset+8])
 		end, ok := emrRecordEnd(offset, recSize, len(data))
 		if !ok {
-			break
+			// A malformed record means the rest of the stream cannot be
+			// parsed reliably. Returning `out` here would silently drop
+			// every record after this point instead of honoring the "return
+			// unchanged on malformed input" contract, so hand back the
+			// original bytes untouched.
+			return data
 		}
 
 		isEMFPlus := false
@@ -206,6 +261,11 @@ func stripEMFPlus(data []byte) []byte {
 		offset = end
 	}
 
+	if offset != len(data) {
+		// Trailing bytes too short to form a record header (truncated
+		// file): the same "return unchanged" contract applies.
+		return data
+	}
 	if !hasEMFPlus {
 		return data
 	}
@@ -314,6 +374,26 @@ func batchConvertToPNG(ctx context.Context, items []*batchItem) error {
 // which would otherwise block ConvertDir forever; see issue #60.
 const sofficeTimeout = 5 * time.Minute
 
+// fileURLForProfile builds the file:// URL LibreOffice's -env:UserInstallation
+// option expects from a filesystem path. Backslashes are converted to forward
+// slashes and a leading slash is added if missing, so a Windows path such as
+// `C:\Users\foo\AppData\Local\Temp\lo-profile-1` becomes
+// file:///C:/Users/foo/AppData/Local/Temp/lo-profile-1 instead of the invalid
+// file://C:\Users\... that plain string concatenation used to produce. A
+// POSIX path already starts with "/", so it keeps the standard
+// file:///abs/path form unchanged. The path is then percent-encoded via
+// net/url: os.MkdirTemp resolves under the OS temp dir, which on Windows is
+// %TEMP% under the user's profile and commonly contains spaces (e.g.
+// `C:\Users\John Doe\AppData\...`) — an un-encoded space would make the
+// result an invalid URL per RFC 3986 that LibreOffice may reject or misparse.
+func fileURLForProfile(path string) string {
+	p := strings.ReplaceAll(path, `\`, "/")
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return (&url.URL{Scheme: "file", Path: p}).String()
+}
+
 // runSofficeBatch invokes `soffice --convert-to png` with the given inputs,
 // writing PNG outputs to outDir. Each invocation uses a fresh user profile
 // so that repeated calls do not contend for LibreOffice's per-profile lock.
@@ -333,7 +413,7 @@ func runSofficeBatch(ctx context.Context, outDir string, inputs []string) error 
 	args := []string{
 		"--headless",
 		"--norestore",
-		"-env:UserInstallation=file://" + profileDir,
+		"-env:UserInstallation=" + fileURLForProfile(profileDir),
 		"--convert-to", "png",
 		"--outdir", outDir,
 	}

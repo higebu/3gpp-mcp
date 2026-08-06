@@ -130,6 +130,86 @@ func TestUpdateImagePlaceholders_WithDimensions(t *testing.T) {
 	}
 }
 
+// TestAssignConvertedImages_NameCollision verifies that image1.emf and
+// image1.wmf, which both convert to "image1.png" via toPNGName, are assigned
+// distinct final names so neither's PNG data is lost to the other via
+// map-key overwrite (issue #130). Does not invoke soffice: the batch items
+// are constructed with pngData already populated, as if conversion had
+// already succeeded.
+func TestAssignConvertedImages_NameCollision(t *testing.T) {
+	images := map[string]*EmbeddedImage{
+		"image1.emf": {Name: "image1.emf", MIMEType: "image/x-emf", Data: []byte("emf-src")},
+		"image1.wmf": {Name: "image1.wmf", MIMEType: "image/x-wmf", Data: []byte("wmf-src")},
+		"image2.emf": {Name: "image2.emf", MIMEType: "image/x-emf", Data: []byte("emf2-src")},
+	}
+	items := []*batchItem{
+		{key: "image1.emf", original: images["image1.emf"], pngData: []byte("emf-png")},
+		{key: "image1.wmf", original: images["image1.wmf"], pngData: []byte("wmf-png")},
+		{key: "image2.emf", original: images["image2.emf"], pngData: []byte("emf2-png")},
+	}
+
+	n := assignConvertedImages(images, items)
+	if n != 3 {
+		t.Fatalf("assignConvertedImages converted %d images, want 3", n)
+	}
+
+	emfResult := images["image1.emf"]
+	wmfResult := images["image1.wmf"]
+	if emfResult == nil || wmfResult == nil {
+		t.Fatalf("expected both image1.emf and image1.wmf entries to survive, got emf=%v wmf=%v", emfResult, wmfResult)
+	}
+	if emfResult.Name == wmfResult.Name {
+		t.Fatalf("colliding images were assigned the same name %q; one overwrote the other", emfResult.Name)
+	}
+	if string(emfResult.Data) != "emf-png" {
+		t.Errorf("image1.emf data = %q, want %q (must not be replaced by the wmf sibling's data)", emfResult.Data, "emf-png")
+	}
+	if string(wmfResult.Data) != "wmf-png" {
+		t.Errorf("image1.wmf data = %q, want %q (must not be replaced by the emf sibling's data)", wmfResult.Data, "wmf-png")
+	}
+	if !emfResult.LLMReadable || !wmfResult.LLMReadable {
+		t.Errorf("converted images should be marked LLMReadable")
+	}
+
+	// image2.emf has no colliding sibling, so it keeps the plain name.
+	if got, want := images["image2.emf"].Name, "image2.png"; got != want {
+		t.Errorf("non-colliding image name = %q, want %q", got, want)
+	}
+}
+
+// TestUpdateImagePlaceholders_NameCollision verifies that after a
+// collision-disambiguated conversion (image1.emf -> image1.emf.png,
+// image1.wmf -> image1.wmf.png), each original image:// reference is
+// rewritten to its own converted file rather than both resolving to
+// whichever conversion happens to be looked up first (issue #130).
+func TestUpdateImagePlaceholders_NameCollision(t *testing.T) {
+	result := &ParseResult{
+		Sections: []*Section{
+			{
+				Number: "7.2.1",
+				Content: []string{
+					"![Figure](image://image1.emf)",
+					"![Figure](image://image1.wmf)",
+				},
+			},
+		},
+		Images: []*EmbeddedImage{
+			{Name: "image1.emf.png", MIMEType: "image/png", LLMReadable: true},
+			{Name: "image1.wmf.png", MIMEType: "image/png", LLMReadable: true},
+		},
+	}
+
+	UpdateImagePlaceholders(result)
+
+	content := result.Sections[0].Content
+	if want := "![Figure](image://image1.emf.png)"; content[0] != want {
+		t.Errorf("emf reference = %q, want %q", content[0], want)
+	}
+	if want := "![Figure](image://image1.wmf.png)"; content[1] != want {
+		t.Errorf("wmf reference = %q, want %q", content[1], want)
+	}
+}
+
 // buildTestEMF constructs a minimal valid EMF binary with the given records.
 // Each record is a (type, data) pair. An EMR_HEADER and EMR_EOF are added
 // automatically.
@@ -300,6 +380,61 @@ func TestStripEMFPlus_ShortOutput(t *testing.T) {
 	}
 }
 
+// TestStripEMFPlus_MalformedRecordAfterValidEMFPlus verifies that a malformed
+// record following at least one already-stripped EMF+ record makes
+// stripEMFPlus return the entire input buffer byte-for-byte unchanged,
+// instead of the malformed-record contract violation reported in issue #138:
+// silently truncating the output to only the records seen before the
+// malformed one (reproduced there as a 124-byte input collapsing to an
+// 88-byte output). Also checks that a well-formed record placed after the
+// malformed one is not silently dropped, which only the "return unchanged"
+// fallback preserves.
+func TestStripEMFPlus_MalformedRecordAfterValidEMFPlus(t *testing.T) {
+	emfPlusPayload := make([]byte, 12)
+	binary.LittleEndian.PutUint32(emfPlusPayload[0:4], 8) // DataSize
+	binary.LittleEndian.PutUint32(emfPlusPayload[4:8], emfPlusSignature)
+
+	regularData := make([]byte, 4)
+	binary.LittleEndian.PutUint32(regularData[0:4], 1)
+
+	emf := buildTestEMF([]struct {
+		typ  uint32
+		data []byte
+	}{
+		{emrComment, emfPlusPayload}, // EMF+ comment — would normally be stripped
+		{0x12, regularData},          // valid record after the EMF+ comment
+	})
+
+	// Corrupt the second record's declared size in-place, simulating a
+	// truncated/corrupted record with valid data both before and after it
+	// in the original buffer. Offsets are computed structurally (rather
+	// than scanned) to avoid matching stray bytes elsewhere in the header:
+	// the 108-byte EMR_HEADER is followed by the 20-byte EMF+ comment
+	// record (recSize = 8 + 12 payload bytes, already 4-byte aligned), so
+	// the second record's Size field sits at offset 108+20+4 = 132.
+	const secondRecordSizeOffset = 108 + 20 + 4
+	if got := binary.LittleEndian.Uint32(emf[secondRecordSizeOffset-4 : secondRecordSizeOffset]); got != 0x12 {
+		t.Fatalf("test setup: expected the SETBKMODE record type (0x12) at offset %d, got %#x", secondRecordSizeOffset-4, got)
+	}
+	binary.LittleEndian.PutUint32(emf[secondRecordSizeOffset:secondRecordSizeOffset+4], 0xFFFFFFF0) // bogus oversized recSize
+	corrupted := make([]byte, len(emf))
+	copy(corrupted, emf) // snapshot of the malformed input as passed to stripEMFPlus
+
+	result := stripEMFPlus(emf)
+
+	// stripEMFPlus must hand back the malformed input exactly as given — not
+	// a "repaired" version and, per issue #138, not silently truncated to
+	// only the records seen before the malformed one.
+	if len(result) != len(corrupted) {
+		t.Fatalf("expected the %d-byte malformed input back unchanged, got %d bytes (truncated, per issue #138)", len(corrupted), len(result))
+	}
+	for i := range corrupted {
+		if result[i] != corrupted[i] {
+			t.Fatalf("result diverges from the input at byte %d: got %#x, want %#x", i, result[i], corrupted[i])
+		}
+	}
+}
+
 // sofficeCanConvertImages checks whether LibreOffice Draw is available by
 // attempting a trivial SVG-to-PNG conversion.
 func sofficeCanConvertImages(t *testing.T) bool {
@@ -386,6 +521,50 @@ func TestRunSofficeBatch_Timeout(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "timed out") {
 		t.Errorf("expected timeout error, got: %v", err)
+	}
+}
+
+// TestFileURLForProfile covers the file:// URL LibreOffice's
+// -env:UserInstallation option expects, including the Windows case that
+// plain "file://" + path concatenation gets wrong (issue #142): a backslash
+// path like `C:\Users\foo\AppData\Local\Temp\lo-profile-1` used to produce
+// the invalid file://C:\Users\... instead of the standard
+// file:///C:/Users/... form. Also covers a Windows username containing a
+// space (a real os.MkdirTemp/%TEMP% path shape), which must be
+// percent-encoded to stay a valid URL per RFC 3986.
+func TestFileURLForProfile(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "posix absolute path",
+			path: "/tmp/lo-profile-123",
+			want: "file:///tmp/lo-profile-123",
+		},
+		{
+			name: "windows absolute path with backslashes",
+			path: `C:\Users\foo\AppData\Local\Temp\lo-profile-123`,
+			want: "file:///C:/Users/foo/AppData/Local/Temp/lo-profile-123",
+		},
+		{
+			name: "windows path already using forward slashes",
+			path: "C:/Temp/lo-profile-123",
+			want: "file:///C:/Temp/lo-profile-123",
+		},
+		{
+			name: "windows username with a space is percent-encoded",
+			path: `C:\Users\John Doe\AppData\Local\Temp\lo-profile-123`,
+			want: "file:///C:/Users/John%20Doe/AppData/Local/Temp/lo-profile-123",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := fileURLForProfile(tt.path); got != tt.want {
+				t.Errorf("fileURLForProfile(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
 	}
 }
 

@@ -80,6 +80,17 @@ func TestNormalizeImageRefs(t *testing.T) {
 			b:    "new text ![Figure](image://image1.png)",
 			same: false,
 		},
+		{
+			// docx.ConvertImages disambiguates a name collision (e.g.
+			// image1.emf and image1.wmf both wanting "image1.png") by
+			// keeping the original extension: image1.wmf -> image1.wmf.png.
+			// The archived, unconverted version still references
+			// image://image1.wmf, so these must still fold equal.
+			name: "collision-disambiguated conversion name folds with its archived original",
+			a:    "![Figure](image://image1.wmf)",
+			b:    "![Figure](image://image1.wmf.png)",
+			same: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
