@@ -701,6 +701,64 @@ func TestParseParagraph_GroupShapeNoImage_SkipsLabels(t *testing.T) {
 	}
 }
 
+func TestParseParagraph_StandaloneTextBox_KeepsOuterParagraphProperties(t *testing.T) {
+	// A plain VML text box (no v:group around it) is parsed inline, so the
+	// paragraph inside it must not lend its w:pStyle or its monospace font to
+	// the paragraph that encloses the text box (issue #137).
+	xml := `<w:p ` + wXMLNS + `>` +
+		`<w:pPr><w:pStyle w:val="Normal"/></w:pPr>` +
+		`<w:r><w:t>outer text</w:t></w:r>` +
+		`<w:r><w:pict><shape><textbox><txbxContent>` +
+		`<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:rPr><w:rFonts w:ascii="Courier New"/></w:rPr></w:pPr>` +
+		`<w:r><w:t>label</w:t></w:r></w:p>` +
+		`</txbxContent></textbox></shape></w:pict></w:r>` +
+		`</w:p>`
+	info := parseParagraph([]byte(xml))
+	if info.StyleID != "Normal" {
+		t.Errorf("StyleID = %q, want %q: the text box paragraph overwrote the outer style", info.StyleID, "Normal")
+	}
+	if info.IsCode {
+		t.Error("expected the outer paragraph not to be marked as code by the text box's font")
+	}
+	// The label text itself keeps its existing position in the paragraph's
+	// reading flow.
+	if info.Text != "outer textlabel" {
+		t.Errorf("Text = %q, want %q", info.Text, "outer textlabel")
+	}
+}
+
+func TestParseParagraph_StandaloneTextBox_KeepsNestedImage(t *testing.T) {
+	// Folding the text box's content in must not lose an image embedded in it.
+	xml := `<w:p ` + wXMLNS + `>` +
+		`<w:r><w:pict><shape><textbox><txbxContent>` +
+		`<w:p><w:r><w:pict><shape><imagedata r:id="rId9"/></shape></w:pict></w:r><w:r><w:t>label</w:t></w:r></w:p>` +
+		`</txbxContent></textbox></shape></w:pict></w:r>` +
+		`</w:p>`
+	info := parseParagraph([]byte(xml))
+	if len(info.Images) != 1 || info.Images[0].RID != "rId9" {
+		t.Fatalf("Images = %+v, want one rId9 entry", info.Images)
+	}
+	if info.Text != "label" {
+		t.Errorf("Text = %q, want %q", info.Text, "label")
+	}
+}
+
+func TestParseParagraph_StandaloneTextBox_KeepsNestedContainerText(t *testing.T) {
+	// A text box may hold a table or a content control rather than bare
+	// paragraphs; their text reached the enclosing paragraph before the text
+	// box was parsed separately and must keep doing so.
+	xml := `<w:p ` + wXMLNS + `>` +
+		`<w:r><w:pict><shape><textbox><txbxContent>` +
+		`<w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell text</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
+		`<w:sdt><w:sdtContent><w:p><w:r><w:t>; sdt text</w:t></w:r></w:p></w:sdtContent></w:sdt>` +
+		`</txbxContent></textbox></shape></w:pict></w:r>` +
+		`</w:p>`
+	info := parseParagraph([]byte(xml))
+	if info.Text != "cell text; sdt text" {
+		t.Errorf("Text = %q, want %q", info.Text, "cell text; sdt text")
+	}
+}
+
 func TestParseParagraph_GroupShapeWithImage_KeepsImageDropsLabels(t *testing.T) {
 	// A group that mixes a raster picture with textbox callouts should keep
 	// extracting the image (existing behavior), and should not classify the

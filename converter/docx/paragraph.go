@@ -159,6 +159,29 @@ func parseParagraphFromDecoderDepth(d *xml.Decoder, _ xml.StartElement, drawDept
 				}
 				continue
 			}
+			// A standalone VML text box (v:shape > v:textbox > w:txbxContent,
+			// common in compatibility-mode documents) is not a grouped diagram,
+			// so it is not intercepted above and its paragraphs would otherwise
+			// be parsed as part of this one: a nested w:pStyle overwrites
+			// info.StyleID and a nested monospace font marks the whole paragraph
+			// as code, producing fake headings and bogus code fences (issue
+			// #137). Parse the text box's paragraphs in isolation and fold only
+			// their content in, so the labels and images stay where they already
+			// were while the outer paragraph keeps its own properties.
+			if local == "txbxContent" {
+				depth--
+				if drawDepth >= maxDrawingDepth {
+					_ = d.Skip()
+					continue
+				}
+				flushRunText()
+				for _, p := range scanTextBoxParagraphs(d, drawDepth+1) {
+					info.Runs = append(info.Runs, p.Runs...)
+					info.Images = append(info.Images, p.Images...)
+					info.SkippedDiagramLabels = append(info.SkippedDiagramLabels, p.SkippedDiagramLabels...)
+				}
+				continue
+			}
 			switch local {
 			case "pPr":
 				inPPr = true
@@ -447,23 +470,46 @@ func scanDrawingSubtreeDepth(d *xml.Decoder, _ xml.StartElement, drawDepth int) 
 // text box keeps counting against maxDrawingDepth.
 func scanTextBoxLabels(d *xml.Decoder, drawDepth int) []string {
 	var labels []string
+	for _, p := range scanTextBoxParagraphs(d, drawDepth) {
+		if text := strings.TrimSpace(p.Text); text != "" {
+			labels = append(labels, text)
+		}
+	}
+	return labels
+}
+
+// scanTextBoxParagraphs consumes a w:txbxContent element (the start element has
+// already been consumed by the caller) and parses each paragraph inside it, in
+// document order. Parsing them separately is what keeps a text box's paragraph
+// properties out of the paragraph that encloses the text box (issue #137).
+//
+// Paragraphs nested in a container — the cells of a w:tbl, a w:sdt content
+// control — count too: skipping those containers would drop text that used to
+// reach the enclosing paragraph. The descent walks the element nesting with a
+// counter instead of recursing, so deeply nested markup cannot exhaust the
+// stack.
+func scanTextBoxParagraphs(d *xml.Decoder, drawDepth int) []paragraphInfo {
+	var paras []paragraphInfo
+	nesting := 0
 	for {
 		tok, err := d.Token()
 		if err != nil {
-			return labels
+			return paras
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
 			if t.Name.Local == "p" {
-				pInfo := parseParagraphFromDecoderDepth(d, t, drawDepth)
-				if text := strings.TrimSpace(pInfo.Text); text != "" {
-					labels = append(labels, text)
-				}
-			} else {
-				_ = d.Skip()
+				// Consumes through the matching end element, so the nesting
+				// counter stays balanced without seeing that element.
+				paras = append(paras, parseParagraphFromDecoderDepth(d, t, drawDepth))
+				continue
 			}
+			nesting++
 		case xml.EndElement:
-			return labels
+			if nesting == 0 {
+				return paras
+			}
+			nesting--
 		}
 	}
 }
