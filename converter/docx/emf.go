@@ -49,14 +49,46 @@ func ConvertImages(ctx context.Context, images map[string]*EmbeddedImage) int {
 		return 0
 	}
 
+	return assignConvertedImages(images, items)
+}
+
+// assignConvertedImages writes each successfully converted item's PNG data
+// back into images, keyed by the item's original map key. It is split out
+// from ConvertImages so the name-collision handling below can be unit
+// tested without invoking soffice. Returns the number of images assigned.
+func assignConvertedImages(images map[string]*EmbeddedImage, items []*batchItem) int {
+	// Two images that differ only by extension (e.g. image1.emf and
+	// image1.wmf, kept side by side per the batchItem doc comment above)
+	// would otherwise both convert to "image1.png" and collide: whichever
+	// is assigned last in the map below silently discards the other's image
+	// data. Count how many successfully converted items want each plain PNG
+	// name so colliding items can be given a name that keeps them distinct.
+	nameCount := make(map[string]int, len(items))
+	for _, item := range items {
+		if item.err != nil {
+			continue
+		}
+		nameCount[toPNGName(item.original.Name)]++
+	}
+
 	converted := 0
 	for _, item := range items {
 		if item.err != nil {
 			log.Printf("  image conversion failed for %s: %v", item.original.Name, item.err)
 			continue
 		}
+		finalName := toPNGName(item.original.Name)
+		if nameCount[finalName] > 1 {
+			// Keep the full original filename (including its extension) as
+			// the stem so siblings sharing a base name stay distinct after
+			// conversion. UpdateImagePlaceholders matches on this exact
+			// stem before falling back to base-name matching, so it still
+			// resolves image://image1.emf and image://image1.wmf to their
+			// own converted file instead of whichever converted last.
+			finalName = item.original.Name + ".png"
+		}
 		images[item.key] = &EmbeddedImage{
-			Name:        toPNGName(item.original.Name),
+			Name:        finalName,
 			MIMEType:    "image/png",
 			Data:        item.pngData,
 			LLMReadable: true,
@@ -98,14 +130,23 @@ var imageRefRE = regexp.MustCompile(`image://([^?"')\s]+)`)
 // UpdateImagePlaceholders rewrites image:// references in section content to
 // point at the converted PNG filenames after EMF/WMF conversion. Only the
 // filename is replaced; alt text and any ?w=&h= suffix are kept.
+//
+// The lookup map is keyed by the PNG name's stem (everything before the
+// final ".png"). For a plain conversion that stem is just the base name
+// ("image1"), which is enough to match the original reference's base name.
+// For a collision-disambiguated conversion (see ConvertImages) the stem is
+// the full original filename including its extension ("image1.wmf"), which
+// disambiguates it from a sibling like "image1.emf" that shares the same
+// base name — matching on base name alone would otherwise resolve both
+// references to whichever conversion happens to be in the map.
 func UpdateImagePlaceholders(result *ParseResult) {
-	converted := make(map[string]string) // base name (without ext) → new PNG name
+	converted := make(map[string]string) // PNG stem → new PNG name
 	for _, img := range result.Images {
 		if !img.LLMReadable {
 			continue
 		}
-		base := strings.TrimSuffix(img.Name, filepath.Ext(img.Name))
-		converted[base] = img.Name
+		stem := strings.TrimSuffix(img.Name, filepath.Ext(img.Name))
+		converted[stem] = img.Name
 	}
 	if len(converted) == 0 {
 		return
@@ -119,8 +160,14 @@ func UpdateImagePlaceholders(result *ParseResult) {
 					return match
 				}
 				filename := sub[1]
-				base := strings.TrimSuffix(filename, filepath.Ext(filename))
-				newName, ok := converted[base]
+				// Try the exact original filename first (disambiguated
+				// collision case), then fall back to the base name alone
+				// (plain conversion case).
+				newName, ok := converted[filename]
+				if !ok {
+					base := strings.TrimSuffix(filename, filepath.Ext(filename))
+					newName, ok = converted[base]
+				}
 				if !ok || newName == filename {
 					return match
 				}

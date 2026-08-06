@@ -130,6 +130,86 @@ func TestUpdateImagePlaceholders_WithDimensions(t *testing.T) {
 	}
 }
 
+// TestAssignConvertedImages_NameCollision verifies that image1.emf and
+// image1.wmf, which both convert to "image1.png" via toPNGName, are assigned
+// distinct final names so neither's PNG data is lost to the other via
+// map-key overwrite (issue #130). Does not invoke soffice: the batch items
+// are constructed with pngData already populated, as if conversion had
+// already succeeded.
+func TestAssignConvertedImages_NameCollision(t *testing.T) {
+	images := map[string]*EmbeddedImage{
+		"image1.emf": {Name: "image1.emf", MIMEType: "image/x-emf", Data: []byte("emf-src")},
+		"image1.wmf": {Name: "image1.wmf", MIMEType: "image/x-wmf", Data: []byte("wmf-src")},
+		"image2.emf": {Name: "image2.emf", MIMEType: "image/x-emf", Data: []byte("emf2-src")},
+	}
+	items := []*batchItem{
+		{key: "image1.emf", original: images["image1.emf"], pngData: []byte("emf-png")},
+		{key: "image1.wmf", original: images["image1.wmf"], pngData: []byte("wmf-png")},
+		{key: "image2.emf", original: images["image2.emf"], pngData: []byte("emf2-png")},
+	}
+
+	n := assignConvertedImages(images, items)
+	if n != 3 {
+		t.Fatalf("assignConvertedImages converted %d images, want 3", n)
+	}
+
+	emfResult := images["image1.emf"]
+	wmfResult := images["image1.wmf"]
+	if emfResult == nil || wmfResult == nil {
+		t.Fatalf("expected both image1.emf and image1.wmf entries to survive, got emf=%v wmf=%v", emfResult, wmfResult)
+	}
+	if emfResult.Name == wmfResult.Name {
+		t.Fatalf("colliding images were assigned the same name %q; one overwrote the other", emfResult.Name)
+	}
+	if string(emfResult.Data) != "emf-png" {
+		t.Errorf("image1.emf data = %q, want %q (must not be replaced by the wmf sibling's data)", emfResult.Data, "emf-png")
+	}
+	if string(wmfResult.Data) != "wmf-png" {
+		t.Errorf("image1.wmf data = %q, want %q (must not be replaced by the emf sibling's data)", wmfResult.Data, "wmf-png")
+	}
+	if !emfResult.LLMReadable || !wmfResult.LLMReadable {
+		t.Errorf("converted images should be marked LLMReadable")
+	}
+
+	// image2.emf has no colliding sibling, so it keeps the plain name.
+	if got, want := images["image2.emf"].Name, "image2.png"; got != want {
+		t.Errorf("non-colliding image name = %q, want %q", got, want)
+	}
+}
+
+// TestUpdateImagePlaceholders_NameCollision verifies that after a
+// collision-disambiguated conversion (image1.emf -> image1.emf.png,
+// image1.wmf -> image1.wmf.png), each original image:// reference is
+// rewritten to its own converted file rather than both resolving to
+// whichever conversion happens to be looked up first (issue #130).
+func TestUpdateImagePlaceholders_NameCollision(t *testing.T) {
+	result := &ParseResult{
+		Sections: []*Section{
+			{
+				Number: "7.2.1",
+				Content: []string{
+					"![Figure](image://image1.emf)",
+					"![Figure](image://image1.wmf)",
+				},
+			},
+		},
+		Images: []*EmbeddedImage{
+			{Name: "image1.emf.png", MIMEType: "image/png", LLMReadable: true},
+			{Name: "image1.wmf.png", MIMEType: "image/png", LLMReadable: true},
+		},
+	}
+
+	UpdateImagePlaceholders(result)
+
+	content := result.Sections[0].Content
+	if want := "![Figure](image://image1.emf.png)"; content[0] != want {
+		t.Errorf("emf reference = %q, want %q", content[0], want)
+	}
+	if want := "![Figure](image://image1.wmf.png)"; content[1] != want {
+		t.Errorf("wmf reference = %q, want %q", content[1], want)
+	}
+}
+
 // buildTestEMF constructs a minimal valid EMF binary with the given records.
 // Each record is a (type, data) pair. An EMR_HEADER and EMR_EOF are added
 // automatically.

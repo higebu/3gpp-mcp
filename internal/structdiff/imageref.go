@@ -48,13 +48,21 @@ func NormalizeImageRefs(line string) string {
 
 // foldName drops the filename extension when it belongs to the EMF/WMF/PCZ →
 // PNG conversion the pipeline performs; any other extension is meaningful and
-// kept.
+// kept. The strip repeats so a collision-disambiguated conversion name like
+// "image1.wmf.png" (see docx.ConvertImages, used when image1.emf and
+// image1.wmf would otherwise both convert to "image1.png") still folds down
+// to "image1", matching the original "image1.wmf" reference in an archived,
+// unconverted version.
 func foldName(name string) string {
-	switch strings.ToLower(path.Ext(name)) {
-	case ".emf", ".wmf", ".pcz", ".png":
-		return strings.TrimSuffix(name, path.Ext(name))
+	for {
+		ext := strings.ToLower(path.Ext(name))
+		switch ext {
+		case ".emf", ".wmf", ".pcz", ".png":
+			name = strings.TrimSuffix(name, path.Ext(name))
+		default:
+			return name
+		}
 	}
-	return name
 }
 
 // foldAlt maps an alt text that adds no information beyond the filename to
