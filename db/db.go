@@ -1251,9 +1251,10 @@ const secNum = `([A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 const secNumRaw = `(?:[A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 
 // bareRefChain matches zero or more coordinated references (", clause 4.3",
-// " and 4.4", " or Annex B") so bareTrailingQualRE and barePresentDocRE can
-// see through a list to the "of"/"in" that qualifies its every element.
-const bareRefChain = `(?:` + sp + `*(?:,|and|or)` + sp + `*(?:(?:[Cc]lause|[Ss]ection|[Ss]ubclause|[Aa]nnex)` + sp + `+)?` + secNumRaw + `)*`
+// " and 4.4", ", and 4.4", "; or Annex B") so bareTrailingQualRE and
+// barePresentDocRE can see through a list to the "of"/"in" that qualifies its
+// every element.
+const bareRefChain = `(?:` + sp + `*(?:[,;]` + sp + `*(?:and|or)?|and|or)` + sp + `*(?:(?:[Cc]lause|[Ss]ection|[Ss]ubclause|[Aa]nnex)` + sp + `+)?` + secNumRaw + `)*`
 
 var (
 	// "TS 23.501 clause 5.1" or "3GPP TS 33.203 Annex H"
