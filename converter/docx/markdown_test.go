@@ -27,6 +27,33 @@ func TestSectionsToMarkdown(t *testing.T) {
 	}
 }
 
+// CommonMark stops recognizing ATX headings at six "#", so deeper levels —
+// "Heading 7" to "Heading 9" styles, or deep annex numbering — are clamped
+// instead of emitted as plain text (issue #139).
+func TestSectionToMarkdown_ClampsDeepHeadings(t *testing.T) {
+	tests := []struct {
+		level      int
+		wantPrefix string
+	}{
+		{1, "# "},
+		{6, "###### "},
+		{7, "###### "},
+		{9, "###### "},
+		{0, "# "},
+	}
+	for _, tt := range tests {
+		section := &Section{Number: "A.1.2.3.4.5.6.7", Title: "Deep clause", Level: tt.level}
+		got := SectionToMarkdown(section)
+		want := tt.wantPrefix + "A.1.2.3.4.5.6.7 Deep clause"
+		if got != want {
+			t.Errorf("level %d: SectionToMarkdown = %q, want %q", tt.level, got, want)
+		}
+		if strings.HasPrefix(got, strings.Repeat("#", maxATXLevel+1)) {
+			t.Errorf("level %d: emitted more than %d hashes: %q", tt.level, maxATXLevel, got)
+		}
+	}
+}
+
 func TestSectionsToMarkdown_Empty(t *testing.T) {
 	if got := SectionsToMarkdown(nil); got != "" {
 		t.Errorf("expected empty string for nil sections, got: %q", got)
