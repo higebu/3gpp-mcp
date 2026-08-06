@@ -42,6 +42,10 @@ type DownloadResult struct {
 	Status    string // "OK", "DOC_ONLY", "NO_DOC", "FAILED"
 	DocxFiles []string
 	YAMLFiles []string
+	// DocFiles holds the extracted .doc file paths when Status is DOC_ONLY,
+	// so callers that later run LibreOffice conversion on a shared directory
+	// can tell which converted .docx (if any) belongs to this spec.
+	DocFiles []string
 }
 
 // DownloadAndExtract downloads a spec zip and extracts .docx files to a temp directory.
@@ -150,15 +154,28 @@ func DownloadAndExtract(ctx context.Context, client *http.Client, spec *SpecVers
 			if err := os.MkdirAll(docDir, 0o700); err != nil {
 				log.Printf("  %s: failed to create doc dir: %v", spec.SpecID, err)
 			}
+			var extracted []string
 			for _, f := range r.File {
 				name := filepath.Base(f.Name)
 				if strings.HasSuffix(strings.ToLower(name), ".doc") && !strings.HasPrefix(name, ".") {
-					if err := extractFile(f, filepath.Join(docDir, name)); err != nil {
+					outPath := filepath.Join(docDir, name)
+					if err := extractFile(f, outPath); err != nil {
 						log.Printf("  %s: failed to extract %s: %v", spec.SpecID, name, err)
+					} else {
+						extracted = append(extracted, outPath)
 					}
 				}
 			}
+			// As with the .docx branch above, the archive listing .doc
+			// entries does not mean any of them actually landed on disk.
+			// Reporting DOC_ONLY here would tell the caller "install
+			// LibreOffice and retry" for a spec that has nothing to convert.
+			if len(extracted) == 0 {
+				result.Status = "FAILED"
+				return result, fmt.Errorf("extracted none of the %d .doc file(s) in the archive", len(docFiles))
+			}
 			result.Status = "DOC_ONLY"
+			result.DocFiles = extracted
 			return result, nil
 		}
 
@@ -239,8 +256,9 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 
 	sem := make(chan struct{}, parallel)
 	type result struct {
-		specID string
-		status string
+		specID   string
+		status   string
+		docFiles []string
 	}
 	results := make(chan result, total)
 	var wg sync.WaitGroup
@@ -262,10 +280,12 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 				log.Printf("  %s: download error: %v", spec.SpecID, err)
 			}
 			status := "FAILED"
+			var docFiles []string
 			if r != nil {
 				status = r.Status
+				docFiles = r.DocFiles
 			}
-			results <- result{spec.SpecID, status}
+			results <- result{spec.SpecID, status, docFiles}
 		}()
 	}
 
@@ -274,11 +294,18 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 		close(results)
 	}()
 
+	// docFilesBySpec remembers, per DOC_ONLY spec, which .doc files were
+	// extracted for it into the shared docDir below, so a later conversion
+	// pass can attribute success or failure back to the right spec.
+	docFilesBySpec := make(map[string][]string)
 	i := 0
 	for r := range results {
 		i++
 		stats[r.status]++
 		log.Printf("[%d/%d] %s: %s", i, total, r.specID, r.status)
+		if r.status == "DOC_ONLY" && len(r.docFiles) > 0 {
+			docFilesBySpec[r.specID] = r.docFiles
+		}
 	}
 
 	if convertDoc {
@@ -290,18 +317,37 @@ func DownloadSpecs(ctx context.Context, client *http.Client, specs []*SpecVersio
 				log.Printf("ConvertDocFiles error: %v", err)
 			}
 			log.Printf("Converted %d files", n)
-			if n > 0 && stats["DOC_ONLY"] > 0 {
-				converted := n
-				if converted > stats["DOC_ONLY"] {
-					converted = stats["DOC_ONLY"]
+			// A spec is promoted from DOC_ONLY to OK only when one of its
+			// own .doc files produced a .docx (partial success still
+			// counts, matching the .docx branch above). The old code used
+			// min(convertedFileCount, docOnlySpecCount), which conflates a
+			// file count with a spec count: a spec with several .doc files
+			// could absorb the whole converted-file budget and drag an
+			// unrelated, fully-failed spec's status up to OK along with it.
+			for _, docFiles := range docFilesBySpec {
+				for _, docPath := range docFiles {
+					if _, statErr := os.Stat(convertedDocxPath(docPath, outputDir)); statErr == nil {
+						stats["DOC_ONLY"]--
+						stats["OK"]++
+						break
+					}
 				}
-				stats["DOC_ONLY"] -= converted
-				stats["OK"] += converted
 			}
 		}
 	}
 
 	return stats
+}
+
+// convertedDocxPath returns the .docx path ConvertDocFiles would produce in
+// outputDir for a .doc file extracted at docPath: LibreOffice's --convert-to
+// keeps the input's basename and swaps the extension.
+func convertedDocxPath(docPath, outputDir string) string {
+	base := filepath.Base(docPath)
+	if ext := filepath.Ext(base); strings.EqualFold(ext, ".doc") {
+		base = base[:len(base)-len(ext)]
+	}
+	return filepath.Join(outputDir, base+".docx")
 }
 
 func downloadZip(ctx context.Context, client *http.Client, url string) ([]byte, error) {

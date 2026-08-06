@@ -138,6 +138,33 @@ func TestDownloadAndExtract_DocOnly(t *testing.T) {
 	}
 }
 
+// TestDownloadAndExtract_AllDocExtractionsFail verifies that a ZIP whose only
+// .doc entry cannot be extracted is reported FAILED, not DOC_ONLY (#143): a
+// DOC_ONLY status with nothing on disk to convert misdirects the operator
+// toward "install LibreOffice and retry" for a spec that has nothing to
+// retry.
+func TestDownloadAndExtract_AllDocExtractionsFail(t *testing.T) {
+	zipBytes := makeRawZipEntry(t, "../evil.doc", []byte("pwned"))
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipBytes)
+	}))
+	defer ts.Close()
+
+	outDir := t.TempDir()
+	spec := &SpecVersion{SpecID: "TS 99.005", URL: ts.URL + "/z2.zip"}
+	result, err := DownloadAndExtract(context.Background(), ts.Client(), spec, outDir, 5*time.Second)
+	if err == nil {
+		t.Fatal("expected an error when no .doc could be extracted")
+	}
+	if result.Status != "FAILED" {
+		t.Errorf("status = %q, want FAILED", result.Status)
+	}
+	if len(result.DocFiles) != 0 {
+		t.Errorf("DocFiles = %v, want none", result.DocFiles)
+	}
+}
+
 // TestDownloadAndExtract_NoDoc verifies the NO_DOC status when the ZIP holds
 // only irrelevant files.
 func TestDownloadAndExtract_NoDoc(t *testing.T) {
@@ -248,6 +275,88 @@ func TestDownloadZip_HTTPError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "HTTP 500") {
 		t.Errorf("error = %v, want 'HTTP 500'", err)
+	}
+}
+
+// writeFakeLibreOffice installs a fake "libreoffice" executable on PATH that
+// mimics --convert-to docx --outdir DIR FILE without needing real
+// LibreOffice: any input whose basename contains "fail" exits non-zero and
+// writes nothing; every other input writes an empty same-name .docx into the
+// --outdir directory, exactly where the real conversion would.
+func writeFakeLibreOffice(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := `#!/bin/sh
+# PATH is overridden to just this directory for the test, so this script
+# must not rely on external utilities like basename -- pure shell parameter
+# expansion only.
+outdir=""
+prev=""
+last=""
+for arg in "$@"; do
+  if [ "$prev" = "--outdir" ]; then
+    outdir="$arg"
+  fi
+  last="$arg"
+  prev="$arg"
+done
+base="${last##*/}"
+case "$base" in
+  *fail*) exit 1 ;;
+esac
+name="${base%.*}"
+echo "converted" > "$outdir/$name.docx"
+exit 0
+`
+	path := filepath.Join(dir, "libreoffice")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+}
+
+// TestDownloadSpecs_ConvertDocPerSpec verifies DOC_ONLY->OK promotion is
+// attributed per spec instead of by a blind min(convertedFileCount,
+// docOnlySpecCount) (#143). SpecA ships two .doc files that both convert
+// (partial success still counts as OK); SpecB ships a single .doc file whose
+// conversion fails outright and must stay DOC_ONLY. The old min()-based logic
+// would promote both specs to OK here, because two files convert overall
+// while only two specs are DOC_ONLY.
+func TestDownloadSpecs_ConvertDocPerSpec(t *testing.T) {
+	writeFakeLibreOffice(t)
+
+	zipA := makeZipWithFiles(t, map[string][]byte{
+		"specA-part1.doc": []byte("a1"),
+		"specA-part2.doc": []byte("a2"),
+	})
+	zipB := makeZipWithFiles(t, map[string][]byte{
+		"specB-fail.doc": []byte("b1"),
+	})
+
+	tsA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipA)
+	}))
+	defer tsA.Close()
+	tsB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zipB)
+	}))
+	defer tsB.Close()
+
+	specs := []*SpecVersion{
+		{SpecID: "TS 88.001", URL: tsA.URL + "/a.zip"},
+		{SpecID: "TS 88.002", URL: tsB.URL + "/b.zip"},
+	}
+
+	outputDir := t.TempDir()
+	stats := DownloadSpecs(context.Background(), &http.Client{}, specs, outputDir, 2, true, 10*time.Second)
+
+	if stats["OK"] != 1 {
+		t.Errorf("OK = %d, want 1 (only SpecA converted)", stats["OK"])
+	}
+	if stats["DOC_ONLY"] != 1 {
+		t.Errorf("DOC_ONLY = %d, want 1 (SpecB's conversion failed)", stats["DOC_ONLY"])
 	}
 }
 
