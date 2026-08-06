@@ -544,6 +544,16 @@ mark {
     font-weight: 400;
 }
 
+/* Section numbering goes deeper than HTML has heading elements, so headings
+   below level 5 all render as <h6>; the depth class keeps them visually
+   ordered. */
+.section-heading.depth-1 { font-size: 1.75rem; }
+.section-heading.depth-2 { font-size: 1.5rem; }
+.section-heading.depth-3 { font-size: 1.25rem; }
+.section-heading.depth-4 { font-size: 1.125rem; }
+.section-heading.depth-5 { font-size: 1.05rem; }
+.section-heading.depth-6 { font-size: 1rem; }
+
 .section-body {
     margin-top: 0.75rem;
 }

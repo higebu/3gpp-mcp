@@ -175,6 +175,153 @@ func TestRenderMarkdown_PlaceholderLiteralUntouched(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdown_DollarProseNotMath verifies that prose carrying two
+// dollar signs on one line — the JSON Schema "$ref" keyword, which TS 29.501
+// clause 5.3.9 mentions repeatedly — stays visible text instead of being
+// swallowed into a math span, while real math on the same page still renders.
+func TestRenderMarkdown_DollarProseNotMath(t *testing.T) {
+	proseCases := []struct {
+		name    string
+		content string
+	}{
+		{
+			name:    "double-quoted $ref mentions",
+			content: `a reference to the data type schema, i.e. "$ref: '#/components/schemas/ExType'" if that schema is in the same file and "$ref: 'other.yaml#/components/schemas/ExType'" otherwise;`,
+		},
+		{
+			name:    "single-quoted $ref mentions",
+			content: `the '$ref' keyword must be the only attribute of the JSON object, so no description may sit next to the '$ref' keyword.`,
+		},
+		{
+			name:    "table-cell $ref mentions are escaped before rendering",
+			content: `<table><tbody><tr><td><p>&quot;$ref: &#39;#/components/schemas/A&#39;&quot; or &quot;$ref: &#39;#/components/schemas/B&#39;&quot;</p></td></tr></tbody></table>`,
+		},
+		{
+			name:    "spaced dollars around prose",
+			content: `the value $ x $ is written with padding and $ y $ too.`,
+		},
+	}
+	for _, tt := range proseCases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := renderMarkdown(tt.content, renderOpts{specID: "TS 29.501"})
+			if strings.Contains(got, "math-inline") || strings.Contains(got, "math-display") {
+				t.Errorf("prose must not become math, got:\n%s", got)
+			}
+			if !strings.Contains(got, "$") {
+				t.Errorf("the literal dollar signs must stay visible, got:\n%s", got)
+			}
+		})
+	}
+
+	mathCases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "modulo formula",
+			content: `the value $n \bmod 2$ is used`,
+			want:    `<span class="math-inline">n \bmod 2</span>`,
+		},
+		{
+			name:    "single symbol",
+			content: `on antenna port $p$ and subcarrier spacing $\mu$`,
+			want:    `<span class="math-inline">p</span>`,
+		},
+		{
+			name:    "math with inner spaces",
+			content: `$\left\{\begin{matrix} 0 & l=0 \\ 1 & otherwise \end{matrix}\right.$`,
+			want:    `<span class="math-inline">\left\{\begin{matrix} 0 &amp; l=0 \\ 1 &amp; otherwise \end{matrix}\right.</span>`,
+		},
+		{
+			name:    "prose and math on the same line",
+			content: `the '$ref' keyword and the '$ref' value, but $x^2$ is math`,
+			want:    `<span class="math-inline">x^2</span>`,
+		},
+		{
+			// The converter renders U+2032/U+2033 as ASCII apostrophes
+			// (converter/docx/omml.go mathSymbols), so primes must not read
+			// as prose quoting.
+			name:    "prime derivative",
+			content: `the derivative ${f}'\left(x\right)$ of the function`,
+			want:    `<span class="math-inline">{f}&#39;\left(x\right)</span>`,
+		},
+		{
+			name:    "bare prime",
+			content: `the value $f'$ follows`,
+			want:    `<span class="math-inline">f&#39;</span>`,
+		},
+		{
+			name:    "double prime",
+			content: `the second derivative $f''(x)$ follows`,
+			want:    `<span class="math-inline">f&#39;&#39;(x)</span>`,
+		},
+	}
+	for _, tt := range mathCases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := renderMarkdown(tt.content, renderOpts{specID: "TS 38.211"})
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("expected math span %s, got:\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
+// TestRenderMarkdown_MathInAttributeStaysText verifies that a formula that
+// ends up inside an HTML attribute — figure captions like
+// "![$x_1$](image://...)" put one in alt — is re-injected as plain text.
+// Injecting the <span> there truncated the <img> tag and leaked attribute
+// fragments into the page as visible text.
+func TestRenderMarkdown_MathInAttributeStaysText(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "sized image alt",
+			content: "![$x_1$](image://fig1.png?w=10&h=20)",
+			want:    `<img src="/specs/TS%2038.211/images/fig1.png" alt="$x_1$" width="10" height="20">`,
+		},
+		{
+			name:    "markdown image alt",
+			content: "![$x_1$](image://fig1.png)",
+			want:    `<img src="/specs/TS%2038.211/images/fig1.png" alt="$x_1$">`,
+		},
+		{
+			name:    "table cell image alt",
+			content: `<table><tbody><tr><td><img src="image://f.png" alt="$y^2$"></td></tr></tbody></table>`,
+			want:    `<img src="/specs/TS%2038.211/images/f.png" alt="$y^2$">`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := renderMarkdown(tt.content, renderOpts{specID: "TS 38.211"})
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("expected intact image %s, got:\n%s", tt.want, got)
+			}
+			if strings.Contains(got, `alt="&lt;span`) || strings.Contains(got, "&#34;&gt;") {
+				t.Errorf("no math element may be injected into an attribute, got:\n%s", got)
+			}
+			if strings.Contains(got, "math-inline") {
+				t.Errorf("attribute math must not become a span, got:\n%s", got)
+			}
+		})
+	}
+
+	// A formula in body text on the same page is still a KaTeX target.
+	t.Run("body math unaffected", func(t *testing.T) {
+		got := renderMarkdown("![$x_1$](image://fig1.png)\n\nwhere $x_1$ is the first value.",
+			renderOpts{specID: "TS 38.211"})
+		if !strings.Contains(got, `alt="$x_1$"`) {
+			t.Errorf("expected plain alt text, got:\n%s", got)
+		}
+		if !strings.Contains(got, `<span class="math-inline">x_1</span>`) {
+			t.Errorf("expected a math span in body text, got:\n%s", got)
+		}
+	})
+}
+
 func TestRefURL(t *testing.T) {
 	tests := []struct {
 		name string
@@ -386,6 +533,71 @@ func TestHandleSection_RawHTMLEscaped(t *testing.T) {
 	}
 	if !strings.Contains(body, "&lt;SUPI&gt;") {
 		t.Errorf("expected the <SUPI> placeholder to stay visible, got:\n%s", body)
+	}
+}
+
+// TestHandleSection_DeepHeadingClamped verifies that a section deeper than
+// HTML has heading elements — TS 36.523-1 numbers clauses like 7.1.13.1.1.2 —
+// renders as a real <h6> instead of an unknown <h7> element.
+func TestHandleSection_DeepHeadingClamped(t *testing.T) {
+	ts, d := setupTestServer(t)
+
+	if err := d.UpsertSection(db.Section{
+		SpecID:  "TS 23.501",
+		Version: "18.6.0",
+		Number:  "7.1.13.1.1.2",
+		Title:   "Deeply nested test procedure",
+		Level:   6,
+		Content: "Body text of a level 6 section.",
+	}); err != nil {
+		t.Fatalf("UpsertSection: %v", err)
+	}
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/sections/7.1.13.1.1.2")
+	if err != nil {
+		t.Fatalf("GET section error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	for _, bad := range []string{"<h7", "</h7", "<h8", "</h8"} {
+		if strings.Contains(body, bad) {
+			t.Errorf("no %s element may be emitted, got:\n%s", bad, body)
+		}
+	}
+	if !strings.Contains(body, `<h6 class="section-heading depth-6" id="section-7.1.13.1.1.2">`) {
+		t.Errorf("expected the deep section to render as <h6>, got:\n%s", body)
+	}
+	if !strings.Contains(body, "</h6>") {
+		t.Errorf("expected a matching </h6> closer, got:\n%s", body)
+	}
+	if !strings.Contains(body, "Deeply nested test procedure") {
+		t.Errorf("expected the section title in the heading, got:\n%s", body)
+	}
+}
+
+// TestHandleSection_HeadingLevels checks the unclamped levels still map one
+// step below the page title.
+func TestHandleSection_HeadingLevels(t *testing.T) {
+	ts, _ := setupTestServer(t)
+
+	for _, tt := range []struct {
+		section string
+		want    string
+	}{
+		{"5", `<h2 class="section-heading depth-1" id="section-5">`},
+		{"5.1", `<h3 class="section-heading depth-2" id="section-5.1">`},
+		{"5.1.1", `<h4 class="section-heading depth-3" id="section-5.1.1">`},
+	} {
+		resp, err := http.Get(ts.URL + "/specs/TS 23.501/sections/" + tt.section)
+		if err != nil {
+			t.Fatalf("GET section %s error: %v", tt.section, err)
+		}
+		body := readBody(t, resp)
+		resp.Body.Close()
+		if !strings.Contains(body, tt.want) {
+			t.Errorf("section %s: expected %s, got:\n%s", tt.section, tt.want, body)
+		}
 	}
 }
 
@@ -970,6 +1182,43 @@ func TestRenderMarkdown_AngleBracketPlaceholderVisible(t *testing.T) {
 	}
 	if strings.Contains(got, "<SUPI>") {
 		t.Errorf("<SUPI> must not reach the page as a raw tag, got:\n%s", got)
+	}
+}
+
+// TestRenderMarkdown_UppercasePlaceholderNotATag verifies that upper-case
+// abbreviations in angle brackets — <UL>, <DL>, <TD> are everyday 3GPP prose —
+// stay visible text. A case-insensitive tag allowlist turned them into real
+// list and table elements, which browsers use to restructure (and swallow)
+// the surrounding paragraph.
+func TestRenderMarkdown_UppercasePlaceholderNotATag(t *testing.T) {
+	content := "Scheduling for <UL> and <DL> is described per <TD> slot."
+	got := renderMarkdown(content, renderOpts{specID: "TS 38.300"})
+	for _, want := range []string{"&lt;UL&gt;", "&lt;DL&gt;", "&lt;TD&gt;"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %s as escaped text, got:\n%s", want, got)
+		}
+	}
+	for _, bad := range []string{"<ul>", "<UL>", "<dl>", "<DL>", "<td>", "<TD>"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("placeholder must not become the %s element, got:\n%s", bad, got)
+		}
+	}
+	// The prose around the placeholders must survive intact.
+	if !strings.Contains(got, "Scheduling for") || !strings.Contains(got, "slot.") {
+		t.Errorf("paragraph text must not be swallowed, got:\n%s", got)
+	}
+}
+
+// TestRenderMarkdown_LowercasePipelineTagsAllowed guards the other side of
+// the case-sensitive allowlist: the tags the pipeline itself emits still pass
+// through unescaped.
+func TestRenderMarkdown_LowercasePipelineTagsAllowed(t *testing.T) {
+	content := "<ul><li>first</li><li>second</li></ul>"
+	got := renderMarkdown(content, renderOpts{specID: "TS 23.501"})
+	for _, want := range []string{"<ul>", "<li>first</li>"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected pipeline markup %s to survive, got:\n%s", want, got)
+		}
 	}
 }
 

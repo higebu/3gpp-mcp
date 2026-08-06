@@ -41,9 +41,9 @@
 
         {{range .Sections}}
         <article class="section">
-            <h{{add .Level 1}} id="section-{{.Number}}">
+            <h{{headingLevel .Level}} class="section-heading depth-{{sectionDepth .Level}}" id="section-{{.Number}}">
                 {{if ne .Number .Title}}<span class="section-number">{{.Number}}</span> {{end}}{{.Title}}
-            </h{{add .Level 1}}>
+            </h{{headingLevel .Level}}>
             <div class="section-body">
                 {{.Content}}
             </div>

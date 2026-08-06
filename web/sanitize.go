@@ -16,8 +16,13 @@ import (
 // skip in renderMarkdown). Any other angle bracket in body text is document
 // text — 3GPP prose is full of placeholders like <SUPI> — and must be
 // escaped so it stays visible instead of being parsed as markup.
+//
+// The match is case-sensitive on purpose: the pipeline only ever emits
+// lower-case tags, while 3GPP prose is full of upper-case abbreviations in
+// angle brackets (<UL>, <DL>, <TA>) that must stay visible text rather than
+// becoming real list elements and eating the paragraph around them.
 var allowedTagRE = regexp.MustCompile(
-	`(?i)^</?(?:img|li|ol|p|sub|sup|table|tbody|td|th|thead|tr|ul)(?:\s[^<>]*)?/?>`)
+	`^</?(?:img|li|ol|p|sub|sup|table|tbody|td|th|thead|tr|ul)(?:\s[^<>]*)?/?>`)
 
 // markerOpenRE and markerCloseRE match db.LinkifyRefs's unresolved-reference
 // markers in body text — only the exact class="ref-unresolved" form, so a
