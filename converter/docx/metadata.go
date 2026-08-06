@@ -25,11 +25,15 @@ var (
 	// characters, each a digit or letter. Legacy releases 1-9 have tokens
 	// that start with a digit ("920" is 9.2.0), so the first character must
 	// not be restricted to letters.
-	filenameRE    = regexp.MustCompile(`^(\d{2})(\d{3})(?:-(\d{1,2}))?-?([0-9a-z]{3})`)
-	specPatternRE = regexp.MustCompile(`(?i)(?:TS|TR)\s*(\d+)\.(\d+)`)
-	versionRE     = regexp.MustCompile(`V(\d+\.\d+\.\d+)`)
-	releaseRE     = regexp.MustCompile(`Release\s+(\d+)`)
-	sectionPartRE = regexp.MustCompile(`_s[A-Z0-9]`)
+	filenameRE = regexp.MustCompile(`^(\d{2})(\d{3})(?:-(\d{1,2}))?-?([0-9a-z]{3})`)
+	// The word boundary keeps document-text scans from matching a token
+	// glued to the end of another word; filename stems keep the old
+	// permissive pattern so names like "draftTS23.501" still normalize.
+	specPatternRE     = regexp.MustCompile(`(?i)\b(TS|TR)\s*(\d+)\.(\d+)`)
+	stemSpecPatternRE = regexp.MustCompile(`(?i)(TS|TR)\s*(\d+)\.(\d+)`)
+	versionRE         = regexp.MustCompile(`V(\d+\.\d+\.\d+)`)
+	releaseRE         = regexp.MustCompile(`Release\s+(\d+)`)
+	sectionPartRE     = regexp.MustCompile(`_s[A-Z0-9]`)
 )
 
 // coreProperties represents docProps/core.xml.
@@ -95,13 +99,23 @@ func extractMetadata(filename string, props coreProperties, bodyElements []bodyE
 	// Remove multi-part suffixes like _cover, _s00-11
 	baseStem := stem
 
-	var specID, title, version, versionToken, release string
+	var specID, docType, title, version, versionToken, release string
 
 	// Parse from filename. The trailing group is the base-36 archive token
 	// (e.g. "i60"), which is normalized to the dotted form used everywhere else.
 	if match := filenameRE.FindStringSubmatch(stem); match != nil {
 		series, num, part, ver := match[1], match[2], match[3], match[4]
-		specID = "TS " + series + "." + num
+		// The archive filename never distinguishes a Technical Specification
+		// from a Technical Report, so only the document itself can say. When
+		// it does not (part files of a split spec have no cover page), the
+		// prefix defaults to "TS" and the caller may correct it from a
+		// sibling file that does know.
+		docType = detectDocType(series, num, props, collectCoverPageParagraphs(bodyElements, styleMap))
+		prefix := docType
+		if prefix == "" {
+			prefix = "TS"
+		}
+		specID = prefix + " " + series + "." + num
 		if part != "" {
 			specID += "-" + part
 		}
@@ -109,8 +123,9 @@ func extractMetadata(filename string, props coreProperties, bodyElements []bodyE
 		if dotted, ok := specver.TokenToDotted(versionToken); ok {
 			version = dotted
 		}
-	} else if match := specPatternRE.FindStringSubmatch(stem); match != nil {
-		specID = "TS " + match[1] + "." + match[2]
+	} else if match := stemSpecPatternRE.FindStringSubmatch(stem); match != nil {
+		docType = strings.ToUpper(match[1])
+		specID = docType + " " + match[2] + "." + match[3]
 	} else {
 		specID = stem
 	}
@@ -203,11 +218,46 @@ func extractMetadata(filename string, props coreProperties, bodyElements []bodyE
 
 	return &SpecMetadata{
 		SpecID:       specID,
+		DocType:      docType,
 		Title:        title,
 		Version:      version,
 		VersionToken: versionToken,
 		Release:      release,
 	}
+}
+
+// detectDocType returns "TS" or "TR" when the document names its own type,
+// and "" when it does not. The strongest signal is an explicit marker naming
+// this very document ("3GPP TR 21.905 V17.2.0" on the cover page, or the
+// spec number in the docProps title/subject); markers whose number differs
+// are references to other documents and are ignored. Failing that, the 3GPP
+// cover template spells the type as a standalone "Technical Specification" /
+// "Technical Report" line — matched by exact text, so the TSG name
+// ("Technical Specification Group ...") never counts.
+func detectDocType(series, num string, props coreProperties, coverParas []coverParagraph) string {
+	texts := make([]string, 0, len(coverParas)+2)
+	for _, cp := range coverParas {
+		texts = append(texts, cp.text)
+	}
+	texts = append(texts, props.Title, props.Subject)
+
+	for _, text := range texts {
+		for _, m := range specPatternRE.FindAllStringSubmatch(text, -1) {
+			if m[2] == series && m[3] == num {
+				return strings.ToUpper(m[1])
+			}
+		}
+	}
+	for _, cp := range coverParas {
+		line := strings.Trim(cp.text, " \t;:.,")
+		switch {
+		case strings.EqualFold(line, "Technical Specification"):
+			return "TS"
+		case strings.EqualFold(line, "Technical Report"):
+			return "TR"
+		}
+	}
+	return ""
 }
 
 // extractMetadataFromBody extracts title and release from document body using ZA/ZT styles.

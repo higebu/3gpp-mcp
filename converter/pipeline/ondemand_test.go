@@ -312,6 +312,45 @@ func TestFetchVersionImagesDocOnly(t *testing.T) {
 	}
 }
 
+// TestFetchVersionTRDocType verifies that an on-demand fetch labels a
+// Technical Report "TR " even when the type is only known to the cover file,
+// and that every section carries that ID (#110).
+func TestFetchVersionTRDocType(t *testing.T) {
+	partDocx := makeMinimalDocx(t,
+		`<w:p><w:pPr><w:pStyle w:val="Heading 1"/></w:pPr><w:r><w:t>5 Definitions</w:t></w:r></w:p>`+
+			`<w:p><w:r><w:t>Vocabulary body text.</w:t></w:r></w:p>`)
+	coverDocx := makeMinimalDocx(t,
+		`<w:p><w:pPr><w:pStyle w:val="ZA"/></w:pPr><w:r><w:t>3GPP TR 21.905 V17.2.0 (2022-03)</w:t></w:r></w:p>`)
+	archive := makeZipWithFiles(t, map[string][]byte{
+		"21905-h20_s01.docx":   partDocx,
+		"21905-h20_cover.docx": coverDocx,
+	})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/21_series/21.905/21905-h20.zip", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	sv := ParseSpecEntry("21_series/21.905/21905-h20.zip")
+	if sv == nil {
+		t.Fatal("ParseSpecEntry returned nil")
+	}
+	spec, sections, err := FetchVersion(context.Background(), client, sv, 0)
+	if err != nil {
+		t.Fatalf("FetchVersion: %v", err)
+	}
+	if spec.ID != "TR 21.905" {
+		t.Errorf("spec ID = %q, want %q", spec.ID, "TR 21.905")
+	}
+	for _, s := range sections {
+		if s.SpecID != "TR 21.905" {
+			t.Errorf("section %s SpecID = %q, want %q", s.Number, s.SpecID, "TR 21.905")
+		}
+	}
+}
+
 // TestFetchVersionDocOnly checks the error a legacy .doc-only version gives,
 // since old versions hit this far more often than recent ones.
 func TestFetchVersionDocOnly(t *testing.T) {

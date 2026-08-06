@@ -343,8 +343,9 @@ func TestParseDocx_22839(t *testing.T) {
 	metadata := result.Metadata
 	sections := result.Sections
 
-	if metadata.SpecID != "TS 22.839" {
-		t.Errorf("SpecID = %q, want %q", metadata.SpecID, "TS 22.839")
+	// 22.839 is a study, so its cover page names it a Technical Report.
+	if metadata.SpecID != "TR 22.839" {
+		t.Errorf("SpecID = %q, want %q", metadata.SpecID, "TR 22.839")
 	}
 	if metadata.Version != "18.1.0" {
 		t.Errorf("Version = %q, want %q", metadata.Version, "18.1.0")
