@@ -1307,11 +1307,12 @@ var (
 		`+(?:the` + sp + `+present` + sp + `+document|this` + sp + `+(?:specification|document))`)
 
 	// bareLeadingSpecRE matches a spec designator or bracket reference just
-	// before a bare reference ("TS 23.402 Clause 5.1", "[19] Clause 6") —
-	// qualified territory even when capitalization keeps the lowercase-only
-	// qualified patterns (and thus the overlap gate) from covering it.
+	// before a bare reference ("TS 23.402 Clause 5.1", "RFC 3748 Section 3.1",
+	// "[19] Clause 6") — qualified territory even when capitalization keeps
+	// the lowercase-only qualified patterns (and thus the overlap gate) from
+	// covering it.
 	bareLeadingSpecRE = regexp.MustCompile(
-		`(?:(?:TS|TR)` + sp + `+\d+\.\d+|\[\d+[A-Za-z]*\])` + sp + `*[,;]?` + sp + `*$`)
+		`(?:(?:TS|TR)` + sp + `+\d+\.\d+|RFC` + sp + `+\d+|\[\d+[A-Za-z]*\])` + sp + `*[,;]?` + sp + `*$`)
 )
 
 // refExtractor converts regex submatch indices into (targetSpec, targetSection, ok).

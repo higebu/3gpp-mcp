@@ -488,6 +488,11 @@ func TestLinkifyRefs_BareRefs(t *testing.T) {
 			want:  "See [TS 23.402](/specs/TS 23.402) Clause 5.1.",
 		},
 		{
+			name:  "capitalized after RFC not linked bare",
+			input: "See RFC 3748 Section 5.1.",
+			want:  "See [RFC 3748](https://www.rfc-editor.org/rfc/rfc3748) Section 5.1.",
+		},
+		{
 			name:  "in-TS form not linked bare",
 			input: "as specified in clause 4.2 in TS 23.502.",
 			want:  "as specified in clause 4.2 in [TS 23.502](/specs/TS 23.502).",

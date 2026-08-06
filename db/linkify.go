@@ -321,11 +321,11 @@ func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec,
 			})
 		}
 		for _, m := range bareRefRE.FindAllStringSubmatchIndex(content, -1) {
-			sec := content[m[2]:m[3]]
-			if !sectionExists(sec) {
+			if isExcluded(m[0], m[1]) || overlapsAny(m[0], m[1]) || qualifiedElsewhere(m[0], m[1]) {
 				continue
 			}
-			if isExcluded(m[0], m[1]) || overlapsAny(m[0], m[1]) || qualifiedElsewhere(m[0], m[1]) {
+			sec := content[m[2]:m[3]]
+			if !sectionExists(sec) {
 				continue
 			}
 			matchText := content[m[0]:m[1]]
