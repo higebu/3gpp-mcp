@@ -396,3 +396,45 @@ func TestCompareVersionsImageNotationNoise(t *testing.T) {
 		t.Errorf("context line should show the new-side image reference:\n%s", text)
 	}
 }
+
+// TestCompareVersionsFamilyIDSuggestsParts checks that comparing a multi-part
+// family ID, which has no sections of its own on either side, names the parts
+// instead of a bare "no sections found".
+func TestCompareVersionsFamilyIDSuggestsParts(t *testing.T) {
+	d := setupTestDB(t)
+	if err := d.ExecScript(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+    ('TS 38.101-1', '18.6.0', 'i60', 'NR; UE radio transmission and reception; Part 1', '18', '38');`); err != nil {
+		t.Fatalf("seed part: %v", err)
+	}
+
+	// The fetcher returns no sections, mirroring a family ID whose archive
+	// entry holds nothing readable.
+	src := sourceWithStore(t, d, func(context.Context, *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		return db.Spec{Title: "family"}, nil, nil
+	})
+	// Pre-cache both versions so resolve takes the cached fast path and the
+	// archive listing (which only serves TS 23.501) is never consulted.
+	for _, v := range []string{"17.0.0", "18.0.0"} {
+		if err := src.Store.Ensure(context.Background(), "TS 38.101", v, &pipeline.SpecVersion{SpecID: "38.101"}, time.Minute); err != nil {
+			t.Fatalf("prime cache for v%s: %v", v, err)
+		}
+	}
+
+	handler := HandleCompareVersions(src)
+	result, _, err := handler(context.Background(), nil, CompareVersionsInput{
+		SpecID:        "TS 38.101",
+		OldVersion:    "17.0.0",
+		NewVersion:    "18.0.0",
+		SectionNumber: "5.1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected an error result, got: %q", getTextContent(result))
+	}
+	text := getTextContent(result)
+	if !strings.Contains(text, "has multiple parts") || !strings.Contains(text, "TS 38.101-1") {
+		t.Errorf("expected the parts hint naming TS 38.101-1, got: %q", text)
+	}
+}

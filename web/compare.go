@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -99,12 +100,17 @@ func (h *handler) renderCompareErrors(w http.ResponseWriter, oldErr, newErr erro
 func (h *handler) compareStructurePage(w http.ResponseWriter, r *http.Request, data compareData) {
 	oldSecs, oldRes, oldErr := h.src.AllSections(r.Context(), data.SpecID, data.OldParam)
 	newSecs, newRes, newErr := h.src.AllSections(r.Context(), data.SpecID, data.NewParam)
+	if notice := h.familyPartsNotice(r.Context(), data.SpecID, oldErr, newErr); notice != "" {
+		data.Notice = notice
+		h.renderCompare(w, data)
+		return
+	}
 	if h.renderCompareErrors(w, oldErr, newErr) {
 		return
 	}
 	data.fillLabels(oldSecs, oldRes, newSecs, newRes)
 
-	if notice := h.compareNotice(data.SpecID, oldSecs, newSecs, oldRes, newRes); notice != "" {
+	if notice := h.compareNotice(r.Context(), data.SpecID, oldSecs, newSecs, oldRes, newRes); notice != "" {
 		data.Notice = notice
 		h.renderCompare(w, data)
 		return
@@ -126,12 +132,17 @@ func (h *handler) compareSectionPage(w http.ResponseWriter, r *http.Request, dat
 	}
 	oldSecs, oldRes, oldErr := h.src.GetSection(r.Context(), data.SpecID, data.OldParam, oldSection, false)
 	newSecs, newRes, newErr := h.src.GetSection(r.Context(), data.SpecID, data.NewParam, data.Section, false)
+	if notice := h.familyPartsNotice(r.Context(), data.SpecID, oldErr, newErr); notice != "" {
+		data.Notice = notice
+		h.renderCompare(w, data)
+		return
+	}
 	if h.renderCompareErrors(w, oldErr, newErr) {
 		return
 	}
 	data.fillLabels(oldSecs, oldRes, newSecs, newRes)
 
-	if notice := h.compareNotice(data.SpecID, oldSecs, newSecs, oldRes, newRes); notice != "" {
+	if notice := h.compareNotice(r.Context(), data.SpecID, oldSecs, newSecs, oldRes, newRes); notice != "" {
 		data.Notice = notice
 		h.renderCompare(w, data)
 		return
@@ -161,11 +172,25 @@ func (h *handler) compareSectionPage(w http.ResponseWriter, r *http.Request, dat
 	h.renderCompare(w, data)
 }
 
+// familyPartsNotice mirrors the compare_versions tool's family hint: when
+// both sides of a comparison failed and the spec has split-file parts, the
+// parts listing is the useful answer, not the resolve or fetch error — a
+// family ID like "TS 38.101" never resolves to content of its own.
+func (h *handler) familyPartsNotice(ctx context.Context, specID string, oldErr, newErr error) string {
+	if oldErr == nil || newErr == nil {
+		return ""
+	}
+	if parts, err := h.db.FindSpecIDsByFamily(ctx, specID); err == nil && len(parts) > 0 {
+		return fmt.Sprintf("%s has multiple parts: %s — specify one.", specID, strings.Join(parts, ", "))
+	}
+	return ""
+}
+
 // compareNotice mirrors the compare_versions tool's guards: nothing on either
 // side, or both requests landing on the same version.
-func (h *handler) compareNotice(specID string, oldSecs, newSecs []db.Section, oldRes, newRes tools.Resolution) string {
+func (h *handler) compareNotice(ctx context.Context, specID string, oldSecs, newSecs []db.Section, oldRes, newRes tools.Resolution) string {
 	if len(oldSecs) == 0 && len(newSecs) == 0 {
-		if parts, err := h.db.FindSpecIDsByFamily(specID); err == nil && len(parts) > 0 {
+		if parts, err := h.db.FindSpecIDsByFamily(ctx, specID); err == nil && len(parts) > 0 {
 			return fmt.Sprintf("%s has multiple parts: %s — specify one.", specID, strings.Join(parts, ", "))
 		}
 		return fmt.Sprintf("No sections found for %s in either version.", specID)

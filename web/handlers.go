@@ -229,7 +229,7 @@ func (h *handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 	limit := 50
 	offset := (page - 1) * limit
 
-	result, err := h.db.ListSpecs(series, query, limit, offset)
+	result, err := h.db.ListSpecs(r.Context(), series, query, limit, offset)
 	if err != nil {
 		h.renderError(w, http.StatusInternalServerError, "Failed to load specifications")
 		log.Printf("ListSpecs error: %v", err)
@@ -340,9 +340,9 @@ func (h *handler) renderSpecPage(w http.ResponseWriter, r *http.Request, specID,
 	var openAPIs []db.OpenAPISpec
 	var refs []db.Reference
 	if !res.Archived {
-		bracketMap, _ = h.db.GetBracketMap(specID, "")
-		openAPIs, _ = h.db.ListOpenAPI(specID)
-		refs, _ = h.db.GetReferences(specID, "", number, db.DirectionOutgoing, false)
+		bracketMap, _ = h.db.GetBracketMap(r.Context(), specID, "")
+		openAPIs, _ = h.db.ListOpenAPI(r.Context(), specID)
+		refs, _ = h.db.GetReferences(r.Context(), specID, "", number, db.DirectionOutgoing, false)
 	}
 	rendered := renderSections(sections, specID, urlVersion, bracketMap)
 	prev, next := adjacentSections(toc, number)
@@ -509,7 +509,7 @@ func (h *handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		if specID != "" {
 			specIDs = []string{specID}
 		}
-		result, err := h.db.Search(query, specIDs, limit, offset)
+		result, err := h.db.Search(r.Context(), query, specIDs, limit, offset)
 		if err != nil {
 			log.Printf("Search error: %v", err)
 			data.Error = "Search failed. Check the query syntax and try again."
@@ -534,7 +534,7 @@ func (h *handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 func (h *handler) handleOpenAPIList(w http.ResponseWriter, r *http.Request) {
 	specID := r.PathValue("specID")
 
-	apis, err := h.db.ListOpenAPI(specID)
+	apis, err := h.db.ListOpenAPI(r.Context(), specID)
 	if err != nil {
 		h.renderError(w, http.StatusInternalServerError, "Failed to load OpenAPI definitions")
 		return
@@ -554,7 +554,7 @@ func (h *handler) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 	specID := r.PathValue("specID")
 	apiName := r.PathValue("apiName")
 
-	content, err := h.db.GetOpenAPI(specID, apiName)
+	content, err := h.db.GetOpenAPI(r.Context(), specID, apiName)
 	if err != nil {
 		h.renderError(w, http.StatusNotFound, fmt.Sprintf("OpenAPI definition %q not found", apiName))
 		return

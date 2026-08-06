@@ -1958,3 +1958,39 @@ func TestSpecHeaderTabs_CompareKeepsOldVersion(t *testing.T) {
 		t.Errorf("expected the Compare tab to keep the old version, got:\n%s", body)
 	}
 }
+
+// TestHandleCompare_FamilyIDSuggestsParts checks that comparing a multi-part
+// family ID, which has no sections of its own on either side, names the parts
+// instead of a bare "no sections found".
+func TestHandleCompare_FamilyIDSuggestsParts(t *testing.T) {
+	// The fetcher returns no sections, mirroring a family ID whose archive
+	// entry holds nothing readable.
+	ts, src := setupVersionedServer(t, func(context.Context, *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		return db.Spec{Title: "family"}, nil, nil
+	}, nil)
+	if err := src.DB.ExecScript(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+    ('TS 38.101-1', '18.6.0', 'i60', 'NR; UE radio transmission and reception; Part 1', '18', '38');`); err != nil {
+		t.Fatalf("seed part: %v", err)
+	}
+	// Pre-cache both versions so resolve takes the cached fast path and the
+	// archive listing (which only serves TS 23.501) is never consulted.
+	for _, v := range []string{"17.0.0", "18.0.0"} {
+		if err := src.Store.Ensure(context.Background(), "TS 38.101", v, &pipeline.SpecVersion{SpecID: "38.101"}, time.Minute); err != nil {
+			t.Fatalf("prime cache for v%s: %v", v, err)
+		}
+	}
+
+	resp, err := http.Get(ts.URL + "/specs/TS 38.101/compare?old=17.0.0&new=18.0.0&section=5.1")
+	if err != nil {
+		t.Fatalf("GET compare: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "has multiple parts") || !strings.Contains(body, "TS 38.101-1") {
+		t.Errorf("expected the parts hint naming TS 38.101-1, got:\n%s", body)
+	}
+}

@@ -1,7 +1,9 @@
 package db
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,7 +91,7 @@ func TestListSpecs(t *testing.T) {
 	d := setupTestDB(t)
 
 	t.Run("all", func(t *testing.T) {
-		result, err := d.ListSpecs("", "", 0, 0)
+		result, err := d.ListSpecs(t.Context(), "", "", 0, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -105,7 +107,7 @@ func TestListSpecs(t *testing.T) {
 	})
 
 	t.Run("filter by series", func(t *testing.T) {
-		result, err := d.ListSpecs("29", "", 0, 0)
+		result, err := d.ListSpecs(t.Context(), "29", "", 0, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -121,7 +123,7 @@ func TestListSpecs(t *testing.T) {
 	})
 
 	t.Run("no match", func(t *testing.T) {
-		result, err := d.ListSpecs("99", "", 0, 0)
+		result, err := d.ListSpecs(t.Context(), "99", "", 0, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -134,7 +136,7 @@ func TestListSpecs(t *testing.T) {
 	})
 
 	t.Run("with limit", func(t *testing.T) {
-		result, err := d.ListSpecs("", "", 1, 0)
+		result, err := d.ListSpecs(t.Context(), "", "", 1, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -150,7 +152,7 @@ func TestListSpecs(t *testing.T) {
 	})
 
 	t.Run("with offset", func(t *testing.T) {
-		result, err := d.ListSpecs("", "", 1, 1)
+		result, err := d.ListSpecs(t.Context(), "", "", 1, 1)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -163,7 +165,7 @@ func TestListSpecs(t *testing.T) {
 	})
 
 	t.Run("offset beyond end", func(t *testing.T) {
-		result, err := d.ListSpecs("", "", 10, 100)
+		result, err := d.ListSpecs(t.Context(), "", "", 10, 100)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -176,7 +178,7 @@ func TestListSpecs(t *testing.T) {
 	})
 
 	t.Run("no limit", func(t *testing.T) {
-		result, err := d.ListSpecs("", "", -1, 0)
+		result, err := d.ListSpecs(t.Context(), "", "", -1, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -186,7 +188,7 @@ func TestListSpecs(t *testing.T) {
 	})
 
 	t.Run("filter by query prefix ignoring TS/TR prefix", func(t *testing.T) {
-		result, err := d.ListSpecs("", "23.5", 0, 0)
+		result, err := d.ListSpecs(t.Context(), "", "23.5", 0, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -199,7 +201,7 @@ func TestListSpecs(t *testing.T) {
 	})
 
 	t.Run("filter by query prefix no match", func(t *testing.T) {
-		result, err := d.ListSpecs("", "99.9", 0, 0)
+		result, err := d.ListSpecs(t.Context(), "", "99.9", 0, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -209,7 +211,7 @@ func TestListSpecs(t *testing.T) {
 	})
 
 	t.Run("filter by series and query prefix combined", func(t *testing.T) {
-		result, err := d.ListSpecs("23", "23.5", 0, 0)
+		result, err := d.ListSpecs(t.Context(), "23", "23.5", 0, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -217,7 +219,7 @@ func TestListSpecs(t *testing.T) {
 			t.Fatalf("expected only TS 23.501, got %+v", result.Specs)
 		}
 
-		result, err = d.ListSpecs("29", "23.5", 0, 0)
+		result, err = d.ListSpecs(t.Context(), "29", "23.5", 0, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -231,7 +233,7 @@ func TestGetTOC(t *testing.T) {
 	d := setupTestDB(t)
 
 	t.Run("existing spec", func(t *testing.T) {
-		sections, err := d.GetTOC("TS 23.501", "")
+		sections, err := d.GetTOC(t.Context(), "TS 23.501", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -247,7 +249,7 @@ func TestGetTOC(t *testing.T) {
 	})
 
 	t.Run("nonexistent spec", func(t *testing.T) {
-		sections, err := d.GetTOC("TS 99.999", "")
+		sections, err := d.GetTOC(t.Context(), "TS 99.999", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -260,7 +262,7 @@ func TestGetTOC(t *testing.T) {
 func TestAllSections(t *testing.T) {
 	d := setupTestDB(t)
 
-	sections, err := d.AllSections("TS 23.501", "")
+	sections, err := d.AllSections(t.Context(), "TS 23.501", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -274,7 +276,7 @@ func TestAllSections(t *testing.T) {
 		t.Errorf("expected version 18.6.0 / release 18, got %+v", sections[0])
 	}
 
-	missing, err := d.AllSections("TS 99.999", "")
+	missing, err := d.AllSections(t.Context(), "TS 99.999", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -287,7 +289,7 @@ func TestGetSection(t *testing.T) {
 	d := setupTestDB(t)
 
 	t.Run("single section", func(t *testing.T) {
-		sections, err := d.GetSection("TS 23.501", "", "1", false)
+		sections, err := d.GetSection(t.Context(), "TS 23.501", "", "1", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -303,7 +305,7 @@ func TestGetSection(t *testing.T) {
 	})
 
 	t.Run("with subsections", func(t *testing.T) {
-		sections, err := d.GetSection("TS 23.501", "", "5", true)
+		sections, err := d.GetSection(t.Context(), "TS 23.501", "", "5", true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -313,7 +315,7 @@ func TestGetSection(t *testing.T) {
 	})
 
 	t.Run("without subsections", func(t *testing.T) {
-		sections, err := d.GetSection("TS 23.501", "", "5", false)
+		sections, err := d.GetSection(t.Context(), "TS 23.501", "", "5", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -323,7 +325,7 @@ func TestGetSection(t *testing.T) {
 	})
 
 	t.Run("nonexistent section", func(t *testing.T) {
-		sections, err := d.GetSection("TS 23.501", "", "99", false)
+		sections, err := d.GetSection(t.Context(), "TS 23.501", "", "99", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -335,7 +337,7 @@ func TestGetSection(t *testing.T) {
 	t.Run("LIKE wildcards in section number are literal", func(t *testing.T) {
 		// "_" is SQLite's single-character wildcard; unescaped it would match
 		// section 5.1 and its subtree.
-		sections, err := d.GetSection("TS 23.501", "", "5_1", true)
+		sections, err := d.GetSection(t.Context(), "TS 23.501", "", "5_1", true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -343,7 +345,7 @@ func TestGetSection(t *testing.T) {
 			t.Fatalf("expected 0 sections for literal 5_1, got %d", len(sections))
 		}
 		// "%" unescaped would match every dotted section of the spec.
-		sections, err = d.GetSection("TS 23.501", "", "%", true)
+		sections, err = d.GetSection(t.Context(), "TS 23.501", "", "%", true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -367,7 +369,7 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"OR operator", "AMF OR SMF", "AMF OR SMF"},
 		{"NOT operator", "AMF NOT SMF", "AMF NOT SMF"},
 		{"quoted phrase preserved", `"service based interface"`, `"service based interface"`},
-		{"prefix wildcard", "handov*", "handov*"},
+		{"prefix wildcard", "handov*", `"handov"*`},
 		{"valid column filter", "content:handover", "content:handover"},
 		{"valid column filter title", "title:authentication", "title:authentication"},
 		{"column filter with hyphen value", "title:IMS-AKA", `title:"IMS-AKA"`},
@@ -401,7 +403,23 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"prefix wildcard on hyphenated stem", "RRCSetup-IEs*", `"RRCSetup-IEs"*`},
 		{"prefix wildcard in column filter", "title:38.10*", `title:"38.10"*`},
 		{"repeated stars quoted whole", "38.10**", `"38.10**"`},
-		{"lone star unchanged", "*", "*"},
+		{"lone star quoted", "*", `"*"`},
+		{"double star quoted", "**", `"**"`},
+		{"bare AND quoted", "AND", `"AND"`},
+		{"bare OR quoted", "OR", `"OR"`},
+		{"bare NOT quoted", "NOT", `"NOT"`},
+		{"leading operator quoted", "AND AMF", `"AND" AMF`},
+		{"trailing operator quoted", "AMF AND", `AMF "AND"`},
+		{"doubled operator quoted", "AMF AND AND SMF", `AMF AND "AND" SMF`},
+		{"unterminated NEAR closed", "NEAR(a b", "NEAR(a b)"},
+		{"unterminated NEAR with distance closed", "NEAR(AMF UE, 5", "NEAR(AMF UE, 5)"},
+		{"empty unterminated NEAR quoted", "NEAR(", `"NEAR("`},
+		{"empty NEAR quoted", "NEAR()", `"NEAR()"`},
+		{"comma-only NEAR quoted", "NEAR(,)", `"NEAR(,)"`},
+		{"dot-only NEAR quoted", "NEAR(.)", `"NEAR(.)"`},
+		{"spaced comma-only NEAR quoted", "NEAR( , )", `"NEAR( , )"`},
+		{"hyphen-only NEAR quoted", "NEAR(-)", `"NEAR(-)"`},
+		{"unterminated comma-only NEAR quoted", "NEAR(,", `"NEAR(,"`},
 		{"quoted phrase with prefix star kept", `content:"core network"*`, `content:"core network"*`},
 		{"multi-word phrase column filter kept whole", `content:"core network"`, `content:"core network"`},
 		{"multi-word phrase column filter with trailing term", `title:"band requirements" AMF`, `title:"band requirements" AMF`},
@@ -455,6 +473,15 @@ func TestSanitizeFTS5Query_ExecutesWithoutError(t *testing.T) {
 		`AMF"`, `content:"band`, `content:"core network"`, `content:"core network`,
 		"38.10*", "title:38.10*", "RRCSetup-IEs*", "38.10**", "AMF -38.10*",
 		`content:"core network"*`,
+		"*", "**", "handov*",
+		"AND", "OR", "NOT", "AND AMF", "AMF AND", "AMF AND AND SMF",
+		"NEAR(a b", "NEAR(AMF UE, 5", "NEAR(", "NEAR()",
+		"NEAR(,)", "NEAR(.)", "NEAR( , )", "NEAR(-)", "NEAR(,",
+		// FTS5 keywords are uppercase-only: these must run as plain terms.
+		"and AMF", "AMF or", "not", "AMF and and SMF",
+		// Mixed-case NEAR is not a keyword but still a hard syntax error
+		// when left bare.
+		"Near(a b)", "near(AMF UE)",
 	}
 	for _, q := range queries {
 		sanitized := sanitizeFTS5Query(q)
@@ -548,7 +575,7 @@ func TestSearch(t *testing.T) {
 	d := setupTestDB(t)
 
 	t.Run("basic search", func(t *testing.T) {
-		page, err := d.Search("architecture", nil, 10, 0)
+		page, err := d.Search(t.Context(), "architecture", nil, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -564,7 +591,7 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("search with single spec filter", func(t *testing.T) {
-		page, err := d.Search("Scope", []string{"TS 29.510"}, 10, 0)
+		page, err := d.Search(t.Context(), "Scope", []string{"TS 29.510"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -581,7 +608,7 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("search with multiple spec filter", func(t *testing.T) {
-		page, err := d.Search("Scope", []string{"TS 23.501", "TS 29.510"}, 10, 0)
+		page, err := d.Search(t.Context(), "Scope", []string{"TS 23.501", "TS 29.510"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -590,8 +617,19 @@ func TestSearch(t *testing.T) {
 		}
 	})
 
+	t.Run("operator and star queries degrade to no error", func(t *testing.T) {
+		// A bare "*" or operator keyword used to reach FTS5 unquoted and fail
+		// hard; each of these must return a result set (possibly empty), not
+		// an error.
+		for _, q := range []string{"*", "**", "AND", "OR", "NOT", "NEAR(a b", "NEAR("} {
+			if _, err := d.Search(t.Context(), q, nil, 10, 0); err != nil {
+				t.Errorf("Search(%q) returned error: %v", q, err)
+			}
+		}
+	})
+
 	t.Run("no results", func(t *testing.T) {
-		page, err := d.Search("xyznonexistent", nil, 10, 0)
+		page, err := d.Search(t.Context(), "xyznonexistent", nil, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -604,7 +642,7 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("pagination", func(t *testing.T) {
-		full, err := d.Search("Scope", []string{"TS 23.501", "TS 29.510"}, 10, 0)
+		full, err := d.Search(t.Context(), "Scope", []string{"TS 23.501", "TS 29.510"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -612,11 +650,11 @@ func TestSearch(t *testing.T) {
 			t.Fatalf("expected total_count 2, got %d", full.TotalCount)
 		}
 
-		first, err := d.Search("Scope", []string{"TS 23.501", "TS 29.510"}, 1, 0)
+		first, err := d.Search(t.Context(), "Scope", []string{"TS 23.501", "TS 29.510"}, 1, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		second, err := d.Search("Scope", []string{"TS 23.501", "TS 29.510"}, 1, 1)
+		second, err := d.Search(t.Context(), "Scope", []string{"TS 23.501", "TS 29.510"}, 1, 1)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -635,7 +673,7 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("offset beyond total", func(t *testing.T) {
-		page, err := d.Search("Scope", []string{"TS 29.510"}, 10, 100)
+		page, err := d.Search(t.Context(), "Scope", []string{"TS 29.510"}, 10, 100)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -648,7 +686,7 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("limit zero uses default", func(t *testing.T) {
-		page, err := d.Search("Scope", nil, 0, 0)
+		page, err := d.Search(t.Context(), "Scope", nil, 0, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -658,7 +696,7 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("limit above max is clamped", func(t *testing.T) {
-		page, err := d.Search("Scope", nil, MaxSearchLimit+1, 0)
+		page, err := d.Search(t.Context(), "Scope", nil, MaxSearchLimit+1, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -668,7 +706,7 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("negative offset treated as zero", func(t *testing.T) {
-		page, err := d.Search("Scope", []string{"TS 29.510"}, 10, -5)
+		page, err := d.Search(t.Context(), "Scope", []string{"TS 29.510"}, 10, -5)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -689,7 +727,7 @@ This document covers IMS-AKA and sec-agree mechanisms.');`)
 		if err != nil {
 			t.Fatalf("failed to insert test data: %v", err)
 		}
-		page, err := d.Search("IMS-AKA", nil, 10, 0)
+		page, err := d.Search(t.Context(), "IMS-AKA", nil, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error for hyphenated search: %v", err)
 		}
@@ -713,7 +751,7 @@ The guardband requirements are specified here.');`)
 			t.Fatalf("failed to insert test data: %v", err)
 		}
 
-		page, err := d.Search("guardband", []string{"TS 38.101"}, 10, 0)
+		page, err := d.Search(t.Context(), "guardband", []string{"TS 38.101"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -725,7 +763,7 @@ The guardband requirements are specified here.');`)
 		}
 
 		// An unrelated spec sharing the family's numeric prefix must not match.
-		page, err = d.Search("guardband", []string{"TS 38.10"}, 10, 0)
+		page, err = d.Search(t.Context(), "guardband", []string{"TS 38.10"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -735,7 +773,7 @@ The guardband requirements are specified here.');`)
 
 		// "_" would otherwise act as a single-character LIKE wildcard and
 		// match "TS 38.101-1" via "TS 38_101".
-		page, err = d.Search("guardband", []string{"TS 38_101"}, 10, 0)
+		page, err = d.Search(t.Context(), "guardband", []string{"TS 38_101"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -751,7 +789,7 @@ func TestSearchClosedDB(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	if _, err := d.Search("architecture", nil, 10, 0); err == nil {
+	if _, err := d.Search(t.Context(), "architecture", nil, 10, 0); err == nil {
 		t.Error("expected error searching a closed database")
 	}
 }
@@ -770,7 +808,7 @@ This body says nothing relevant at all.');`); err != nil {
 		t.Fatalf("failed to insert test data: %v", err)
 	}
 
-	page, err := d.Search("rankprobe", nil, 10, 0)
+	page, err := d.Search(t.Context(), "rankprobe", nil, 10, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -794,7 +832,7 @@ Body text without the probe term.');`); err != nil {
 		t.Fatalf("failed to insert test data: %v", err)
 	}
 
-	page, err := d.Search("snippetprobe", nil, 10, 0)
+	page, err := d.Search(t.Context(), "snippetprobe", nil, 10, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -819,7 +857,7 @@ Handovers between cells are described in this clause.');`); err != nil {
 
 	// Porter stemming folds inflected forms both ways.
 	for _, q := range []string{"handover", "handovers"} {
-		page, err := d.Search(q, []string{"TS 90.003"}, 10, 0)
+		page, err := d.Search(t.Context(), q, []string{"TS 90.003"}, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error for %q: %v", q, err)
 		}
@@ -840,7 +878,7 @@ func TestFindSpecIDsByFamily(t *testing.T) {
 	}
 
 	t.Run("family with multiple parts", func(t *testing.T) {
-		ids, err := d.FindSpecIDsByFamily("TS 38.101")
+		ids, err := d.FindSpecIDsByFamily(t.Context(), "TS 38.101")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -856,7 +894,7 @@ func TestFindSpecIDsByFamily(t *testing.T) {
 	})
 
 	t.Run("family with no parts", func(t *testing.T) {
-		ids, err := d.FindSpecIDsByFamily("TS 23.501")
+		ids, err := d.FindSpecIDsByFamily(t.Context(), "TS 23.501")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -868,7 +906,7 @@ func TestFindSpecIDsByFamily(t *testing.T) {
 	t.Run("underscore in query is not treated as a LIKE wildcard", func(t *testing.T) {
 		// "_" would otherwise match any single character, e.g. "TS 38.101"
 		// via "TS 38_101". Confirm literal underscores don't match real IDs.
-		ids, err := d.FindSpecIDsByFamily("TS 38_101")
+		ids, err := d.FindSpecIDsByFamily(t.Context(), "TS 38_101")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -882,7 +920,7 @@ func TestListOpenAPI(t *testing.T) {
 	d := setupTestDB(t)
 
 	t.Run("all", func(t *testing.T) {
-		specs, err := d.ListOpenAPI("")
+		specs, err := d.ListOpenAPI(t.Context(), "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -895,7 +933,7 @@ func TestListOpenAPI(t *testing.T) {
 	})
 
 	t.Run("filter by spec", func(t *testing.T) {
-		specs, err := d.ListOpenAPI("TS 23.501")
+		specs, err := d.ListOpenAPI(t.Context(), "TS 23.501")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -909,7 +947,7 @@ func TestGetOpenAPI(t *testing.T) {
 	d := setupTestDB(t)
 
 	t.Run("existing", func(t *testing.T) {
-		content, err := d.GetOpenAPI("TS 29.510", "Nnrf_NFManagement")
+		content, err := d.GetOpenAPI(t.Context(), "TS 29.510", "Nnrf_NFManagement")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -919,7 +957,7 @@ func TestGetOpenAPI(t *testing.T) {
 	})
 
 	t.Run("nonexistent", func(t *testing.T) {
-		_, err := d.GetOpenAPI("TS 29.510", "Nonexistent")
+		_, err := d.GetOpenAPI(t.Context(), "TS 29.510", "Nonexistent")
 		if err == nil {
 			t.Fatal("expected error for nonexistent api")
 		}
@@ -934,7 +972,7 @@ func TestUpsertOpenAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		content, err := d.GetOpenAPI("TS 29.512", "Npcf_SMPolicyControl")
+		content, err := d.GetOpenAPI(t.Context(), "TS 29.512", "Npcf_SMPolicyControl")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -948,7 +986,7 @@ func TestUpsertOpenAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		content, err := d.GetOpenAPI("TS 29.510", "Nnrf_NFManagement")
+		content, err := d.GetOpenAPI(t.Context(), "TS 29.510", "Nnrf_NFManagement")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1096,7 +1134,7 @@ func TestGetReferences(t *testing.T) {
 	d := setupTestDB(t)
 
 	t.Run("outgoing", func(t *testing.T) {
-		refs, err := d.GetReferences("TS 24.229", "", "5.1", "outgoing", false)
+		refs, err := d.GetReferences(t.Context(), "TS 24.229", "", "5.1", "outgoing", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1106,7 +1144,7 @@ func TestGetReferences(t *testing.T) {
 	})
 
 	t.Run("outgoing with subsections", func(t *testing.T) {
-		refs, err := d.GetReferences("TS 24.229", "", "5", "outgoing", true)
+		refs, err := d.GetReferences(t.Context(), "TS 24.229", "", "5", "outgoing", true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1117,7 +1155,7 @@ func TestGetReferences(t *testing.T) {
 	})
 
 	t.Run("incoming", func(t *testing.T) {
-		refs, err := d.GetReferences("TS 33.203", "", "", "incoming", false)
+		refs, err := d.GetReferences(t.Context(), "TS 33.203", "", "", "incoming", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1128,7 +1166,7 @@ func TestGetReferences(t *testing.T) {
 	})
 
 	t.Run("incoming with section", func(t *testing.T) {
-		refs, err := d.GetReferences("TS 33.203", "", "6.1", "incoming", false)
+		refs, err := d.GetReferences(t.Context(), "TS 33.203", "", "6.1", "incoming", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1144,7 +1182,7 @@ func TestGetReferences(t *testing.T) {
 	})
 
 	t.Run("no results", func(t *testing.T) {
-		refs, err := d.GetReferences("TS 99.999", "", "", "incoming", false)
+		refs, err := d.GetReferences(t.Context(), "TS 99.999", "", "", "incoming", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1154,7 +1192,7 @@ func TestGetReferences(t *testing.T) {
 	})
 
 	t.Run("invalid direction", func(t *testing.T) {
-		_, err := d.GetReferences("TS 24.229", "", "5.1", "sideways", false)
+		_, err := d.GetReferences(t.Context(), "TS 24.229", "", "5.1", "sideways", false)
 		if err == nil {
 			t.Fatal("expected error for invalid direction")
 		}
@@ -1162,14 +1200,14 @@ func TestGetReferences(t *testing.T) {
 
 	t.Run("LIKE wildcards in section number are literal", func(t *testing.T) {
 		// Unescaped, "%" would match every section with outgoing refs.
-		refs, err := d.GetReferences("TS 24.229", "", "%", "outgoing", true)
+		refs, err := d.GetReferences(t.Context(), "TS 24.229", "", "%", "outgoing", true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if len(refs) != 0 {
 			t.Fatalf("expected 0 refs for literal %%, got %d", len(refs))
 		}
-		refs, err = d.GetReferences("TS 33.203", "", "6_1", "incoming", false)
+		refs, err = d.GetReferences(t.Context(), "TS 33.203", "", "6_1", "incoming", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1200,7 +1238,7 @@ func TestInsertSpecWithSections_References(t *testing.T) {
 	}
 
 	// Verify references were auto-extracted
-	refs, err := d.GetReferences("TS 99.001", "", "1", "outgoing", false)
+	refs, err := d.GetReferences(t.Context(), "TS 99.001", "", "1", "outgoing", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1370,7 +1408,7 @@ func TestInsertSpecWithSections_BracketedRefs(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	refs, err := d.GetReferences("TS 99.002", "", "5", "outgoing", false)
+	refs, err := d.GetReferences(t.Context(), "TS 99.002", "", "5", "outgoing", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1414,7 +1452,7 @@ func TestOpen_ReadOnly(t *testing.T) {
 	}
 	defer ro.Close()
 
-	result, err := ro.ListSpecs("", "", 0, 0)
+	result, err := ro.ListSpecs(t.Context(), "", "", 0, 0)
 	if err != nil {
 		t.Fatalf("ListSpecs: %v", err)
 	}
@@ -1455,7 +1493,7 @@ func TestOpen_PathWithURIReservedChars(t *testing.T) {
 	}
 	defer ro.Close()
 
-	result, err := ro.ListSpecs("", "", 0, 0)
+	result, err := ro.ListSpecs(t.Context(), "", "", 0, 0)
 	if err != nil {
 		t.Fatalf("ListSpecs: %v", err)
 	}
@@ -1515,7 +1553,7 @@ func TestExec_DirectSQL(t *testing.T) {
 		t.Fatalf("Exec insert: %v", err)
 	}
 
-	result, err := d.ListSpecs("99", "", 0, 0)
+	result, err := d.ListSpecs(t.Context(), "99", "", 0, 0)
 	if err != nil {
 		t.Fatalf("ListSpecs: %v", err)
 	}
@@ -1541,7 +1579,7 @@ func TestUpsertSpec_Replaces(t *testing.T) {
 		t.Fatalf("UpsertSpec: %v", err)
 	}
 
-	result, err := d.ListSpecs("", "", 0, 0)
+	result, err := d.ListSpecs(t.Context(), "", "", 0, 0)
 	if err != nil {
 		t.Fatalf("ListSpecs: %v", err)
 	}
@@ -1579,7 +1617,7 @@ func TestUpsertSection_ReplacesContent(t *testing.T) {
 		t.Fatalf("UpsertSection: %v", err)
 	}
 
-	sections, err := d.GetSection("TS 23.501", "", "1", false)
+	sections, err := d.GetSection(t.Context(), "TS 23.501", "", "1", false)
 	if err != nil {
 		t.Fatalf("GetSection: %v", err)
 	}
@@ -1591,7 +1629,7 @@ func TestUpsertSection_ReplacesContent(t *testing.T) {
 	}
 
 	// FTS should pick up the new token.
-	page, err := d.Search("zucchini", []string{"TS 23.501"}, 10, 0)
+	page, err := d.Search(t.Context(), "zucchini", []string{"TS 23.501"}, 10, 0)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -1624,7 +1662,7 @@ func TestImageCRUD(t *testing.T) {
 		t.Fatalf("UpsertImage (replace): %v", err)
 	}
 
-	got, err := d.GetImage("TS 23.501", "", "fig1.png")
+	got, err := d.GetImage(t.Context(), "TS 23.501", "", "fig1.png")
 	if err != nil {
 		t.Fatalf("GetImage: %v", err)
 	}
@@ -1640,14 +1678,14 @@ func TestImageCRUD(t *testing.T) {
 
 	// A missing image is nil without an error, so callers can distinguish
 	// "no such image" from a real failure.
-	if missing, err := d.GetImage("TS 23.501", "", "missing.png"); err != nil {
+	if missing, err := d.GetImage(t.Context(), "TS 23.501", "", "missing.png"); err != nil {
 		t.Errorf("GetImage(missing) returned error: %v", err)
 	} else if missing != nil {
 		t.Errorf("GetImage(missing) = %+v, want nil", missing)
 	}
 
 	// ListImages returns only the inserted image.
-	infos, err := d.ListImages("TS 23.501", "")
+	infos, err := d.ListImages(t.Context(), "TS 23.501", "")
 	if err != nil {
 		t.Fatalf("ListImages: %v", err)
 	}
@@ -1656,7 +1694,7 @@ func TestImageCRUD(t *testing.T) {
 	}
 
 	// Empty spec → empty result.
-	infos, err = d.ListImages("TS 00.000", "")
+	infos, err = d.ListImages(t.Context(), "TS 00.000", "")
 	if err != nil {
 		t.Fatalf("ListImages empty: %v", err)
 	}
@@ -1678,7 +1716,7 @@ func TestGetBracketMap(t *testing.T) {
 		t.Fatalf("UpsertSection: %v", err)
 	}
 
-	m, err := d.GetBracketMap("TS 23.501", "")
+	m, err := d.GetBracketMap(t.Context(), "TS 23.501", "")
 	if err != nil {
 		t.Fatalf("GetBracketMap: %v", err)
 	}
@@ -1690,7 +1728,7 @@ func TestGetBracketMap(t *testing.T) {
 	}
 
 	// TS 29.510 has no References section in seed data → expect nil.
-	m2, err := d.GetBracketMap("TS 29.510", "")
+	m2, err := d.GetBracketMap(t.Context(), "TS 29.510", "")
 	if err != nil {
 		t.Fatalf("GetBracketMap empty: %v", err)
 	}
@@ -1718,7 +1756,7 @@ func TestInsertSpecWithSections_MultiSectionRefs(t *testing.T) {
 		t.Fatalf("InsertSpecWithSections: %v", err)
 	}
 
-	refs, err := d.GetReferences("TS 99.003", "", "5", "outgoing", false)
+	refs, err := d.GetReferences(t.Context(), "TS 99.003", "", "5", "outgoing", false)
 	if err != nil {
 		t.Fatalf("GetReferences: %v", err)
 	}
@@ -1767,7 +1805,7 @@ func TestInsertSpec_DropsSupersededVersions(t *testing.T) {
 	insert("17.0.0")
 	insert("18.0.0")
 
-	specs, err := d.ListSpecVersions("TS 99.100")
+	specs, err := d.ListSpecVersions(t.Context(), "TS 99.100")
 	if err != nil {
 		t.Fatalf("ListSpecVersions: %v", err)
 	}
@@ -1776,7 +1814,7 @@ func TestInsertSpec_DropsSupersededVersions(t *testing.T) {
 	}
 
 	// The superseded version's sections must be gone from search too.
-	page, err := d.Search("supersededprobe", nil, 10, 0)
+	page, err := d.Search(t.Context(), "supersededprobe", nil, 10, 0)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -1833,7 +1871,7 @@ func TestInsertSpec_DropsStaleDocTypeLabel(t *testing.T) {
 	insert("TS 21.905", "17.0.0") // pre-detection build's stale label
 	insert("TR 21.905", "18.0.0") // corrected label from an update
 
-	result, err := d.ListSpecs("", "21.905", -1, 0)
+	result, err := d.ListSpecs(t.Context(), "", "21.905", -1, 0)
 	if err != nil {
 		t.Fatalf("ListSpecs: %v", err)
 	}
@@ -1842,7 +1880,7 @@ func TestInsertSpec_DropsStaleDocTypeLabel(t *testing.T) {
 	}
 
 	// The stale label's sections must be gone from search too.
-	page, err := d.Search("relabelprobe", nil, 10, 0)
+	page, err := d.Search(t.Context(), "relabelprobe", nil, 10, 0)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -1854,10 +1892,10 @@ func TestInsertSpec_DropsStaleDocTypeLabel(t *testing.T) {
 	}
 
 	// Images follow the same rule.
-	if _, err := d.GetImage("TS 21.905", "17.0.0", "img.png"); err == nil {
+	if _, err := d.GetImage(t.Context(), "TS 21.905", "17.0.0", "img.png"); err == nil {
 		t.Error("expected the stale label's image to be gone")
 	}
-	img, err := d.GetImage("TR 21.905", "18.0.0", "img.png")
+	img, err := d.GetImage(t.Context(), "TR 21.905", "18.0.0", "img.png")
 	if err != nil || img == nil {
 		t.Errorf("expected the relabeled spec's image to exist, got %v", err)
 	}
@@ -1865,7 +1903,7 @@ func TestInsertSpec_DropsStaleDocTypeLabel(t *testing.T) {
 	// An ID without a type prefix has no alternate label to clean up and
 	// must insert unharmed.
 	insert("weirdname", "1.0.0")
-	if _, err := d.GetImage("weirdname", "1.0.0", "img.png"); err != nil {
+	if _, err := d.GetImage(t.Context(), "weirdname", "1.0.0", "img.png"); err != nil {
 		t.Errorf("expected the unprefixed spec to insert cleanly, got %v", err)
 	}
 }
@@ -1937,7 +1975,7 @@ RRCSetup-IEs ::= SEQUENCE {');`)
 	}
 
 	t.Run("exact hyphenated identifier matches", func(t *testing.T) {
-		page, err := d.Search("RRCSetup-IEs", nil, 10, 0)
+		page, err := d.Search(t.Context(), "RRCSetup-IEs", nil, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1950,7 +1988,7 @@ RRCSetup-IEs ::= SEQUENCE {');`)
 	})
 
 	t.Run("prefix query matches hyphenated identifier", func(t *testing.T) {
-		page, err := d.Search("RRCSetup*", nil, 10, 0)
+		page, err := d.Search(t.Context(), "RRCSetup*", nil, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1960,7 +1998,7 @@ RRCSetup-IEs ::= SEQUENCE {');`)
 	})
 
 	t.Run("unrelated hyphenated term misses", func(t *testing.T) {
-		page, err := d.Search("xyznope-IEs", nil, 10, 0)
+		page, err := d.Search(t.Context(), "xyznope-IEs", nil, 10, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -2038,5 +2076,60 @@ func TestExtractContext(t *testing.T) {
 				t.Errorf("extractContext = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestResolveVersion_ExplicitVersion pins the explicit-version lookup path:
+// a stored version resolves to itself, an absent one reports ErrNoVersion.
+func TestResolveVersion_ExplicitVersion(t *testing.T) {
+	d := setupTestDB(t)
+
+	v, err := d.ResolveVersion(t.Context(), "TS 23.501", "18.6.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v != "18.6.0" {
+		t.Errorf("ResolveVersion = %q, want 18.6.0", v)
+	}
+
+	if _, err := d.ResolveVersion(t.Context(), "TS 23.501", "1.0.0"); !errors.Is(err, ErrNoVersion) {
+		t.Errorf("ResolveVersion for an absent version: err = %v, want ErrNoVersion", err)
+	}
+}
+
+// TestQueryMethodsHonorContext verifies that the read paths abort when the
+// caller's context is already cancelled, so a cancelled MCP request does not
+// keep querying (issue #106).
+func TestQueryMethodsHonorContext(t *testing.T) {
+	d := setupTestDB(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	calls := []struct {
+		name string
+		call func() error
+	}{
+		{"Search", func() error { _, err := d.Search(ctx, "architecture", nil, 10, 0); return err }},
+		{"ListSpecs", func() error { _, err := d.ListSpecs(ctx, "", "", 10, 0); return err }},
+		{"ListSpecVersions", func() error { _, err := d.ListSpecVersions(ctx, "TS 23.501"); return err }},
+		{"ResolveVersion", func() error { _, err := d.ResolveVersion(ctx, "TS 23.501", ""); return err }},
+		{"GetTOC", func() error { _, err := d.GetTOC(ctx, "TS 23.501", ""); return err }},
+		{"AllSections", func() error { _, err := d.AllSections(ctx, "TS 23.501", ""); return err }},
+		{"GetSection", func() error { _, err := d.GetSection(ctx, "TS 23.501", "", "5.1", false); return err }},
+		{"GetBracketMap", func() error { _, err := d.GetBracketMap(ctx, "TS 24.229", ""); return err }},
+		{"GetImage", func() error { _, err := d.GetImage(ctx, "TS 23.501", "", "figure1.png"); return err }},
+		{"ListImages", func() error { _, err := d.ListImages(ctx, "TS 23.501", ""); return err }},
+		{"ListOpenAPI", func() error { _, err := d.ListOpenAPI(ctx, ""); return err }},
+		{"GetOpenAPI", func() error { _, err := d.GetOpenAPI(ctx, "TS 29.510", "Nnrf_NFManagement"); return err }},
+		{"GetReferences", func() error {
+			_, err := d.GetReferences(ctx, "TS 24.229", "", "5.1", DirectionOutgoing, false)
+			return err
+		}},
+		{"FindSpecIDsByFamily", func() error { _, err := d.FindSpecIDsByFamily(ctx, "TS 38.101"); return err }},
+	}
+	for _, tc := range calls {
+		if err := tc.call(); !errors.Is(err, context.Canceled) {
+			t.Errorf("%s with cancelled context: err = %v, want context.Canceled", tc.name, err)
+		}
 	}
 }

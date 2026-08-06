@@ -97,7 +97,7 @@ func (s *Source) resolve(ctx context.Context, specID, request string) (Resolutio
 	// A version the build already imported is served from the prebuilt
 	// database, which also has its images and cross-references.
 	if dotted != "" {
-		if v, err := s.DB.ResolveVersion(specID, dotted); err == nil {
+		if v, err := s.DB.ResolveVersion(ctx, specID, dotted); err == nil {
 			return Resolution{Version: v}, nil
 		} else if !errors.Is(err, db.ErrNoVersion) {
 			return Resolution{}, err
@@ -141,7 +141,7 @@ func (s *Source) resolve(ctx context.Context, specID, request string) (Resolutio
 
 	// A release selector such as "Rel-18" may well land on the version the
 	// build imported, so check the database again now that it is resolved.
-	if v, err := s.DB.ResolveVersion(specID, canonical); err == nil {
+	if v, err := s.DB.ResolveVersion(ctx, specID, canonical); err == nil {
 		return Resolution{Version: v}, nil
 	} else if !errors.Is(err, db.ErrNoVersion) {
 		return Resolution{}, err
@@ -173,7 +173,7 @@ func (s *Source) GetSection(ctx context.Context, specID, version, number string,
 		})
 		return sections, res, err
 	}
-	sections, err := s.DB.GetSection(specID, res.Version, number, includeSubsections)
+	sections, err := s.DB.GetSection(ctx, specID, res.Version, number, includeSubsections)
 	return sections, res, err
 }
 
@@ -190,7 +190,7 @@ func (s *Source) AllSections(ctx context.Context, specID, version string) ([]db.
 		})
 		return sections, res, err
 	}
-	sections, err := s.DB.AllSections(specID, res.Version)
+	sections, err := s.DB.AllSections(ctx, specID, res.Version)
 	return sections, res, err
 }
 
@@ -206,7 +206,7 @@ func (s *Source) GetTOC(ctx context.Context, specID, version string) ([]db.Secti
 		})
 		return sections, res, err
 	}
-	sections, err := s.DB.GetTOC(specID, res.Version)
+	sections, err := s.DB.GetTOC(ctx, specID, res.Version)
 	return sections, res, err
 }
 
@@ -230,7 +230,7 @@ func (s *Source) GetImage(ctx context.Context, specID, version, name string) (*d
 		}
 		return img, res, err
 	}
-	img, err := s.DB.GetImage(specID, res.Version, name)
+	img, err := s.DB.GetImage(ctx, specID, res.Version, name)
 	return img, res, err
 }
 
@@ -253,7 +253,7 @@ func (s *Source) ListImages(ctx context.Context, specID, version string) ([]db.I
 		}
 		return infos, res, err
 	}
-	infos, err := s.DB.ListImages(specID, res.Version)
+	infos, err := s.DB.ListImages(ctx, specID, res.Version)
 	return infos, res, err
 }
 

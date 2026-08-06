@@ -476,3 +476,64 @@ func TestHandleListVersionsRequiresSpecID(t *testing.T) {
 		t.Error("expected an error result for a missing spec_id")
 	}
 }
+
+// TestGetSectionReleaseSelectorLandsOnDatabaseVersion checks that a release
+// selector resolving to the version the build imported is served from the
+// database — no fetch, no archived resolution.
+func TestGetSectionReleaseSelectorLandsOnDatabaseVersion(t *testing.T) {
+	d := setupTestDB(t)
+	src := sourceWithStore(t, d, func(context.Context, *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		t.Error("fetcher must not run when the release selector lands on the database version")
+		return db.Spec{}, nil, nil
+	})
+
+	// The archive listing names i60 (18.6.0) as Rel-18's newest version, and
+	// that is exactly what the database holds.
+	sections, res, err := src.GetSection(context.Background(), "TS 23.501", "Rel-18", "5.1", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Archived {
+		t.Error("expected the database to serve the resolved release, not the cache")
+	}
+	if res.Version != "18.6.0" {
+		t.Errorf("resolved version = %q, want 18.6.0", res.Version)
+	}
+	if len(sections) == 0 {
+		t.Fatal("expected the database section to be returned")
+	}
+}
+
+// TestHandleListVersionsFamilyIDSuggestsParts checks that a family ID with no
+// versions anywhere — but with split parts in the database — names the parts.
+func TestHandleListVersionsFamilyIDSuggestsParts(t *testing.T) {
+	d := setupTestDB(t)
+	if err := d.ExecScript(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+    ('TS 38.101-1', '18.6.0', 'i60', 'NR; UE radio transmission and reception; Part 1', '18', '38');`); err != nil {
+		t.Fatalf("seed part: %v", err)
+	}
+
+	// The family directory exists but lists no zips, so the archive answer is
+	// "no versions" with no error.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/38_series/38.101/", func(http.ResponseWriter, *http.Request) {})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	src := NewSource(d)
+	src.Client = &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+	src.UseCache = false
+
+	handler := HandleListVersions(src)
+	result, _, err := handler(context.Background(), nil, ListVersionsInput{SpecID: "TS 38.101"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected an error result, got: %q", getTextContent(result))
+	}
+	text := getTextContent(result)
+	if !strings.Contains(text, "has multiple parts") || !strings.Contains(text, "TS 38.101-1") {
+		t.Errorf("expected the parts hint naming TS 38.101-1, got: %q", text)
+	}
+}

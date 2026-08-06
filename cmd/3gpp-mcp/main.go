@@ -605,7 +605,7 @@ func cmdUpdate(args []string) {
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	currentResult, err := src.ListSpecs("", "", -1, 0)
+	currentResult, err := src.ListSpecs(context.Background(), "", "", -1, 0)
 	if err != nil {
 		// An unreadable database is not an empty one; telling the user to run
 		// 'build' would hide the real failure and still exit 0.

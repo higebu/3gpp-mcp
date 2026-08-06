@@ -91,7 +91,7 @@ func TestConvertDir_Race(t *testing.T) {
 	}
 
 	// Verify at least one spec was inserted.
-	result, err := d.ListSpecs("", "", -1, 0)
+	result, err := d.ListSpecs(t.Context(), "", "", -1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestPipelineRun_TRDocType(t *testing.T) {
 		t.Fatalf("Pipeline.Run: %v", err)
 	}
 
-	result, err := d.ListSpecs("", "21.905", -1, 0)
+	result, err := d.ListSpecs(t.Context(), "", "21.905", -1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestPipelineRun_TRDocType(t *testing.T) {
 	}
 
 	// The part file's sections must be stored under the cover's TR label.
-	sections, err := d.GetTOC("TR 21.905", "")
+	sections, err := d.GetTOC(t.Context(), "TR 21.905", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,14 +277,14 @@ func TestConvertDir_TRDocType(t *testing.T) {
 		t.Fatalf("ConvertDir: %v", err)
 	}
 
-	result, err := d.ListSpecs("", "21.905", -1, 0)
+	result, err := d.ListSpecs(t.Context(), "", "21.905", -1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.Specs) != 1 || result.Specs[0].ID != "TR 21.905" {
 		t.Fatalf("specs = %+v, want exactly one TR 21.905", result.Specs)
 	}
-	sections, err := d.GetTOC("TR 21.905", "")
+	sections, err := d.GetTOC(t.Context(), "TR 21.905", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +322,7 @@ func TestPipelineRun_MultiFileZip(t *testing.T) {
 		t.Fatalf("Pipeline.Run: %v", err)
 	}
 
-	sections, err := d.GetTOC("TS 36.133", "")
+	sections, err := d.GetTOC(t.Context(), "TS 36.133", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestPipelineRun_OpenAPIYAML(t *testing.T) {
 	}
 
 	// Verify OpenAPI specs were imported.
-	apis, err := d.ListOpenAPI("TS 29.510")
+	apis, err := d.ListOpenAPI(t.Context(), "TS 29.510")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +372,7 @@ func TestPipelineRun_OpenAPIYAML(t *testing.T) {
 	t.Logf("Imported %d OpenAPI specs from TS 29.510", len(apis))
 
 	// Verify sections were also parsed.
-	sections, err := d.GetTOC("TS 29.510", "")
+	sections, err := d.GetTOC(t.Context(), "TS 29.510", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +420,7 @@ func TestPipelineRun_DocConversion(t *testing.T) {
 		t.Fatalf("Pipeline.Run: %v", err)
 	}
 
-	sections, err := d.GetTOC("TS 24.229", "")
+	sections, err := d.GetTOC(t.Context(), "TS 24.229", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +473,7 @@ func TestPipelineRun_Race(t *testing.T) {
 	}
 
 	// Verify spec was inserted.
-	sections, err := d.GetTOC("TS 23.274", "")
+	sections, err := d.GetTOC(t.Context(), "TS 23.274", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +565,7 @@ func TestConvertDir_ConvertDocNoDocFiles(t *testing.T) {
 		t.Fatalf("ConvertDir with convertDoc=true: %v", err)
 	}
 
-	result, err := d.ListSpecs("", "", -1, 0)
+	result, err := d.ListSpecs(t.Context(), "", "", -1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -603,7 +603,7 @@ func TestConvertDir_ConvertDocFailurePropagates(t *testing.T) {
 		t.Fatal("expected error when .doc conversion fails")
 	}
 
-	result, listErr := d.ListSpecs("", "", -1, 0)
+	result, listErr := d.ListSpecs(t.Context(), "", "", -1, 0)
 	if listErr != nil {
 		t.Fatal(listErr)
 	}
@@ -651,7 +651,7 @@ func TestConvertSingleFile(t *testing.T) {
 	}
 
 	// Parser pulls spec ID from metadata; testdata file is TS 23.274.
-	sections, err := d.GetTOC("TS 23.274", "")
+	sections, err := d.GetTOC(t.Context(), "TS 23.274", "")
 	if err != nil {
 		t.Fatalf("GetTOC: %v", err)
 	}
@@ -659,7 +659,7 @@ func TestConvertSingleFile(t *testing.T) {
 		t.Error("expected sections for TS 23.274 after ConvertSingleFile")
 	}
 
-	specs, err := d.ListSpecs("", "", -1, 0)
+	specs, err := d.ListSpecs(t.Context(), "", "", -1, 0)
 	if err != nil {
 		t.Fatalf("ListSpecs: %v", err)
 	}

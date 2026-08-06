@@ -86,7 +86,7 @@ func (s *Source) ListVersions(ctx context.Context, specID string) (versions []Ve
 		}
 	}
 
-	specs, err := s.DB.ListSpecVersions(specID)
+	specs, err := s.DB.ListSpecVersions(ctx, specID)
 	if err != nil {
 		return nil, archiveErr, fmt.Errorf("failed to list versions: %w", err)
 	}
@@ -133,7 +133,7 @@ func HandleListVersions(src *Source) func(ctx context.Context, req *mcp.CallTool
 			if archiveErr != nil {
 				return errorResult(fmt.Sprintf("no versions found for %s: %v", input.SpecID, archiveErr)), nil, nil
 			}
-			if parts, partsErr := src.DB.FindSpecIDsByFamily(input.SpecID); partsErr == nil && len(parts) > 0 {
+			if parts, partsErr := src.DB.FindSpecIDsByFamily(ctx, input.SpecID); partsErr == nil && len(parts) > 0 {
 				return errorResult(fmt.Sprintf("%s has multiple parts: %s — specify one", input.SpecID, strings.Join(parts, ", "))), nil, nil
 			}
 			return errorResult(fmt.Sprintf("no versions found for %s", input.SpecID)), nil, nil

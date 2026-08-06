@@ -29,7 +29,7 @@ func HandleListSpecs(d *db.DB) func(ctx context.Context, req *mcp.CallToolReques
 		if input.Limit < 0 {
 			input.Limit = 0
 		}
-		result, err := d.ListSpecs(input.Series, input.Query, input.Limit, input.Offset)
+		result, err := d.ListSpecs(ctx, input.Series, input.Query, input.Limit, input.Offset)
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to list specs: %v", err)), nil, nil
 		}

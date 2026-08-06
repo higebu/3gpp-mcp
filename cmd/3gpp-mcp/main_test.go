@@ -368,7 +368,7 @@ func TestCmdConvert_HappyPath(t *testing.T) {
 		t.Fatalf("open db: %v", err)
 	}
 	defer d.Close()
-	result, err := d.ListSpecs("", "", -1, 0)
+	result, err := d.ListSpecs(t.Context(), "", "", -1, 0)
 	if err != nil {
 		t.Fatalf("list specs: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestCmdConvertDir_HappyPath(t *testing.T) {
 		t.Fatalf("open db: %v", err)
 	}
 	defer d.Close()
-	result, err := d.ListSpecs("", "", -1, 0)
+	result, err := d.ListSpecs(t.Context(), "", "", -1, 0)
 	if err != nil {
 		t.Fatalf("list specs: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestCmdConvertDir_ConvertDocFlag(t *testing.T) {
 		t.Fatalf("open db: %v", err)
 	}
 	defer d.Close()
-	result, err := d.ListSpecs("", "", -1, 0)
+	result, err := d.ListSpecs(t.Context(), "", "", -1, 0)
 	if err != nil {
 		t.Fatalf("list specs: %v", err)
 	}
