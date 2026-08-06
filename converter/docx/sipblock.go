@@ -1,7 +1,7 @@
 package docx
 
 // Content-based detection of SIP message and SDP session-description
-// examples. Several specs (e.g. TS 23.877, TS 23.850, TS 23.700-19) write
+// examples. Several specs (e.g. TR 23.877, TR 23.850, TR 23.700-19) write
 // these examples as plain body paragraphs — Normal style, no code font —
 // so none of the style-based code paths fire and every line ends up as an
 // ordinary prose paragraph. Like the Diameter definitions, they are
@@ -11,7 +11,7 @@ package docx
 // fences (```sdp for SDP-only blocks), highlighted by web/siplexer.go.
 //
 // Detection runs on the raw paragraph text (codeLineText), before any
-// bold/italic markers are applied — TS 23.700-19 styles entire SIP
+// bold/italic markers are applied — TR 23.700-19 styles entire SIP
 // messages in italics — and only on paragraphs that are not already
 // code-styled, so specs whose examples are monospace-styled (TS 24.228,
 // TS 24.337, ...) keep their existing fenced output byte-for-byte.
@@ -19,6 +19,7 @@ package docx
 import (
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // sipMethodsPat lists the SIP request methods that may open an example
@@ -56,7 +57,7 @@ var (
 	sipHyphenHeaderRE = regexp.MustCompile(`^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+[ \t]*[:=]`)
 	sipPlainHeaderRE  = regexp.MustCompile(`(?i)^(?:via|to|from|contact|cseq|route|path|require|supported|expires|event|accept|allow|authorization|privacy|reason|warning|server|unsupported|date|subject|priority|organization|rack|rseq|join|replaces|timestamp)[ \t]*:`)
 	// Compact-form header, one letter and a colon: "v:SIP/2.0/UDP A;...",
-	// "f:<sip:A>;tag=205847", "l:120" (TS 23.700-19).
+	// "f:<sip:A>;tag=205847", "l:120" (TR 23.700-19).
 	sipCompactHeaderRE = regexp.MustCompile(`^[a-z]:`)
 
 	// One SDP field line. The type letter is restricted to the RFC 4566
@@ -133,7 +134,7 @@ func sipLastBufferedLine(buffer []string) string {
 
 // sdpFieldLine reports whether line is an SDP field line. A trailing
 // period marks a sentence, not a field value — prose enumerations of the
-// SDP field types ("v= (protocol version).", TS 23.700-19) must stay
+// SDP field types ("v= (protocol version).", TR 23.700-19) must stay
 // prose, and no real field value ends with one.
 func sdpFieldLine(line string) bool {
 	return sdpFieldLineRE.MatchString(line) && !strings.HasSuffix(line, ".")
@@ -144,7 +145,13 @@ func sdpFieldLine(line string) bool {
 // backslash-continued line counts, e.g. the wrapped a=fmtp value in
 // TS 26.234 A.1).
 func sdpFieldLineCount(text string) (count int, allFields bool) {
-	prevContinued := false
+	return sdpFieldLinesFrom(text, false)
+}
+
+// sdpFieldLinesFrom is sdpFieldLineCount with the initial continuation state
+// supplied: prevContinued reports whether the line preceding text ended with
+// a backslash, exempting text's first line from the field-line check.
+func sdpFieldLinesFrom(text string, prevContinued bool) (count int, allFields bool) {
 	for _, ln := range strings.Split(text, "\n") {
 		ln = strings.TrimSpace(ln)
 		if ln == "" {
@@ -216,12 +223,69 @@ func sdpExampleStart(elements []bodyElement, idx int) (label, text string, ok bo
 	return label, rest, true
 }
 
+// wrappedValueLine reports whether line looks like the wrapped remainder of
+// a backslash-folded value, so a prose paragraph following a folded value is
+// not mistaken for its continuation (issue #101). Rejecting prose shapes one
+// by one proved fragile ("Figure 1: message flow" has no sentence period and
+// its digit breaks any word-run test), so the check demands the positive
+// signal the genuine corpus folds share. The continuations this exemption
+// exists for are parameter-value tails — "sprop-parameter-sets=" plus a
+// base64 blob (TS 26.234 A.1), "mode-change-period=2", folded
+// 3GPP-QoE-Metrics values like "metrics={…};rate=End" — which always carry
+// the '=' or ';' of the parameter syntax they continue, or are one unbroken
+// non-word token (a bare wrapped blob). Sentence shapes are still rejected
+// on top — a trailing period or three consecutive purely-alphabetic words —
+// so prose that quotes a parameter fragment ("The value mode-set=0 is used
+// by the UE") stays out even though it contains an '='.
+func wrappedValueLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if strings.HasSuffix(line, ".") {
+		return false
+	}
+	fields := strings.Fields(line)
+	bareRun := 0
+	for _, tok := range fields {
+		if strings.ContainsFunc(tok, func(r rune) bool { return !unicode.IsLetter(r) }) {
+			bareRun = 0
+			continue
+		}
+		bareRun++
+		if bareRun >= 3 {
+			return false
+		}
+	}
+	if strings.ContainsAny(line, "=;") {
+		return true
+	}
+	return len(fields) == 1 && strings.ContainsFunc(fields[0], func(r rune) bool { return !unicode.IsLetter(r) })
+}
+
+// sipMessageLinesFrom reports whether every non-blank line of text is
+// message-shaped (a SIP start, header or SDP field line), with a line
+// following a backslash-continued one exempt. prevContinued supplies the
+// continuation state of the line preceding text.
+func sipMessageLinesFrom(text string, prevContinued bool) bool {
+	for _, ln := range strings.Split(text, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			prevContinued = false
+			continue
+		}
+		if !prevContinued && !sipStartLine(ln) && !sipHeaderLine(ln) && !sdpFieldLine(ln) {
+			return false
+		}
+		prevContinued = strings.HasSuffix(ln, `\`)
+	}
+	return true
+}
+
 // sipBlockContinues reports whether the paragraph continues a SIP message
 // block: a blank line, another start line (back-to-back messages), a
-// header line, an SDP body line, or any line after a backslash-continued
-// one. Leading whitespace is ignored when matching — TS 23.700-19 indents
-// every message line with a tab — but indentation alone never continues a
-// block, since the surrounding prose is indented the same way.
+// header line, an SDP body line, or the wrapped remainder of a
+// backslash-continued line. Leading whitespace is ignored when matching —
+// TR 23.700-19 indents every message line with a tab — but indentation
+// alone never continues a block, since the surrounding prose is indented
+// the same way.
 func sipBlockContinues(info paragraphInfo, lastLine string) bool {
 	if len(info.Images) > 0 || info.SkippedDiagramLabels != nil {
 		return false
@@ -231,15 +295,22 @@ func sipBlockContinues(info paragraphInfo, lastLine string) bool {
 		return true
 	}
 	if strings.HasSuffix(strings.TrimSpace(lastLine), `\`) {
-		return true
+		// The backslash folds the value onto the first line of this
+		// paragraph only: that line is exempt from the shape check unless it
+		// reads like a sentence, and the remaining lines must still be
+		// message-shaped, so a value fold cannot pull a whole prose
+		// paragraph into the fence (issue #101).
+		first, rest, _ := strings.Cut(t, "\n")
+		return wrappedValueLine(first) &&
+			sipMessageLinesFrom(rest, strings.HasSuffix(strings.TrimSpace(first), `\`))
 	}
 	line := strings.TrimSpace(sipFirstLine(t))
 	return sipStartLine(line) || sipHeaderLine(line) || sdpFieldLine(line)
 }
 
 // sdpBlockContinues reports whether the paragraph continues a standalone
-// SDP block: a blank line, further field lines, or any line after a
-// backslash-continued one. SIP headers deliberately do not continue an
+// SDP block: a blank line, further field lines, or the wrapped remainder of
+// a backslash-continued line. SIP headers deliberately do not continue an
 // SDP-only block.
 func sdpBlockContinues(info paragraphInfo, lastLine string) bool {
 	if len(info.Images) > 0 || info.SkippedDiagramLabels != nil {
@@ -250,7 +321,14 @@ func sdpBlockContinues(info paragraphInfo, lastLine string) bool {
 		return true
 	}
 	if strings.HasSuffix(strings.TrimSpace(lastLine), `\`) {
-		return true
+		// Same first-line-only exemption as sipBlockContinues (issue #101):
+		// the remaining lines must still be SDP field lines.
+		first, rest, _ := strings.Cut(t, "\n")
+		if !wrappedValueLine(first) {
+			return false
+		}
+		_, allFields := sdpFieldLinesFrom(rest, strings.HasSuffix(strings.TrimSpace(first), `\`))
+		return allFields
 	}
 	_, allFields := sdpFieldLineCount(t)
 	return allFields

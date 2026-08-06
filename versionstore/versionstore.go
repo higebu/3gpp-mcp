@@ -58,8 +58,11 @@ const DefaultFileName = "versions.db"
 // SIP/SDP fences (```sip / ```sdp) for syntax highlighting, generation 7
 // makes OMML math render in math mode (n-ary operators separated from their
 // operand, "~" and "^" escaped through \text{}) and stops a backslash
-// continuation from pulling prose after a blank line into an SDP fence.
-const cacheSchemaVersion = 7
+// continuation from pulling prose after a blank line into an SDP fence,
+// generation 8 hardens XML fence tracking against malformed markup, limits
+// sip/sdp backslash continuation to the wrapped line, and emits run text
+// before an inline image in the same run.
+const cacheSchemaVersion = 8
 
 // schema mirrors the spec, section and image tables of the main database,
 // without the full-text index: cached versions must never appear in search
@@ -313,6 +316,7 @@ func (s *Store) CachedVersions(specID string) ([]string, error) {
 
 // GetSpec returns the cached spec record for a version.
 func (s *Store) GetSpec(specID, version string) (*db.Spec, error) {
+	s.touch(specID, version)
 	var spec db.Spec
 	err := s.conn.QueryRow(
 		"SELECT id, version, COALESCE(version_token, ''), title, COALESCE(release, ''), COALESCE(series, '') FROM specs WHERE id = ? AND version = ?",
@@ -524,6 +528,17 @@ func (s *Store) Ensure(ctx context.Context, specID, version string, sv *pipeline
 // run performs one fetch and publishes its outcome to everyone waiting on it.
 func (s *Store) run(ctx context.Context, key, specID, version string, sv *pipeline.SpecVersion, f *fetch) {
 	defer func() {
+		// The pipeline parses untrusted third-party binaries on a goroutine
+		// detached from any request, so a parser panic here would take down the
+		// whole server. Recover before close(f.done) publishes the outcome, and
+		// set f.err first so waiters do not report success for content that was
+		// never cached.
+		if r := recover(); r != nil {
+			f.err = fmt.Errorf("version fetch for %s v%s panicked: %v", specID, version, r)
+			// The fetch is detached, so the last waiter is often gone by
+			// the time a panic fires; log it or it is lost entirely.
+			log.Printf("warning: %v", f.err)
+		}
 		s.mu.Lock()
 		delete(s.inflight, key)
 		s.mu.Unlock()
@@ -671,6 +686,12 @@ func (s *Store) EnsureImages(ctx context.Context, specID, version string, sv *pi
 // waiting on it.
 func (s *Store) runImages(ctx context.Context, key, specID, version string, sv *pipeline.SpecVersion, f *fetch) {
 	defer func() {
+		// Same as run: recover a parser panic on this detached goroutine, and
+		// set f.err before close(f.done) publishes the outcome.
+		if r := recover(); r != nil {
+			f.err = fmt.Errorf("image fetch for %s v%s panicked: %v", specID, version, r)
+			log.Printf("warning: %v", f.err)
+		}
 		s.mu.Lock()
 		delete(s.inflight, key)
 		s.mu.Unlock()

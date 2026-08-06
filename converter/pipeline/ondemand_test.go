@@ -85,6 +85,44 @@ func TestResolveVersion(t *testing.T) {
 	}
 }
 
+// TestResolveVersionRel27Token checks that an r-prefixed archive token resolves
+// exactly: 'r' is base-36 digit 27, so once Rel-27 archives exist, "r18" names
+// v27.1.8 and must not be read as a "Rel-18" release selector.
+func TestResolveVersionRel27Token(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/", func(w http.ResponseWriter, _ *http.Request) {
+		for _, name := range []string{"23501-i60.zip", "23501-r18.zip", "23501-r20.zip"} {
+			fmt.Fprintf(w, `<a href="%s">%s</a>`+"\n", name, name)
+		}
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	tests := []struct {
+		name    string
+		request string
+		want    string
+	}{
+		{name: "exact r token", request: "r18", want: "r18"},
+		{name: "uppercase r token", request: "R18", want: "r18"},
+		{name: "dotted Rel-27 version", request: "27.1.8", want: "r18"},
+		{name: "release selector picks newest in Rel-27", request: "Rel-27", want: "r20"},
+		{name: "bare release number still selects Rel-18", request: "18", want: "i60"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sv, _, err := ResolveVersion(context.Background(), client, "TS 23.501", tt.request, false)
+			if err != nil {
+				t.Fatalf("ResolveVersion(%q): %v", tt.request, err)
+			}
+			if sv.Version != tt.want {
+				t.Errorf("ResolveVersion(%q) = %q, want %q", tt.request, sv.Version, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveVersionUnknownSpec(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -108,7 +146,7 @@ func TestReleaseRequest(t *testing.T) {
 		{"18", 18, true},
 		{"Rel-18", 18, true},
 		{"rel-18", 18, true},
-		{"R18", 18, true},
+		{"REL-27", 27, true},
 		{"18.6.0", 0, false},
 		{"i60", 0, false},
 		{"", 0, false},
@@ -118,6 +156,10 @@ func TestReleaseRequest(t *testing.T) {
 		{"920", 0, false},
 		{"100", 0, false},
 		{"Rel-920", 920, true},
+		// 'r' is base-36 digit 27, so "r18" is the archive token for v27.1.8;
+		// a bare R/r prefix must not turn it into a Rel-18 selector.
+		{"r18", 0, false},
+		{"R18", 0, false},
 	}
 	for _, tt := range tests {
 		got, ok := releaseRequest(tt.in)
@@ -309,6 +351,45 @@ func TestFetchVersionImagesDocOnly(t *testing.T) {
 	}
 	if _, err := FetchVersionImages(context.Background(), client, sv, 0); !errors.Is(err, ErrNoDocx) {
 		t.Fatalf("FetchVersionImages = %v, want ErrNoDocx", err)
+	}
+}
+
+// TestFetchVersionTRDocType verifies that an on-demand fetch labels a
+// Technical Report "TR " even when the type is only known to the cover file,
+// and that every section carries that ID (#110).
+func TestFetchVersionTRDocType(t *testing.T) {
+	partDocx := makeMinimalDocx(t,
+		`<w:p><w:pPr><w:pStyle w:val="Heading 1"/></w:pPr><w:r><w:t>5 Definitions</w:t></w:r></w:p>`+
+			`<w:p><w:r><w:t>Vocabulary body text.</w:t></w:r></w:p>`)
+	coverDocx := makeMinimalDocx(t,
+		`<w:p><w:pPr><w:pStyle w:val="ZA"/></w:pPr><w:r><w:t>3GPP TR 21.905 V17.2.0 (2022-03)</w:t></w:r></w:p>`)
+	archive := makeZipWithFiles(t, map[string][]byte{
+		"21905-h20_s01.docx":   partDocx,
+		"21905-h20_cover.docx": coverDocx,
+	})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/21_series/21.905/21905-h20.zip", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	sv := ParseSpecEntry("21_series/21.905/21905-h20.zip")
+	if sv == nil {
+		t.Fatal("ParseSpecEntry returned nil")
+	}
+	spec, sections, err := FetchVersion(context.Background(), client, sv, 0)
+	if err != nil {
+		t.Fatalf("FetchVersion: %v", err)
+	}
+	if spec.ID != "TR 21.905" {
+		t.Errorf("spec ID = %q, want %q", spec.ID, "TR 21.905")
+	}
+	for _, s := range sections {
+		if s.SpecID != "TR 21.905" {
+			t.Errorf("section %s SpecID = %q, want %q", s.Number, s.SpecID, "TR 21.905")
+		}
 	}
 }
 

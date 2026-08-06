@@ -25,7 +25,7 @@ var ListOpenAPITool = &mcp.Tool{
 
 func HandleListOpenAPI(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, input ListOpenAPIInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input ListOpenAPIInput) (*mcp.CallToolResult, any, error) {
-		specs, err := d.ListOpenAPI(input.SpecID)
+		specs, err := d.ListOpenAPI(ctx, input.SpecID)
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to list openapi: %v", err)), nil, nil
 		}
@@ -68,7 +68,7 @@ func HandleGetOpenAPI(d *db.DB) func(ctx context.Context, req *mcp.CallToolReque
 			return errorResult("api_name is required"), nil, nil
 		}
 
-		content, err := d.GetOpenAPI(input.SpecID, input.APIName)
+		content, err := d.GetOpenAPI(ctx, input.SpecID, input.APIName)
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to get openapi: %v", err)), nil, nil
 		}

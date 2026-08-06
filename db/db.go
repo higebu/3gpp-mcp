@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/higebu/3gpp-mcp/internal/specver"
@@ -311,10 +313,10 @@ func (d *DB) InitSchema() error {
 // "whatever this database holds": a build imports one version per spec, so the
 // newest row is the only row. It returns ErrNoVersion when the spec is absent
 // or when an explicitly requested version is not stored.
-func (d *DB) ResolveVersion(specID, version string) (string, error) {
+func (d *DB) ResolveVersion(ctx context.Context, specID, version string) (string, error) {
 	if version != "" {
 		var found string
-		err := d.conn.QueryRow("SELECT version FROM specs WHERE id = ? AND version = ?", specID, version).Scan(&found)
+		err := d.conn.QueryRowContext(ctx, "SELECT version FROM specs WHERE id = ? AND version = ?", specID, version).Scan(&found)
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", ErrNoVersion
 		}
@@ -324,7 +326,7 @@ func (d *DB) ResolveVersion(specID, version string) (string, error) {
 		return found, nil
 	}
 
-	rows, err := d.conn.Query("SELECT version FROM specs WHERE id = ?", specID)
+	rows, err := d.conn.QueryContext(ctx, "SELECT version FROM specs WHERE id = ?", specID)
 	if err != nil {
 		return "", fmt.Errorf("resolve version: %w", err)
 	}
@@ -355,8 +357,8 @@ func (d *DB) ResolveVersion(specID, version string) (string, error) {
 
 // ListSpecVersions returns every version of a spec held in this database,
 // newest first.
-func (d *DB) ListSpecVersions(specID string) ([]Spec, error) {
-	rows, err := d.conn.Query(
+func (d *DB) ListSpecVersions(ctx context.Context, specID string) ([]Spec, error) {
+	rows, err := d.conn.QueryContext(ctx,
 		"SELECT id, version, COALESCE(version_token, ''), title, COALESCE(release, ''), COALESCE(series, '') FROM specs WHERE id = ?",
 		specID,
 	)
@@ -425,18 +427,22 @@ func (d *DB) UpsertImage(img Image) error {
 	return err
 }
 
-// GetImage retrieves a single image by spec ID, version and name.
+// GetImage retrieves a single image by spec ID, version and name, or nil when
+// the spec holds no image of that name.
 // An empty version resolves to the version this database holds.
-func (d *DB) GetImage(specID, version, name string) (*Image, error) {
-	version, err := d.ResolveVersion(specID, version)
+func (d *DB) GetImage(ctx context.Context, specID, version, name string) (*Image, error) {
+	version, err := d.ResolveVersion(ctx, specID, version)
 	if err != nil {
 		return nil, fmt.Errorf("get image: %w", err)
 	}
 	var img Image
-	err = d.conn.QueryRow(
+	err = d.conn.QueryRowContext(ctx,
 		"SELECT spec_id, version, name, mime_type, data, llm_readable FROM images WHERE spec_id = ? AND version = ? AND name = ?",
 		specID, version, name,
 	).Scan(&img.SpecID, &img.Version, &img.Name, &img.MIMEType, &img.Data, &img.LLMReadable)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("get image: %w", err)
 	}
@@ -445,15 +451,15 @@ func (d *DB) GetImage(specID, version, name string) (*Image, error) {
 
 // ListImages returns metadata for all images of a spec (without binary data).
 // An empty version resolves to the version this database holds.
-func (d *DB) ListImages(specID, version string) ([]ImageInfo, error) {
-	version, err := d.ResolveVersion(specID, version)
+func (d *DB) ListImages(ctx context.Context, specID, version string) ([]ImageInfo, error) {
+	version, err := d.ResolveVersion(ctx, specID, version)
 	if errors.Is(err, ErrNoVersion) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list images: %w", err)
 	}
-	rows, err := d.conn.Query(
+	rows, err := d.conn.QueryContext(ctx,
 		"SELECT spec_id, version, name, mime_type, llm_readable FROM images WHERE spec_id = ? AND version = ? ORDER BY name",
 		specID, version,
 	)
@@ -471,6 +477,19 @@ func (d *DB) ListImages(specID, version string) ([]ImageInfo, error) {
 		infos = append(infos, info)
 	}
 	return infos, rows.Err()
+}
+
+// alternateDocTypeID returns the same spec ID under the other document-type
+// prefix ("TS 21.905" -> "TR 21.905" and vice versa), and false when the ID
+// carries no "TS "/"TR " prefix.
+func alternateDocTypeID(id string) (string, bool) {
+	if rest, ok := strings.CutPrefix(id, "TS "); ok {
+		return "TR " + rest, true
+	}
+	if rest, ok := strings.CutPrefix(id, "TR "); ok {
+		return "TS " + rest, true
+	}
+	return "", false
 }
 
 // InsertSpecWithSections inserts a spec and all its sections in a transaction.
@@ -556,6 +575,28 @@ func (d *DB) InsertSpecWithSectionsAndImages(spec Spec, sections []Section, imag
 		if _, err = tx.Exec("DELETE FROM specs WHERE id = ? AND version <> ?", spec.ID, spec.Version); err != nil {
 			return fmt.Errorf("drop superseded spec versions: %w", err)
 		}
+
+		// A spec number names either a Technical Specification or a Technical
+		// Report, never both, so any rows under the other document-type prefix
+		// are the same spec under a stale label — databases built before TR
+		// detection stored every spec as "TS ...". Drop them, or an update
+		// would leave the spec duplicated under both labels and double every
+		// search hit.
+		if alt, ok := alternateDocTypeID(spec.ID); ok {
+			for _, table := range []string{"sections", "images", "spec_references"} {
+				column := "spec_id"
+				if table == "spec_references" {
+					column = "source_spec_id"
+				}
+				q := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", table, column)
+				if _, err = tx.Exec(q, alt); err != nil {
+					return fmt.Errorf("drop relabeled %s: %w", table, err)
+				}
+			}
+			if _, err = tx.Exec("DELETE FROM specs WHERE id = ?", alt); err != nil {
+				return fmt.Errorf("drop relabeled spec: %w", err)
+			}
+		}
 	}
 
 	// The spec row is the authority on the version, so child rows take it from
@@ -602,7 +643,7 @@ func (d *DB) InsertSpecWithSectionsAndImages(spec Spec, sections []Section, imag
 // ListSpecs lists specs, optionally filtered by series and/or an ID prefix.
 // query matches spec IDs that start with the given text, ignoring a leading
 // "TS "/"TR " document-type prefix (e.g. query "38.21" matches "TS 38.211").
-func (d *DB) ListSpecs(series, query string, limit, offset int) (*ListSpecsResult, error) {
+func (d *DB) ListSpecs(ctx context.Context, series, query string, limit, offset int) (*ListSpecsResult, error) {
 	if offset < 0 {
 		offset = 0
 	}
@@ -627,7 +668,7 @@ func (d *DB) ListSpecs(series, query string, limit, offset int) (*ListSpecsResul
 
 	// Get total count.
 	var totalCount int
-	if err := d.conn.QueryRow("SELECT COUNT(*) FROM specs"+where, filterArgs...).Scan(&totalCount); err != nil {
+	if err := d.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM specs"+where, filterArgs...).Scan(&totalCount); err != nil {
 		return nil, fmt.Errorf("count specs: %w", err)
 	}
 
@@ -646,7 +687,7 @@ func (d *DB) ListSpecs(series, query string, limit, offset int) (*ListSpecsResul
 		args = append(args, limit, offset)
 	}
 
-	rows, err := d.conn.Query(sqlQuery, args...)
+	rows, err := d.conn.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list specs: %w", err)
 	}
@@ -668,15 +709,15 @@ func (d *DB) ListSpecs(series, query string, limit, offset int) (*ListSpecsResul
 
 // GetTOC returns the section structure of a spec. An empty version resolves to
 // the version this database holds; a version it does not hold yields no rows.
-func (d *DB) GetTOC(specID, version string) ([]Section, error) {
-	version, err := d.ResolveVersion(specID, version)
+func (d *DB) GetTOC(ctx context.Context, specID, version string) ([]Section, error) {
+	version, err := d.ResolveVersion(ctx, specID, version)
 	if errors.Is(err, ErrNoVersion) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get toc: %w", err)
 	}
-	rows, err := d.conn.Query(
+	rows, err := d.conn.QueryContext(ctx,
 		"SELECT s.spec_id, s.version, s.number, s.title, s.level, COALESCE(s.parent_number, ''), COALESCE(p.release, '') FROM sections s LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version WHERE s.spec_id = ? AND s.version = ? ORDER BY s.id",
 		specID, version,
 	)
@@ -702,15 +743,15 @@ func (d *DB) GetTOC(specID, version string) ([]Section, error) {
 // AllSections returns every section of a spec version, content included, in
 // document order. An empty version resolves to the version this database
 // holds; a version it does not hold yields no rows.
-func (d *DB) AllSections(specID, version string) ([]Section, error) {
-	version, err := d.ResolveVersion(specID, version)
+func (d *DB) AllSections(ctx context.Context, specID, version string) ([]Section, error) {
+	version, err := d.ResolveVersion(ctx, specID, version)
 	if errors.Is(err, ErrNoVersion) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("all sections: %w", err)
 	}
-	rows, err := d.conn.Query(
+	rows, err := d.conn.QueryContext(ctx,
 		"SELECT s.spec_id, s.version, s.number, s.title, s.level, COALESCE(s.parent_number, ''), s.content, COALESCE(p.release, '') FROM sections s LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version WHERE s.spec_id = ? AND s.version = ? ORDER BY s.id",
 		specID, version,
 	)
@@ -745,8 +786,8 @@ func EscapeLikePattern(s string) string {
 // family spec ID (e.g. "TS 38.101" -> ["TS 38.101-1", "TS 38.101-2", ...]).
 // Used to give a helpful error when a lookup tool is queried with a family
 // ID instead of a specific part.
-func (d *DB) FindSpecIDsByFamily(familyID string) ([]string, error) {
-	rows, err := d.conn.Query(
+func (d *DB) FindSpecIDsByFamily(ctx context.Context, familyID string) ([]string, error) {
+	rows, err := d.conn.QueryContext(ctx,
 		"SELECT DISTINCT id FROM specs WHERE id LIKE ? || '-%' ESCAPE '\\' ORDER BY id",
 		EscapeLikePattern(familyID),
 	)
@@ -772,8 +813,8 @@ func (d *DB) FindSpecIDsByFamily(familyID string) ([]string, error) {
 // GetSection returns a section, optionally with its subsections. An empty
 // version resolves to the version this database holds; a version it does not
 // hold yields no rows.
-func (d *DB) GetSection(specID, version, number string, includeSubsections bool) ([]Section, error) {
-	version, err := d.ResolveVersion(specID, version)
+func (d *DB) GetSection(ctx context.Context, specID, version, number string, includeSubsections bool) ([]Section, error) {
+	version, err := d.ResolveVersion(ctx, specID, version)
 	if errors.Is(err, ErrNoVersion) {
 		return nil, nil
 	}
@@ -786,12 +827,12 @@ func (d *DB) GetSection(specID, version, number string, includeSubsections bool)
 
 	var rows *sql.Rows
 	if includeSubsections {
-		rows, err = d.conn.Query(
+		rows, err = d.conn.QueryContext(ctx,
 			projection+" AND (s.number = ? OR s.number LIKE ? || '.%' ESCAPE '\\') ORDER BY s.id",
 			specID, version, number, EscapeLikePattern(number),
 		)
 	} else {
-		rows, err = d.conn.Query(
+		rows, err = d.conn.QueryContext(ctx,
 			projection+" AND s.number = ?",
 			specID, version, number,
 		)
@@ -818,15 +859,15 @@ func (d *DB) GetSection(specID, version, number string, includeSubsections bool)
 // GetBracketMap returns the bracket reference map for a spec by fetching the
 // References section (number "2" or matching title) and parsing it.
 // Returns nil, nil when no References section is found.
-func (d *DB) GetBracketMap(specID, version string) (map[string]string, error) {
-	version, err := d.ResolveVersion(specID, version)
+func (d *DB) GetBracketMap(ctx context.Context, specID, version string) (map[string]string, error) {
+	version, err := d.ResolveVersion(ctx, specID, version)
 	if errors.Is(err, ErrNoVersion) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get bracket map: %w", err)
 	}
-	rows, err := d.conn.Query(
+	rows, err := d.conn.QueryContext(ctx,
 		`SELECT content FROM sections
 		 WHERE spec_id = ? AND version = ? AND (
 		   number = '2' OR
@@ -857,7 +898,7 @@ type OpenAPISpec struct {
 	Version string `json:"version,omitempty"`
 }
 
-func (d *DB) ListOpenAPI(specID string) ([]OpenAPISpec, error) {
+func (d *DB) ListOpenAPI(ctx context.Context, specID string) ([]OpenAPISpec, error) {
 	query := "SELECT spec_id, api_name, COALESCE(version, '') FROM openapi_specs"
 	var args []any
 	if specID != "" {
@@ -866,7 +907,7 @@ func (d *DB) ListOpenAPI(specID string) ([]OpenAPISpec, error) {
 	}
 	query += " ORDER BY spec_id, api_name"
 
-	rows, err := d.conn.Query(query, args...)
+	rows, err := d.conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list openapi: %w", err)
 	}
@@ -886,9 +927,9 @@ func (d *DB) ListOpenAPI(specID string) ([]OpenAPISpec, error) {
 	return specs, nil
 }
 
-func (d *DB) GetOpenAPI(specID, apiName string) (string, error) {
+func (d *DB) GetOpenAPI(ctx context.Context, specID, apiName string) (string, error) {
 	var content string
-	err := d.conn.QueryRow(
+	err := d.conn.QueryRowContext(ctx,
 		"SELECT content FROM openapi_specs WHERE spec_id = ? AND api_name = ?",
 		specID, apiName,
 	).Scan(&content)
@@ -921,10 +962,13 @@ var fts5Operators = map[string]bool{
 // cannot parse as part of an unquoted bareword: a hyphen (misread as the
 // column-filter/NOT operator), a period (e.g. spec numbers like "38.101",
 // which FTS5 otherwise rejects with "syntax error near \".\""), a stray
-// double quote, or a parenthesis riding along inside the token (an
-// unquoted "(38.331" or "SMF)" is a hard syntax error).
+// double quote, a parenthesis riding along inside the token (an unquoted
+// "(38.331" or "SMF)" is a hard syntax error), or a star (valid only as a
+// trailing prefix operator; quoteFTS5Term keeps that meaning and quotes
+// every other placement, so a bare "*" degrades to no results instead of
+// "unknown special query").
 func needsFTS5Quoting(s string) bool {
-	return strings.ContainsAny(s, `-."()`)
+	return strings.ContainsAny(s, `-."()*`)
 }
 
 // quoteFTS5String wraps s in double quotes, doubling any quote already
@@ -1029,7 +1073,23 @@ func sanitizeFTS5Query(query string) string {
 				}
 				j++
 			}
-			result = append(result, query[i:j])
+			run := query[i:j]
+			if depth > 0 {
+				// An unterminated NEAR( group is a hard syntax error; supply
+				// the missing closing parentheses.
+				run += strings.Repeat(")", depth)
+			}
+			// A NEAR group needs at least one operand — a bareword or a
+			// quoted phrase — or FTS5 rejects it: "NEAR()" and
+			// punctuation-only groups like "NEAR(,)" are hard syntax
+			// errors. A group without one degrades to searching for the
+			// literal text instead.
+			if !strings.ContainsFunc(run[len("NEAR("):], func(r rune) bool {
+				return r == '"' || unicode.IsLetter(r) || unicode.IsDigit(r)
+			}) {
+				run = quoteFTS5String(query[i:j])
+			}
+			result = append(result, run)
 			i = j
 			continue
 		}
@@ -1056,7 +1116,15 @@ func sanitizeFTS5Query(query string) string {
 		i = j
 
 		if fts5Operators[token] {
-			result = append(result, token)
+			// An operator keyword needs an operand on its left: at the start
+			// of the query or right after another operator FTS5 rejects it
+			// ("syntax error near AND"), so treat it as a literal term there.
+			// A dangling operator at the end is quoted after the loop.
+			if len(result) == 0 || fts5Operators[result[len(result)-1]] {
+				result = append(result, quoteFTS5String(token))
+			} else {
+				result = append(result, token)
+			}
 			continue
 		}
 
@@ -1081,6 +1149,12 @@ func sanitizeFTS5Query(query string) string {
 		result = append(result, classifyToken(token))
 	}
 
+	// An operator keyword at the end of the query has no right operand, which
+	// FTS5 rejects; demote it to a literal term.
+	if len(result) > 0 && fts5Operators[result[len(result)-1]] {
+		result[len(result)-1] = quoteFTS5String(result[len(result)-1])
+	}
+
 	return strings.Join(result, " ")
 }
 
@@ -1092,7 +1166,7 @@ func sanitizeFTS5Query(query string) string {
 // setting the table's rank option needs a write, and serve opens read-only.
 const bm25Weights = "bm25(sections_fts, 0.5, 1.0, 5.0, 1.0)"
 
-func (d *DB) Search(query string, specIDs []string, limit, offset int) (*SearchResults, error) {
+func (d *DB) Search(ctx context.Context, query string, specIDs []string, limit, offset int) (*SearchResults, error) {
 	if limit <= 0 {
 		limit = DefaultSearchLimit
 	}
@@ -1126,7 +1200,7 @@ func (d *DB) Search(query string, specIDs []string, limit, offset int) (*SearchR
 	// A window count(*) OVER () cannot report the total when offset lands past
 	// the last row, so the total comes from its own query sharing the filter.
 	var totalCount int
-	if err := d.conn.QueryRow("SELECT count(*) "+fromWhere, filterArgs...).Scan(&totalCount); err != nil {
+	if err := d.conn.QueryRowContext(ctx, "SELECT count(*) "+fromWhere, filterArgs...).Scan(&totalCount); err != nil {
 		return nil, fmt.Errorf("invalid search query %q: %w", query, err)
 	}
 
@@ -1138,7 +1212,7 @@ func (d *DB) Search(query string, specIDs []string, limit, offset int) (*SearchR
 		fromWhere + " ORDER BY " + bm25Weights + ", sections_fts.rowid LIMIT ? OFFSET ?"
 	args := append(append([]any{}, filterArgs...), limit, offset)
 
-	rows, err := d.conn.Query(sqlQuery, args...)
+	rows, err := d.conn.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("invalid search query %q: %w", query, err)
 	}
@@ -1485,7 +1559,7 @@ const refBaseQuery = `SELECT r.source_spec_id, r.source_version, r.source_sectio
 // GetReferences retrieves cross-references in the given direction. For the
 // outgoing direction an empty version resolves to the version this database
 // holds; incoming references are not version-scoped on the target side.
-func (d *DB) GetReferences(specID, version, sectionNumber, direction string, includeSubsections bool) ([]Reference, error) {
+func (d *DB) GetReferences(ctx context.Context, specID, version, sectionNumber, direction string, includeSubsections bool) ([]Reference, error) {
 	if direction == "" {
 		direction = DirectionOutgoing
 	}
@@ -1494,7 +1568,7 @@ func (d *DB) GetReferences(specID, version, sectionNumber, direction string, inc
 	var args []any
 	switch direction {
 	case DirectionOutgoing:
-		resolved, err := d.ResolveVersion(specID, version)
+		resolved, err := d.ResolveVersion(ctx, specID, version)
 		if errors.Is(err, ErrNoVersion) {
 			return nil, nil
 		}
@@ -1524,11 +1598,11 @@ func (d *DB) GetReferences(specID, version, sectionNumber, direction string, inc
 		return nil, fmt.Errorf("invalid direction %q: must be %s or %s", direction, DirectionOutgoing, DirectionIncoming)
 	}
 
-	return d.queryReferences(refBaseQuery+where, args)
+	return d.queryReferences(ctx, refBaseQuery+where, args)
 }
 
-func (d *DB) queryReferences(query string, args []any) ([]Reference, error) {
-	rows, err := d.conn.Query(query, args...)
+func (d *DB) queryReferences(ctx context.Context, query string, args []any) ([]Reference, error) {
+	rows, err := d.conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query references: %w", err)
 	}

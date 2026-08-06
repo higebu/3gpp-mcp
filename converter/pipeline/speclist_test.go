@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -358,8 +359,10 @@ func TestFetchSpecList_Race(t *testing.T) {
 }
 
 // TestFetchSpecList_PartialNotCached verifies that a spec list assembled
-// while some directory listings failed to fetch is not written to the cache:
-// every build within the TTL would otherwise silently miss those specs.
+// while some directory listings failed to fetch is not written to the cache —
+// every build within the TTL would otherwise silently miss those specs — and
+// that the caller is told the list is incomplete instead of seeing a success:
+// a build from a silently partial list produces an incomplete database.
 func TestFetchSpecList_PartialNotCached(t *testing.T) {
 	cacheHome := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", cacheHome)
@@ -389,9 +392,17 @@ func TestFetchSpecList_PartialNotCached(t *testing.T) {
 	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
 
 	entries, err := FetchSpecList(context.Background(), client, nil, true, 2)
-	if err != nil {
-		t.Fatalf("FetchSpecList: %v", err)
+	var partial *PartialSpecListError
+	if !errors.As(err, &partial) {
+		t.Fatalf("FetchSpecList err = %v, want *PartialSpecListError", err)
 	}
+	if partial.FailedListings != 1 {
+		t.Errorf("FailedListings = %d, want 1", partial.FailedListings)
+	}
+	if msg := partial.Error(); !strings.Contains(msg, "1 directory listing(s)") {
+		t.Errorf("Error() = %q, want it to name the failed listing count", msg)
+	}
+	// The healthy entries still come back so a caller may choose to proceed.
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry from the healthy spec, got %d", len(entries))
 	}
@@ -399,5 +410,80 @@ func TestFetchSpecList_PartialNotCached(t *testing.T) {
 	cachePath := filepath.Join(cacheHome, "3gpp-mcp", CacheKey("speclist"))
 	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
 		t.Errorf("partial spec list must not be cached; stat err = %v", err)
+	}
+}
+
+// TestFetchSpecList_CompleteListIsCached verifies that a scrape with no
+// failed listings still saves its result to the cache: only a partial list is
+// barred from it.
+func TestFetchSpecList_CompleteListIsCached(t *testing.T) {
+	cacheHome := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+
+	archivePath := "/ftp/Specs/archive/"
+	mux := http.NewServeMux()
+	mux.HandleFunc(archivePath, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != archivePath {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `<a href="23_series/">23_series</a>`+"\n")
+	})
+	mux.HandleFunc(archivePath+"23_series/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="23.001/">23.001</a>`+"\n")
+	})
+	mux.HandleFunc(archivePath+"23_series/23.001/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="23001-a00.zip">23001-a00.zip</a>`+"\n")
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	entries, err := FetchSpecList(context.Background(), client, nil, true, 2)
+	if err != nil {
+		t.Fatalf("FetchSpecList: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+
+	cachePath := filepath.Join(cacheHome, "3gpp-mcp", CacheKey("speclist"))
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Errorf("complete spec list should be cached; stat err = %v", err)
+	}
+}
+
+// TestFetchSpecList_CancelReturnsContextError verifies that a scrape aborted
+// by context cancellation reports ctx.Err() instead of funnelling the failed
+// fetches into a partial-list result.
+func TestFetchSpecList_CancelReturnsContextError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	archivePath := "/ftp/Specs/archive/"
+	mux := http.NewServeMux()
+	mux.HandleFunc(archivePath, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != archivePath {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `<a href="23_series/">23_series</a>`+"\n")
+	})
+	mux.HandleFunc(archivePath+"23_series/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="23.001/">23.001</a>`+"\n")
+	})
+	// The zip listing cancels the scrape mid-flight, as Ctrl-C would.
+	mux.HandleFunc(archivePath+"23_series/23.001/", func(w http.ResponseWriter, r *http.Request) {
+		cancel()
+		http.Error(w, "shutting down", http.StatusInternalServerError)
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	if _, err := FetchSpecList(ctx, client, nil, false, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("FetchSpecList err = %v, want context.Canceled", err)
 	}
 }

@@ -27,9 +27,12 @@ func HandleGetImage(src *Source) func(ctx context.Context, req *mcp.CallToolRequ
 			return errorResult("name is required"), nil, nil
 		}
 
+		// A missing image comes back as a nil image, not an error, so an error
+		// here is a real failure (bad version, failed download, database
+		// trouble) and must not be labeled "not found".
 		img, res, err := src.GetImage(ctx, input.SpecID, input.Version, input.Name)
 		if err != nil {
-			return versionErrorResult(err, "image not found"), nil, nil
+			return versionErrorResult(err, "failed to get image"), nil, nil
 		}
 		if img == nil {
 			return errorResult(fmt.Sprintf("image %q not found in %s%s", input.Name, input.SpecID, versionSuffix(res))), nil, nil

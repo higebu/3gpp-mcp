@@ -253,6 +253,99 @@ func TestLinkifyRefs_MultipleRefs(t *testing.T) {
 	}
 }
 
+// References inside fenced code blocks and inline code spans must stay
+// verbatim: goldmark renders code literally, so a rewritten reference would
+// show up as raw link syntax.
+func TestLinkifyRefs_CodeRegions(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "ref inside tagged fence untouched",
+			input: "Prose about TS 29.228.\n\n```xml\n<!-- see TS 29.228 -->\n```\n\nAfter.",
+			want:  "Prose about [TS 29.228](/specs/TS 29.228).\n\n```xml\n<!-- see TS 29.228 -->\n```\n\nAfter.",
+		},
+		{
+			name:  "ref inside bare fence untouched",
+			input: "```\nTS 23.501 clause 5.1\n```",
+			want:  "```\nTS 23.501 clause 5.1\n```",
+		},
+		{
+			name:  "ref inside unclosed fence untouched",
+			input: "Intro TS 38.300.\n\n```asn1\n-- TS 38.331 defines RRC",
+			want:  "Intro [TS 38.300](/specs/TS 38.300).\n\n```asn1\n-- TS 38.331 defines RRC",
+		},
+		{
+			// CommonMark: the closer must be at least as long as the opener.
+			name:  "four-backtick fence is not closed by three backticks",
+			input: "````\n```\nTS 23.501\n````\nAfter TS 38.300.",
+			want:  "````\n```\nTS 23.501\n````\nAfter [TS 38.300](/specs/TS 38.300).",
+		},
+		{
+			// CommonMark: a closer carries no info string, so "```go" inside
+			// an open fence is content.
+			name:  "info-string line inside an open fence is not a closer",
+			input: "```\n```go\nTS 23.501\n```\nAfter TS 38.300.",
+			want:  "```\n```go\nTS 23.501\n```\nAfter [TS 38.300](/specs/TS 38.300).",
+		},
+		{
+			name:  "closer with trailing spaces still closes",
+			input: "```\nTS 23.501\n```  \nAfter TS 38.300.",
+			want:  "```\nTS 23.501\n```  \nAfter [TS 38.300](/specs/TS 38.300).",
+		},
+		{
+			name:  "ref inside inline code untouched",
+			input: "Inline `see TS 29.228` too.",
+			want:  "Inline `see TS 29.228` too.",
+		},
+		{
+			name:  "ref between inline code spans is linkified",
+			input: "`a` TS 23.501 `b`",
+			want:  "`a` [TS 23.501](/specs/TS 23.501) `b`",
+		},
+		{
+			name:  "unclosed backtick does not swallow the rest",
+			input: "A stray ` here, but TS 23.501 still links.",
+			want:  "A stray ` here, but [TS 23.501](/specs/TS 23.501) still links.",
+		},
+		{
+			name:  "inline span does not cross a blank line",
+			input: "a ` b\n\nTS 23.501 ` c",
+			want:  "a ` b\n\n[TS 23.501](/specs/TS 23.501) ` c",
+		},
+		{
+			name:  "double-backtick span",
+			input: "``TS 23.501`` and TS 23.502",
+			want:  "``TS 23.501`` and [TS 23.502](/specs/TS 23.502)",
+		},
+		{
+			name:  "unclosed backtick before a fence does not swallow it",
+			input: "a ` b\n```\nTS 23.501\n```\nTS 23.502 end",
+			want:  "a ` b\n```\nTS 23.501\n```\n[TS 23.502](/specs/TS 23.502) end",
+		},
+		{
+			name:  "inline span after a fence still closes",
+			input: "```\nfenced\n```\n` a b ` TS 23.501",
+			want:  "```\nfenced\n```\n` a b ` [TS 23.501](/specs/TS 23.501)",
+		},
+		{
+			name:  "refs before and after a fence are linkified",
+			input: "TS 23.501 first.\n```diameter\nRFC 6733 AVP\n```\nRFC 6733 last.",
+			want:  "[TS 23.501](/specs/TS 23.501) first.\n```diameter\nRFC 6733 AVP\n```\n[RFC 6733](https://www.rfc-editor.org/rfc/rfc6733) last.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LinkifyRefs(tt.input, nil, urlFor)
+			if got != tt.want {
+				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 // References inside raw HTML table blocks must be rendered as HTML anchors,
 // because goldmark does not process Markdown link syntax inside raw HTML.
 func TestLinkifyRefs_InsideTable(t *testing.T) {
@@ -289,5 +382,28 @@ func TestLinkifyRefs_InsideTable(t *testing.T) {
 				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestRegionHelpers pins the region lookup helpers, including regionEnd's
+// defensive fallback for a position outside every region, which LinkifyRefs
+// itself never reaches (it only calls regionEnd after inRegion says true).
+func TestRegionHelpers(t *testing.T) {
+	regs := []region{{start: 5, end: 10}}
+
+	if inRegion(regs, 4) {
+		t.Error("inRegion(4) = true, want false")
+	}
+	if !inRegion(regs, 5) {
+		t.Error("inRegion(5) = false, want true")
+	}
+	if inRegion(regs, 10) {
+		t.Error("inRegion(10) = true, want false (end is exclusive)")
+	}
+	if got := regionEnd(regs, 7); got != 10 {
+		t.Errorf("regionEnd(7) = %d, want 10", got)
+	}
+	if got := regionEnd(regs, 3); got != 4 {
+		t.Errorf("regionEnd(3) = %d, want 4 (pos+1 fallback)", got)
 	}
 }

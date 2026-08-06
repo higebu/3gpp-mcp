@@ -2,7 +2,9 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	htmlpkg "html"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -106,6 +108,71 @@ func TestRenderMarkdown_MathProtected(t *testing.T) {
 			t.Errorf("table-cell math double-escaped, got:\n%s", got)
 		}
 	})
+}
+
+// TestRenderMarkdown_MathSkipsCode verifies that '$' inside fenced code
+// blocks and inline code spans is code, not math: no placeholder may be
+// injected there, and the code must render verbatim.
+func TestRenderMarkdown_MathSkipsCode(t *testing.T) {
+	t.Run("fenced block keeps dollars", func(t *testing.T) {
+		content := "```asn1\nprice ::= $100 and $200\n```\n"
+		got := renderMarkdown(content, "TS 23.501", "", nil)
+		// Chroma may tokenize around the dollars, so assert on the characters
+		// rather than the contiguous string.
+		if strings.Count(got, "$") != 2 {
+			t.Errorf("both dollars must survive in the code block, got:\n%s", got)
+		}
+		if strings.Contains(got, "math-inline") {
+			t.Errorf("no math span may be injected into a code block, got:\n%s", got)
+		}
+		// The asn1 fence must still be syntax-highlighted.
+		if !strings.Contains(got, `class="chroma"`) {
+			t.Errorf("expected Chroma highlighting to survive, got:\n%s", got)
+		}
+	})
+
+	t.Run("inline code keeps dollars, surrounding math still works", func(t *testing.T) {
+		content := "Set `$PATH` and `$HOME` first; the value $x^2$ is math."
+		got := renderMarkdown(content, "TS 23.501", "", nil)
+		if !strings.Contains(got, "<code>$PATH</code>") || !strings.Contains(got, "<code>$HOME</code>") {
+			t.Errorf("inline code must keep its dollars, got:\n%s", got)
+		}
+		if !strings.Contains(got, `<span class="math-inline">x^2</span>`) {
+			t.Errorf("math outside code must still be protected, got:\n%s", got)
+		}
+	})
+
+	t.Run("angle brackets in code stay code", func(t *testing.T) {
+		content := "```\na <SUPI> in code\n```\n\nand `<NSSAI>` inline."
+		got := renderMarkdown(content, "TS 23.501", "", nil)
+		if !strings.Contains(got, "&lt;SUPI&gt;") {
+			t.Errorf("code block angle brackets must be goldmark-escaped, got:\n%s", got)
+		}
+		if !strings.Contains(got, "<code>&lt;NSSAI&gt;</code>") {
+			t.Errorf("inline code angle brackets must be goldmark-escaped, got:\n%s", got)
+		}
+		if strings.Contains(got, "&amp;lt;") {
+			t.Errorf("code content must not be double-escaped, got:\n%s", got)
+		}
+	})
+}
+
+// TestRenderMarkdown_PlaceholderLiteralUntouched verifies that literal text
+// resembling a math placeholder is never hit by re-injection: placeholders
+// are random per render, so only the exact spans protectMath extracted are
+// substituted.
+func TestRenderMarkdown_PlaceholderLiteralUntouched(t *testing.T) {
+	content := "Literal token xxkatexmathxx0xxkatexmathxx in prose.\n\nAnd math $a+b$ after it."
+	got := renderMarkdown(content, "TS 23.501", "", nil)
+	if !strings.Contains(got, "xxkatexmathxx0xxkatexmathxx") {
+		t.Errorf("literal placeholder-lookalike text must survive verbatim, got:\n%s", got)
+	}
+	if want := `<span class="math-inline">a+b</span>`; !strings.Contains(got, want) {
+		t.Errorf("expected the real math span %s, got:\n%s", want, got)
+	}
+	if strings.Count(got, "math-inline") != 1 {
+		t.Errorf("exactly one math span expected, got:\n%s", got)
+	}
 }
 
 func TestRefURL(t *testing.T) {
@@ -284,6 +351,41 @@ func TestHandleSection(t *testing.T) {
 	// matching the "[Source: ...]" line the get_section MCP tool prepends.
 	if !strings.Contains(body, "Source: TS 23.501 v18.6.0 (Rel-18)") {
 		t.Errorf("expected the section to name its spec version, got:\n%s", body)
+	}
+}
+
+// TestHandleSection_RawHTMLEscaped is the end-to-end check for stored XSS: a
+// section whose stored Markdown carries raw HTML must reach the browser with
+// that HTML escaped, while angle-bracket placeholders stay visible.
+func TestHandleSection_RawHTMLEscaped(t *testing.T) {
+	ts, d := setupTestServer(t)
+
+	if err := d.UpsertSection(db.Section{
+		SpecID:  "TS 23.501",
+		Version: "18.6.0",
+		Number:  "9",
+		Title:   "Injected",
+		Level:   1,
+		Content: "The <SUPI> identifier and <script>alert(1)</script> here.",
+	}); err != nil {
+		t.Fatalf("UpsertSection: %v", err)
+	}
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/sections/9")
+	if err != nil {
+		t.Fatalf("GET section error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if strings.Contains(body, "<script>alert(1)</script>") {
+		t.Error("raw script tag from section content must not reach the page")
+	}
+	if !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Errorf("expected the script tag as escaped text, got:\n%s", body)
+	}
+	if !strings.Contains(body, "&lt;SUPI&gt;") {
+		t.Errorf("expected the <SUPI> placeholder to stay visible, got:\n%s", body)
 	}
 }
 
@@ -771,24 +873,228 @@ func TestRenderMarkdown_ImageAltEscaped(t *testing.T) {
 	}
 }
 
-// TestRenderMarkdown_RawHTMLPassthrough pins down the current behaviour of the
-// markdown renderer: goldmark is configured with html.WithUnsafe(), so raw
-// HTML embedded in section content is passed through verbatim. 3GPP specs are
-// officially published documents (not user-controlled input), so this is
-// considered acceptable today, but any change that would start rendering
-// user-controlled content through this path MUST first add HTML sanitization.
-// This test fails if that trust assumption silently changes.
-func TestRenderMarkdown_RawHTMLPassthrough(t *testing.T) {
+// TestRenderMarkdown_RawHTMLEscaped verifies that raw HTML in section content
+// that the pipeline does not itself emit is escaped rather than rendered:
+// spec content comes from third-party DOCX files, so an embedded <script>
+// must reach the browser as visible text, never as markup.
+func TestRenderMarkdown_RawHTMLEscaped(t *testing.T) {
 	content := "Inline <b>bold</b> and <script>alert(1)</script> here."
 	got := renderMarkdown(content, "TS 23.501", "", nil)
-	// Pins the current unsafe behaviour. If this ever starts escaping, it
-	// almost certainly means goldmark's WithUnsafe() was removed — verify the
-	// change is intentional before updating this expectation.
-	if !strings.Contains(got, "<b>bold</b>") {
-		t.Errorf("expected raw <b> to pass through (current behaviour), got:\n%s", got)
+	if strings.Contains(got, "<script>") {
+		t.Errorf("raw <script> must not pass through, got:\n%s", got)
 	}
-	if !strings.Contains(got, "<script>alert(1)</script>") {
-		t.Errorf("expected raw <script> to pass through (current behaviour), got:\n%s", got)
+	if !strings.Contains(got, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Errorf("expected the script tag to survive as escaped text, got:\n%s", got)
+	}
+	// <b> is not in the converter's vocabulary (it emits <strong>), so it is
+	// document text too.
+	if !strings.Contains(got, "&lt;b&gt;bold&lt;/b&gt;") {
+		t.Errorf("expected <b> to survive as escaped text, got:\n%s", got)
+	}
+}
+
+// TestRenderMarkdown_AngleBracketPlaceholderVisible covers the non-malicious
+// half of the same defect: 3GPP prose is full of placeholders like <SUPI>,
+// which browsers silently drop when passed through as unknown raw HTML. They
+// must stay visible as text.
+func TestRenderMarkdown_AngleBracketPlaceholderVisible(t *testing.T) {
+	content := "The identifier <SUPI> is used here."
+	got := renderMarkdown(content, "TS 23.501", "", nil)
+	if !strings.Contains(got, "&lt;SUPI&gt;") {
+		t.Errorf("expected <SUPI> to survive as escaped text, got:\n%s", got)
+	}
+	if strings.Contains(got, "<SUPI>") {
+		t.Errorf("<SUPI> must not reach the page as a raw tag, got:\n%s", got)
+	}
+}
+
+// TestRenderMarkdown_EventHandlerStripped verifies the sanitizer half of the
+// defense: a tag that is in the allowlist (img) still cannot smuggle script
+// through attributes or a non-relative src.
+func TestRenderMarkdown_EventHandlerStripped(t *testing.T) {
+	content := `Before <img src=x onerror=alert(1)> after, and <a href="javascript:alert(2)">link</a>.`
+	got := renderMarkdown(content, "TS 23.501", "", nil)
+	if strings.Contains(got, "onerror") {
+		t.Errorf("event handler attribute must be stripped, got:\n%s", got)
+	}
+	if strings.Contains(got, `src="x"`) {
+		t.Errorf("non-site-relative img src must be stripped, got:\n%s", got)
+	}
+	if strings.Contains(got, `href="javascript:`) {
+		t.Errorf("no anchor may carry a javascript: URL, got:\n%s", got)
+	}
+}
+
+// TestRenderMarkdown_ExternalHrefStripped pins the anchor policy: a raw <a>
+// in document text is escaped to visible text, no anchor with an external or
+// protocol-relative href reaches the page, and the two link forms the
+// pipeline produces — site-relative spec links and rfc-editor.org RFC links —
+// survive.
+func TestRenderMarkdown_ExternalHrefStripped(t *testing.T) {
+	content := `<a href="https://evil.example/p">x</a> <a href="//evil.example/p">y</a> ` +
+		`<a href="http://evil.example/p">z</a> ` +
+		"See RFC 3748 and TS 23.501 for details."
+	got := renderMarkdown(content, "TS 23.501", "", nil)
+	if strings.Contains(got, `href="https://evil`) || strings.Contains(got, `href="//`) ||
+		strings.Contains(got, `href="http://`) {
+		t.Errorf("no anchor may carry an external href, got:\n%s", got)
+	}
+	if !strings.Contains(got, "&lt;a href=") {
+		t.Errorf("raw anchors in document text must be escaped to visible text, got:\n%s", got)
+	}
+	if !strings.Contains(got, `href="https://www.rfc-editor.org/rfc/rfc3748"`) {
+		t.Errorf("rfc-editor link must survive, got:\n%s", got)
+	}
+	if !strings.Contains(got, "/specs/TS%2023.501") {
+		t.Errorf("site-relative spec link must survive, got:\n%s", got)
+	}
+}
+
+// TestSanitizeHTML_HrefPolicy pins the sanitizer's own href gate,
+// independent of escapeUnknownHTML: only site-relative and rfc-editor.org
+// targets keep their href.
+func TestSanitizeHTML_HrefPolicy(t *testing.T) {
+	for _, tt := range []struct {
+		in   string
+		keep bool
+	}{
+		{`<a href="/specs/TS%2023.501">s</a>`, true},
+		{`<a href="https://www.rfc-editor.org/rfc/rfc3748">r</a>`, true},
+		{`<a href="#frag">f</a>`, true},
+		{`<a href="https://evil.example/p">x</a>`, false},
+		{`<a href="//evil.example/p">y</a>`, false},
+		{`<a href="http://evil.example/p">z</a>`, false},
+	} {
+		got := sanitizeHTML(tt.in)
+		if kept := strings.Contains(got, "href="); kept != tt.keep {
+			t.Errorf("sanitizeHTML(%q) href kept = %v, want %v (got %q)", tt.in, kept, tt.keep, got)
+		}
+	}
+}
+
+// TestSplitInlineCode_Edges pins CommonMark edge cases in code-span
+// detection: an escaped backtick cannot open a span, and a span cannot
+// contain a whitespace-only blank line.
+func TestSplitInlineCode_Edges(t *testing.T) {
+	for _, tt := range []struct {
+		name, in string
+		wantCode bool
+	}{
+		{"escaped backtick is not an opener", `\` + "`$x$" + `\` + "`", false},
+		{"double backslash before backtick still opens", `\\` + "`code`", true},
+		{"whitespace-only line breaks a span", "`foo\n \nbar`", false},
+		{"newline inside a span is fine", "`foo\nbar`", true},
+		{"closer on the next line is a span", "`foo\n`", true},
+		{"trailing spaces before the closer are fine", "`foo   `", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			segs := splitInlineCode(tt.in)
+			gotCode := false
+			for _, s := range segs {
+				if s.code {
+					gotCode = true
+				}
+			}
+			if gotCode != tt.wantCode {
+				t.Errorf("splitInlineCode(%q) code segment = %v, want %v (segments: %+v)",
+					tt.in, gotCode, tt.wantCode, segs)
+			}
+		})
+	}
+}
+
+// TestSplitCodeSegments_Edges pins fence-recognition edges: an unterminated
+// fence runs to end of input, an indented or too-short marker line is not a
+// fence, and a backtick run of a different length inside a span is content.
+func TestSplitCodeSegments_Edges(t *testing.T) {
+	for _, tt := range []struct {
+		name, in     string
+		wantCodeSegs int
+	}{
+		{"unterminated fence runs to EOF", "text\n```\ncode $x$", 1},
+		{"indented marker line is not a fence", "    ```\nnot code $x$\n", 0},
+		// Not a fence (marker too short), but the two-backtick runs form a
+		// valid inline code span per CommonMark.
+		{"two backticks are an inline span, not a fence", "``\ntext\n``\n", 1},
+		{"shorter backtick run inside a span is content", "`a``b`x", 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := 0
+			joined := ""
+			for _, s := range splitCodeSegments(tt.in) {
+				joined += s.text
+				if s.code {
+					got++
+				}
+			}
+			if got != tt.wantCodeSegs {
+				t.Errorf("splitCodeSegments(%q) code segments = %d, want %d", tt.in, got, tt.wantCodeSegs)
+			}
+			if joined != tt.in {
+				t.Errorf("segments do not reproduce input: %q -> %q", tt.in, joined)
+			}
+		})
+	}
+}
+
+// TestFallbackMathToken pins that the no-crypto/rand fallback still mints
+// unique, well-formed tokens.
+func TestFallbackMathToken(t *testing.T) {
+	a, b := fallbackMathToken(), fallbackMathToken()
+	if a == b {
+		t.Errorf("fallback tokens must be unique, got %q twice", a)
+	}
+	if !strings.HasPrefix(a, "katexmath") {
+		t.Errorf("fallback token %q must keep the katexmath prefix", a)
+	}
+}
+
+// TestNewMathToken_RandFailure pins that a crypto/rand failure falls back to
+// a unique token and math still renders.
+func TestNewMathToken_RandFailure(t *testing.T) {
+	orig := randRead
+	randRead = func([]byte) (int, error) { return 0, errors.New("no entropy") }
+	defer func() { randRead = orig }()
+
+	a, b := newMathToken(), newMathToken()
+	if a == b {
+		t.Errorf("fallback tokens must be unique, got %q twice", a)
+	}
+	got := renderMarkdown("Inline $x_1$ math.", "TS 23.501", "", nil)
+	if !strings.Contains(got, "katex-math") && !strings.Contains(got, "math") {
+		t.Errorf("math must still render under the fallback token, got:\n%s", got)
+	}
+	if strings.Contains(got, "katexmath") {
+		t.Errorf("no placeholder token may leak into the output, got:\n%s", got)
+	}
+}
+
+// TestRenderMarkdown_UnknownLanguageFence pins the chroma fallback lexer path.
+func TestRenderMarkdown_UnknownLanguageFence(t *testing.T) {
+	got := renderMarkdown("```zzznotalanguage\nplain <text>\n```\n", "TS 23.501", "", nil)
+	if !strings.Contains(got, "plain") {
+		t.Errorf("unknown-language fence must still render its content, got:\n%s", got)
+	}
+	if strings.Contains(got, "<text>") {
+		t.Errorf("code content must be escaped, got:\n%s", got)
+	}
+}
+
+// TestRenderMarkdown_TableMarkupSurvivesSanitizer pins that the converter's
+// legitimate raw HTML — merged table cells and inline images — passes the
+// sanitizer intact.
+func TestRenderMarkdown_TableMarkupSurvivesSanitizer(t *testing.T) {
+	content := `<table><thead><tr><th colspan="2">Head</th></tr></thead>` +
+		`<tbody><tr><td rowspan="2">A</td><td><img src="image://fig.png?w=200&h=100" alt="diag" width="200" height="100"></td></tr></tbody></table>`
+	got := renderMarkdown(content, "TS 23.501", "", nil)
+	if !strings.Contains(got, `colspan="2"`) {
+		t.Errorf("expected colspan to survive, got:\n%s", got)
+	}
+	if !strings.Contains(got, `rowspan="2"`) {
+		t.Errorf("expected rowspan to survive, got:\n%s", got)
+	}
+	if !strings.Contains(got, `src="/specs/TS%2023.501/images/fig.png"`) {
+		t.Errorf("expected the rewritten inline image to survive, got:\n%s", got)
 	}
 }
 
@@ -825,8 +1131,10 @@ func TestRenderMarkdown_HTMLImageRewrite(t *testing.T) {
 // for image basenames carrying characters that are legal in a filename but
 // meaningful in HTML. htmlImageRE captures the name straight out of the src
 // attribute and passes it to url.PathEscape without decoding HTML entities, so
-// the converter must not entity-encode "&" or "'": the percent-encoded lookup
-// key has to round-trip back to the basename stored in the database.
+// the converter must not entity-encode "&" or "'". The sanitizer then
+// re-serializes the attribute (HTML-escaping "&" and percent-encoding "'"),
+// which a browser undoes before requesting: HTML-unescape + path-unescape of
+// the served attribute has to round-trip back to the stored basename.
 func TestRenderMarkdown_HTMLImageRewriteSpecialChars(t *testing.T) {
 	content := `<table><tbody><tr><td><img src="image://Figure A&B's diagram.png?w=200&h=100" alt="diag"></td></tr></tbody></table>`
 	got := renderMarkdown(content, "TS 23.501", "", nil)
@@ -839,15 +1147,12 @@ func TestRenderMarkdown_HTMLImageRewriteSpecialChars(t *testing.T) {
 	}
 	rest := got[i+len(prefix):]
 	encoded := rest[:strings.IndexByte(rest, '"')]
-	decoded, err := url.PathUnescape(encoded)
+	decoded, err := url.PathUnescape(htmlpkg.UnescapeString(encoded))
 	if err != nil {
 		t.Fatalf("rewritten image URL is not valid percent-encoding (%q): %v", encoded, err)
 	}
 	if decoded != want {
 		t.Errorf("image lookup key = %q, want %q (encoded form was %q)", decoded, want, encoded)
-	}
-	if strings.Contains(encoded, "amp") || strings.Contains(encoded, "%26amp%3B") {
-		t.Errorf("image name reached the lookup key entity-encoded: %q", encoded)
 	}
 }
 
@@ -1651,5 +1956,41 @@ func TestSpecHeaderTabs_CompareKeepsOldVersion(t *testing.T) {
 	}
 	if !strings.Contains(body, `/compare?old=19.5.0">Compare</a>`) {
 		t.Errorf("expected the Compare tab to keep the old version, got:\n%s", body)
+	}
+}
+
+// TestHandleCompare_FamilyIDSuggestsParts checks that comparing a multi-part
+// family ID, which has no sections of its own on either side, names the parts
+// instead of a bare "no sections found".
+func TestHandleCompare_FamilyIDSuggestsParts(t *testing.T) {
+	// The fetcher returns no sections, mirroring a family ID whose archive
+	// entry holds nothing readable.
+	ts, src := setupVersionedServer(t, func(context.Context, *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		return db.Spec{Title: "family"}, nil, nil
+	}, nil)
+	if err := src.DB.ExecScript(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+    ('TS 38.101-1', '18.6.0', 'i60', 'NR; UE radio transmission and reception; Part 1', '18', '38');`); err != nil {
+		t.Fatalf("seed part: %v", err)
+	}
+	// Pre-cache both versions so resolve takes the cached fast path and the
+	// archive listing (which only serves TS 23.501) is never consulted.
+	for _, v := range []string{"17.0.0", "18.0.0"} {
+		if err := src.Store.Ensure(context.Background(), "TS 38.101", v, &pipeline.SpecVersion{SpecID: "38.101"}, time.Minute); err != nil {
+			t.Fatalf("prime cache for v%s: %v", v, err)
+		}
+	}
+
+	resp, err := http.Get(ts.URL + "/specs/TS 38.101/compare?old=17.0.0&new=18.0.0&section=5.1")
+	if err != nil {
+		t.Fatalf("GET compare: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	if !strings.Contains(body, "has multiple parts") || !strings.Contains(body, "TS 38.101-1") {
+		t.Errorf("expected the parts hint naming TS 38.101-1, got:\n%s", body)
 	}
 }

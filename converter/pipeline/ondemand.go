@@ -100,10 +100,14 @@ func ResolveVersion(ctx context.Context, client *http.Client, specID, version st
 // A dotted version is never a release selector, so "18.6.0" does not match.
 // Without a prefix, only one or two digits count: a three-digit string such
 // as "920" is a base-36 archive token (9.2.0), not a request for Rel-920.
+// A bare "R"/"r" prefix is not accepted either: 'r' is base-36 digit 27, so
+// an r-prefixed three-character string such as "r18" is the archive token for
+// v27.1.8, and treating it as "Rel-18" would silently resolve the wrong
+// document. Such strings fall through to exact-token matching instead.
 func releaseRequest(s string) (int, bool) {
 	trimmed := s
 	prefixed := false
-	for _, prefix := range []string{"Rel-", "rel-", "REL-", "R", "r"} {
+	for _, prefix := range []string{"Rel-", "rel-", "REL-"} {
 		if len(trimmed) > len(prefix) && trimmed[:len(prefix)] == prefix {
 			trimmed = trimmed[len(prefix):]
 			prefixed = true
@@ -152,6 +156,7 @@ func FetchVersion(ctx context.Context, client *http.Client, sv *SpecVersion, tim
 
 	var spec db.Spec
 	var sections []db.Section
+	docType := ""
 	// A multi-file spec repeats section numbers across its parts only when a
 	// later part supersedes an earlier one, so last write wins by number.
 	index := map[string]int{}
@@ -164,6 +169,9 @@ func FetchVersion(ctx context.Context, client *http.Client, sv *SpecVersion, tim
 		if err != nil {
 			log.Printf("  on-demand parse error %s: %v", filepath.Base(docxPath), err)
 			continue
+		}
+		if dt := parsed.Metadata.DocType; dt != "" {
+			docType = dt
 		}
 		fileSpec, fileSections, _ := convertToDBRecords(parsed)
 		if fileSpec.Title != "" {
@@ -191,9 +199,13 @@ func FetchVersion(ctx context.Context, client *http.Client, sv *SpecVersion, tim
 
 	if spec.ID == "" {
 		// The archive path carries the bare number; the database form has a
-		// document-type prefix.
+		// document-type prefix, defaulting to "TS" when no document said.
 		spec.ID = "TS " + sv.SpecID
 	}
+	// The type may have been detected in a different file than the one whose
+	// metadata won — a part file carries no cover page — so rewrite the
+	// prefix from whichever file knew.
+	spec.ID = docTypeID(spec.ID, docType)
 	if spec.Title == "" {
 		spec.Title = spec.ID
 	}

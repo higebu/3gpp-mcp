@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -132,6 +133,186 @@ func TestGetSectionFetchesArchivedVersion(t *testing.T) {
 	}
 	if !res.Archived || len(toc) != 1 {
 		t.Errorf("GetTOC = %+v, %+v; want one archived section", toc, res)
+	}
+}
+
+// TestGetSectionArchivedMissingSection checks that a section the cached
+// version genuinely does not hold stays a definitive versioned not-found —
+// the eviction re-check must not turn it into a retry hint.
+func TestGetSectionArchivedMissingSection(t *testing.T) {
+	d := setupTestDB(t)
+	src := sourceWithStore(t, d, cannedFetcher)
+	handler := HandleGetSection(src)
+
+	result, _, err := handler(context.Background(), nil, GetSectionInput{
+		SpecID:        "TS 23.501",
+		SectionNumber: "99",
+		Version:       "19.5.0",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected an error result for a missing archived section")
+	}
+	text := getTextContent(result)
+	if !strings.Contains(text, "section 99 not found in TS 23.501 v19.5.0") {
+		t.Errorf("expected a versioned not-found message, got: %s", text)
+	}
+}
+
+// TestArchivedReadAfterEviction covers the window between resolve and the
+// store read: a fetch of another version can evict the resolved one there, so
+// an empty read of an evicted version must become a retryable
+// fetch-in-progress error rather than a definitive not-found.
+func TestArchivedReadAfterEviction(t *testing.T) {
+	d := setupTestDB(t)
+	store, err := versionstore.Open(versionstore.Options{
+		Path:    filepath.Join(t.TempDir(), "versions.db"),
+		Fetcher: cannedFetcher,
+		// Zero keeps only the newest fetch, so caching a second version
+		// evicts the first through the real eviction path.
+		LimitBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("versionstore.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	src := NewSource(d)
+	src.Store = store
+	src.Client = archiveClient(t)
+	src.UseCache = false
+	src.Budget = 5 * time.Second
+
+	if _, _, err := src.GetSection(context.Background(), "TS 23.501", "19.5.0", "5.1", false); err != nil {
+		t.Fatalf("prime cache: %v", err)
+	}
+	// While cached, the whole-version reads serve the content.
+	if sections, res, err := src.AllSections(context.Background(), "TS 23.501", "19.5.0"); err != nil || !res.Archived || len(sections) != 1 {
+		t.Fatalf("AllSections while cached = %d sections, %+v, %v; want one archived section", len(sections), res, err)
+	}
+
+	// Fetching another version pushes 19.5.0 out of the zero-byte cache.
+	if _, _, err := src.GetSection(context.Background(), "TS 23.501", "20.2.0", "5.1", false); err != nil {
+		t.Fatalf("fetch evicting version: %v", err)
+	}
+	if cached, err := store.Has("TS 23.501", "19.5.0"); err != nil || cached {
+		t.Fatalf("expected 19.5.0 to be evicted (cached=%v, err=%v)", cached, err)
+	}
+
+	// This is what raced whole-version and per-number reads see: no rows,
+	// no error. Both must report a retryable in-progress fetch.
+	res := Resolution{Version: "19.5.0", Archived: true}
+	sections, err := src.archivedSections("TS 23.501", res, func() ([]db.Section, error) {
+		return store.AllSections("TS 23.501", "19.5.0")
+	})
+	if len(sections) != 0 {
+		t.Fatalf("read of an evicted version returned %d sections, want none", len(sections))
+	}
+	var inProgress *FetchInProgressError
+	if !errors.As(err, &inProgress) {
+		t.Fatalf("archivedSections after eviction = %v, want a FetchInProgressError", err)
+	}
+	if inProgress.Images {
+		t.Error("the error must name the version's text, not its images")
+	}
+
+	if _, err := src.archivedSection("TS 23.501", res, "5.1", false, func() ([]db.Section, error) {
+		return store.GetSection("TS 23.501", "19.5.0", "5.1", false)
+	}); !errors.As(err, &inProgress) {
+		t.Fatalf("archivedSection after eviction = %v, want a FetchInProgressError", err)
+	}
+}
+
+// TestArchivedSectionStaleReadRecovers pins the eviction-and-restore race: the
+// per-number read returns a stale empty result because an eviction hit it, but
+// a fetch restored the version before the TOC snapshot. The snapshot proves
+// the section exists, so the read runs again and returns the content instead
+// of a definitive not-found.
+func TestArchivedSectionStaleReadRecovers(t *testing.T) {
+	d := setupTestDB(t)
+	src := sourceWithStore(t, d, cannedFetcher)
+	if _, _, err := src.GetSection(context.Background(), "TS 23.501", "19.5.0", "5.1", false); err != nil {
+		t.Fatalf("prime cache: %v", err)
+	}
+
+	res := Resolution{Version: "19.5.0", Archived: true}
+	reads := 0
+	sections, err := src.archivedSection("TS 23.501", res, "5.1", false, func() ([]db.Section, error) {
+		reads++
+		if reads == 1 {
+			// The eviction hit this read; the restoring fetch completed
+			// before the snapshot below.
+			return nil, nil
+		}
+		return src.Store.GetSection("TS 23.501", "19.5.0", "5.1", false)
+	})
+	if err != nil {
+		t.Fatalf("archivedSection: %v", err)
+	}
+	if reads != 2 || len(sections) != 1 || !strings.Contains(sections[0].Content, "Archived text") {
+		t.Fatalf("got %d reads, sections %+v; want the restored content", reads, sections)
+	}
+}
+
+// TestArchivedSectionRacedTwiceStaysRetryable pins the exhaustion behavior:
+// when evictions and restores race BOTH reads (each returns a stale empty
+// result while the TOC snapshot shows the section exists), the caller gets a
+// retryable fetch-in-progress error — existing content must never be reported
+// as definitively missing.
+func TestArchivedSectionRacedTwiceStaysRetryable(t *testing.T) {
+	d := setupTestDB(t)
+	src := sourceWithStore(t, d, cannedFetcher)
+	if _, _, err := src.GetSection(context.Background(), "TS 23.501", "19.5.0", "5.1", false); err != nil {
+		t.Fatalf("prime cache: %v", err)
+	}
+
+	res := Resolution{Version: "19.5.0", Archived: true}
+	// Both reads race an eviction window; the version itself is restored each
+	// time, so the TOC snapshot holds section 5.1 throughout. Also exercises
+	// the subsection match: the read asks for parent section 5 with
+	// subsections, which only 5.1 satisfies.
+	reads := 0
+	sections, err := src.archivedSection("TS 23.501", res, "5", true, func() ([]db.Section, error) {
+		reads++
+		return nil, nil
+	})
+	if reads != 2 || len(sections) != 0 {
+		t.Fatalf("got %d reads, %d sections; want two raced empty reads", reads, len(sections))
+	}
+	var inProgress *FetchInProgressError
+	if !errors.As(err, &inProgress) {
+		t.Fatalf("archivedSection raced twice = %v, want a FetchInProgressError", err)
+	}
+}
+
+// TestArchivedSectionEmptyStaysEmpty checks that a section the cached version
+// genuinely lacks still reads as empty with no error — the TOC snapshot names
+// every section the version has, so callers keep answering a definitive
+// not-found — and that read failures propagate from both helpers.
+func TestArchivedSectionEmptyStaysEmpty(t *testing.T) {
+	d := setupTestDB(t)
+	src := sourceWithStore(t, d, cannedFetcher)
+	if _, _, err := src.GetSection(context.Background(), "TS 23.501", "19.5.0", "5.1", false); err != nil {
+		t.Fatalf("prime cache: %v", err)
+	}
+
+	res := Resolution{Version: "19.5.0", Archived: true}
+	sections, err := src.archivedSection("TS 23.501", res, "99", false, func() ([]db.Section, error) {
+		return src.Store.GetSection("TS 23.501", "19.5.0", "99", false)
+	})
+	if err != nil || len(sections) != 0 {
+		t.Fatalf("archivedSection = %+v, %v; want empty with no error", sections, err)
+	}
+
+	// A read failure propagates as-is from both helpers.
+	readErr := errors.New("cache read blew up")
+	failing := func() ([]db.Section, error) { return nil, readErr }
+	if _, err := src.archivedSections("TS 23.501", res, failing); !errors.Is(err, readErr) {
+		t.Fatalf("archivedSections with failing read = %v, want %v", err, readErr)
+	}
+	if _, err := src.archivedSection("TS 23.501", res, "5.1", false, failing); !errors.Is(err, readErr) {
+		t.Fatalf("archivedSection with failing read = %v, want %v", err, readErr)
 	}
 }
 
@@ -293,5 +474,66 @@ func TestHandleListVersionsRequiresSpecID(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Error("expected an error result for a missing spec_id")
+	}
+}
+
+// TestGetSectionReleaseSelectorLandsOnDatabaseVersion checks that a release
+// selector resolving to the version the build imported is served from the
+// database — no fetch, no archived resolution.
+func TestGetSectionReleaseSelectorLandsOnDatabaseVersion(t *testing.T) {
+	d := setupTestDB(t)
+	src := sourceWithStore(t, d, func(context.Context, *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		t.Error("fetcher must not run when the release selector lands on the database version")
+		return db.Spec{}, nil, nil
+	})
+
+	// The archive listing names i60 (18.6.0) as Rel-18's newest version, and
+	// that is exactly what the database holds.
+	sections, res, err := src.GetSection(context.Background(), "TS 23.501", "Rel-18", "5.1", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Archived {
+		t.Error("expected the database to serve the resolved release, not the cache")
+	}
+	if res.Version != "18.6.0" {
+		t.Errorf("resolved version = %q, want 18.6.0", res.Version)
+	}
+	if len(sections) == 0 {
+		t.Fatal("expected the database section to be returned")
+	}
+}
+
+// TestHandleListVersionsFamilyIDSuggestsParts checks that a family ID with no
+// versions anywhere — but with split parts in the database — names the parts.
+func TestHandleListVersionsFamilyIDSuggestsParts(t *testing.T) {
+	d := setupTestDB(t)
+	if err := d.ExecScript(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+    ('TS 38.101-1', '18.6.0', 'i60', 'NR; UE radio transmission and reception; Part 1', '18', '38');`); err != nil {
+		t.Fatalf("seed part: %v", err)
+	}
+
+	// The family directory exists but lists no zips, so the archive answer is
+	// "no versions" with no error.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/38_series/38.101/", func(http.ResponseWriter, *http.Request) {})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	src := NewSource(d)
+	src.Client = &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+	src.UseCache = false
+
+	handler := HandleListVersions(src)
+	result, _, err := handler(context.Background(), nil, ListVersionsInput{SpecID: "TS 38.101"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected an error result, got: %q", getTextContent(result))
+	}
+	text := getTextContent(result)
+	if !strings.Contains(text, "has multiple parts") || !strings.Contains(text, "TS 38.101-1") {
+		t.Errorf("expected the parts hint naming TS 38.101-1, got: %q", text)
 	}
 }

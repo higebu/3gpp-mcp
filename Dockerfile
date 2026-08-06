@@ -16,26 +16,36 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 FROM golang:1.26-bookworm AS db-builder
 ARG RELEASE=latest
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libreoffice ca-certificates \
+    && apt-get install -y --no-install-recommends libreoffice ca-certificates sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=go-builder /3gpp-mcp /3gpp-mcp
+# After the build, switch the database out of WAL mode: a read-only open of a
+# WAL-mode database must create -shm/-wal sidecars next to it, which the
+# non-root runtime user cannot do in the root-owned /. In DELETE mode the
+# baked-in database is readable with no write access at all.
 RUN if [ "${RELEASE}" = "latest" ] || [ -z "${RELEASE}" ]; then \
-        SELECT="--latest"; \
+        set -- --latest; \
     else \
-        SELECT="--release ${RELEASE}"; \
+        set -- --release "${RELEASE}"; \
     fi \
-    && /3gpp-mcp build ${SELECT} \
+    && /3gpp-mcp build "$@" \
     --db /3gpp.db \
     --convert-doc \
     --convert-image \
     --timeout 120s \
-    --scrape-workers 4
+    --scrape-workers 4 \
+    && sqlite3 /3gpp.db 'PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;'
 
 # 3) Final image: just the binary, the baked-in database, and CA certificates
-#    (needed for on-demand HTTPS fetches of versions not in the prebuilt DB).
+#    (needed for the HTTPS archive listing behind list_versions). On-demand
+#    fetching of versions not in the prebuilt DB does NOT work out of the box:
+#    it needs a writable cache and temp directory, which scratch lacks. To
+#    enable it, mount a writable volume and set HOME (or XDG_CACHE_HOME) and
+#    TMPDIR to point into it.
 FROM scratch
 COPY --from=db-builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=go-builder /3gpp-mcp /3gpp-mcp
 COPY --from=db-builder /3gpp.db /3gpp.db
+USER 65532:65532
 ENTRYPOINT ["/3gpp-mcp"]
 CMD ["serve", "--db", "/3gpp.db"]

@@ -192,8 +192,18 @@ func (p *Pipeline) processOne(ctx context.Context, spec *SpecVersion) (string, e
 	// Sort files with cover files last
 	sortCoverLast(result.DocxFiles)
 
-	// Parse and store each docx file
-	var parsed int
+	// Parse every docx file before storing anything: the part files of a
+	// split spec carry no cover page and cannot tell a TS from a TR, so the
+	// file that does know — usually the cover, sorted last — has to decide
+	// the spec ID for all of them, or a TR would end up split across a
+	// "TS x" and a "TR x" row.
+	type parsedDocx struct {
+		spec     db.Spec
+		sections []db.Section
+		images   []db.Image
+	}
+	var parsedFiles []parsedDocx
+	docType := ""
 	for _, docxPath := range result.DocxFiles {
 		if ctx.Err() != nil {
 			return "FAILED", ctx.Err()
@@ -216,12 +226,10 @@ func (p *Pipeline) processOne(ctx context.Context, spec *SpecVersion) (string, e
 		// The archive entry knows the release and version of the file we asked
 		// for, so it wins over anything scraped out of the document.
 		applyArchiveVersion(&dbSpec, dbSections, spec)
-
-		// Store in DB (serialized)
-		if err := p.DB.InsertSpecWithSectionsAndImages(dbSpec, dbSections, dbImages); err != nil {
-			return "FAILED", fmt.Errorf("db insert: %w", err)
+		if dt := parseResult.Metadata.DocType; dt != "" {
+			docType = dt
 		}
-		parsed++
+		parsedFiles = append(parsedFiles, parsedDocx{dbSpec, dbSections, dbImages})
 
 		// Delete the docx file immediately to save disk space
 		if err := os.Remove(docxPath); err != nil {
@@ -229,8 +237,16 @@ func (p *Pipeline) processOne(ctx context.Context, spec *SpecVersion) (string, e
 		}
 	}
 
-	if len(result.DocxFiles) > 0 && parsed == 0 {
+	if len(result.DocxFiles) > 0 && len(parsedFiles) == 0 {
 		return "FAILED", fmt.Errorf("all %d docx files failed to parse", len(result.DocxFiles))
+	}
+
+	// Store in DB (serialized), with every file under the same document type.
+	for _, pf := range parsedFiles {
+		applyDocType(&pf.spec, pf.sections, pf.images, docType)
+		if err := p.DB.InsertSpecWithSectionsAndImages(pf.spec, pf.sections, pf.images); err != nil {
+			return "FAILED", fmt.Errorf("db insert: %w", err)
+		}
 	}
 
 	// Import YAML files if present
@@ -262,6 +278,41 @@ func (p *Pipeline) processOne(ctx context.Context, spec *SpecVersion) (string, e
 	}
 
 	return "OK", nil
+}
+
+// docTypeID replaces the "TS "/"TR " document-type prefix of a spec ID with
+// docType. An empty docType, or an ID without a type prefix (a fallback to
+// the raw filename stem), leaves the ID unchanged.
+func docTypeID(id, docType string) string {
+	if docType == "" {
+		return id
+	}
+	rest, ok := strings.CutPrefix(id, "TS ")
+	if !ok {
+		rest, ok = strings.CutPrefix(id, "TR ")
+	}
+	if !ok {
+		return id
+	}
+	return docType + " " + rest
+}
+
+// applyDocType rewrites the document-type prefix of a parsed file's records.
+// It exists because only the file that carries the cover page knows whether
+// the spec is a TS or a TR, and every file of a split spec must store its
+// records under the same ID.
+func applyDocType(spec *db.Spec, sections []db.Section, images []db.Image, docType string) {
+	id := docTypeID(spec.ID, docType)
+	if id == spec.ID {
+		return
+	}
+	spec.ID = id
+	for i := range sections {
+		sections[i].SpecID = id
+	}
+	for i := range images {
+		images[i].SpecID = id
+	}
 }
 
 // applyArchiveVersion overwrites the version and release of records parsed out
@@ -398,6 +449,7 @@ func ConvertDir(ctx context.Context, d *db.DB, dirPath string, workers int, conv
 		spec     db.Spec
 		sections []db.Section
 		images   []db.Image
+		docType  string
 		err      error
 	}
 
@@ -435,7 +487,7 @@ func ConvertDir(ctx context.Context, d *db.DB, dirPath string, workers int, conv
 				dbSpec.Release = strconv.Itoa(r)
 			}
 
-			results <- result{path: f, spec: dbSpec, sections: dbSections, images: dbImages}
+			results <- result{path: f, spec: dbSpec, sections: dbSections, images: dbImages, docType: parseResult.Metadata.DocType}
 		}()
 	}
 
@@ -459,6 +511,26 @@ func ConvertDir(ctx context.Context, d *db.DB, dirPath string, workers int, conv
 
 	if len(parsed) == 0 {
 		return fmt.Errorf("all %d files failed to parse", len(files))
+	}
+
+	// The part files of a split spec carry no cover page and cannot tell a
+	// TS from a TR, so the file that does know decides for every file of the
+	// same spec and version — iterated in cover-last order, so the cover
+	// wins — or a TR would end up split across a "TS x" and a "TR x" row.
+	specKey := func(s db.Spec) string {
+		return docTypeID(s.ID, "TS") + "@" + s.Version
+	}
+	docTypes := make(map[string]string)
+	for _, f := range files {
+		if r, ok := parsed[f]; ok && r.docType != "" {
+			docTypes[specKey(r.spec)] = r.docType
+		}
+	}
+	for f, r := range parsed {
+		if dt := docTypes[specKey(r.spec)]; dt != "" {
+			applyDocType(&r.spec, r.sections, r.images, dt)
+			parsed[f] = r
+		}
 	}
 
 	// Write to DB in cover-last order. A failing file does not abort the rest,
