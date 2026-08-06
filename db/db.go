@@ -1254,7 +1254,7 @@ const secNumRaw = `(?:[A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 // " and 4.4", ", and 4.4", "; or Annex B") so bareTrailingQualRE and
 // barePresentDocRE can see through a list to the "of"/"in" that qualifies its
 // every element.
-const bareRefChain = `(?:` + sp + `*(?:[,;]` + sp + `*(?:and|or)?|and|or)` + sp + `*(?:(?:[Cc]lause|[Ss]ection|[Ss]ubclause|[Aa]nnex)` + sp + `+)?` + secNumRaw + `)*`
+const bareRefChain = `(?:` + sp + `*(?:[,;]` + sp + `*(?:and|or)?|and|or)` + sp + `*(?:(?:[Cc]lauses?|[Ss]ections?|[Ss]ubclauses?|[Aa]nnexe?s?)` + sp + `+)?` + secNumRaw + `)*`
 
 var (
 	// "TS 23.501 clause 5.1" or "3GPP TS 33.203 Annex H"
@@ -1314,6 +1314,11 @@ var (
 	barePresentDocRE = regexp.MustCompile(`^` + bareRefChain + sp + `+(?:of|in)` + sp +
 		`+(?:the` + sp + `+present` + sp + `+(?:document|specification)|this` + sp + `+(?:specification|document))`)
 
+	// bareTrailingParenSpecRE matches a parenthesized designator right after a
+	// bare reference ("clause 4.2 (TS 23.402)"), tying it to that document.
+	bareTrailingParenSpecRE = regexp.MustCompile(`^` + sp + `*\(` + sp + `*(?:3GPP` + sp +
+		`+)?(?:(?:TS|TR)` + sp + `+\d+\.\d+|RFC` + sp + `+\d+|\[\d+[A-Za-z]*\])`)
+
 	// bareLeadingSpecRE matches a spec designator or bracket reference before
 	// a bare reference — directly ("TS 23.402 Clause 5.1", "RFC 3748
 	// Section 3.1", "[19] Clause 6") or across a coordinated list
@@ -1323,7 +1328,7 @@ var (
 	bareLeadingSpecRE = regexp.MustCompile(
 		`(?:(?:TS|TR)` + sp + `+\d+\.\d+|RFC` + sp + `+\d+|\[\d+[A-Za-z]*\])` +
 			`(?:` + sp + `+(?:(?:[Cc]lauses?|[Ss]ections?|[Ss]ubclauses?|[Aa]nnexe?s?)` + sp + `+)?` + secNumRaw + bareRefChain + `)?` +
-			sp + `*[,;]?` + sp + `*(?:(?:and|or)` + sp + `+)?$`)
+			sp + `*[,;:]?` + sp + `*(?:(?:and|or)` + sp + `+)?$`)
 )
 
 // refExtractor converts regex submatch indices into (targetSpec, targetSection, ok).

@@ -289,12 +289,16 @@ func LinkifyRefs(content string, bracketMap map[string]string, urlFor func(spec,
 			if bareTrailingQualRE.MatchString(tail) && !barePresentDocRE.MatchString(tail) {
 				return true
 			}
+			if bareTrailingParenSpecRE.MatchString(tail) {
+				return true
+			}
 			head := content[:start]
-			// bareLeadingSpecRE is anchored at $; a short tail keeps the scan
-			// cheap. A cut-off leading rune can only lose a match, and only
-			// for a designator further away than any it would ever match.
-			if len(head) > 128 {
-				head = head[len(head)-128:]
+			// bareLeadingSpecRE is anchored at $; a bounded window keeps the
+			// scan cheap. The bound is best-effort: a coordinated list longer
+			// than the window hides its designator and the trailing elements
+			// linkify as same-document, but no realistic list comes close.
+			if len(head) > 512 {
+				head = head[len(head)-512:]
 			}
 			return bareLeadingSpecRE.MatchString(head)
 		}

@@ -528,6 +528,21 @@ func TestLinkifyRefs_BareRefs(t *testing.T) {
 			want:  "See [TS 23.402 clause 4.2](/specs/TS 23.402/sections/4.2) and clause 5.1 for details.",
 		},
 		{
+			name:  "parenthesized designator not linked bare",
+			input: "See clause 4.2 (TS 23.402).",
+			want:  "See clause 4.2 ([TS 23.402](/specs/TS 23.402)).",
+		},
+		{
+			name:  "colon after spec not linked bare",
+			input: "See TS 23.402: Clause 5.1.",
+			want:  "See [TS 23.402](/specs/TS 23.402): Clause 5.1.",
+		},
+		{
+			name:  "mixed singular plural list of TS not linked bare",
+			input: "See clause 4.2 and clauses 5.1, 5.15.2 of TS 23.402.",
+			want:  "See clause 4.2 and clauses 5.1, 5.15.2 of [TS 23.402](/specs/TS 23.402).",
+		},
+		{
 			name:  "oxford comma list of TS not linked bare",
 			input: "See clause 4.2, 5.1, and 5.15.2 of TS 23.402.",
 			want:  "See clause 4.2, 5.1, and 5.15.2 of [TS 23.402](/specs/TS 23.402).",
