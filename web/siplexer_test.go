@@ -113,7 +113,7 @@ func TestRenderMarkdownHighlightsSIPAndSDP(t *testing.T) {
 		{"```sip\nINVITE sip:bob@example.net SIP/2.0\nVia: SIP/2.0/UDP pc33.example.com\n```", ">INVITE</span>"},
 		{"```sdp\nv=0\no=- 4567 1234 IN IP4 1.1.1.1\n```", ">v</span>"},
 	} {
-		got := renderMarkdown(tt.content, "TS 24.228", "", nil, nil)
+		got := renderMarkdown(tt.content, renderOpts{specID: "TS 24.228"})
 		if !strings.Contains(got, "chroma") {
 			t.Errorf("renderMarkdown(%q) = %q, want chroma-highlighted output", tt.content, got)
 		}

@@ -61,33 +61,57 @@ func init() {
 	)
 }
 
+// renderOpts configures renderMarkdown.
+type renderOpts struct {
+	specID  string
+	version string // version carried on same-spec URLs; empty on database-version pages
+	display string // displayed version of the current document, for unresolved-reference tooltips
+	// bracketMap maps bracket numbers to spec IDs; nil skips bracket refs.
+	bracketMap map[string]string
+	// sectionExists gates bare same-document references ("clause 4.2");
+	// nil skips them.
+	sectionExists func(string) bool
+	// targetInfo validates cross-spec section references; nil skips validation.
+	targetInfo func(spec, section string) (exists bool, version string, ok bool)
+}
+
 // renderMarkdown converts Markdown content to HTML, rewriting image:// URLs
-// and linkifying inline spec/RFC references. A non-empty version is carried
+// and linkifying inline spec/RFC references. A non-empty o.version is carried
 // on every image URL and every same-spec section link so an archived version
-// serves its own images and stays within itself when followed. sectionExists
-// gates bare same-document references ("clause 4.2"); pass nil to skip them.
-func renderMarkdown(content, specID, version string, bracketMap map[string]string, sectionExists func(string) bool) string {
+// serves its own images and stays within itself when followed.
+func renderMarkdown(content string, o renderOpts) string {
+	specID, version := o.specID, o.version
+	currentLabel := specID
+	if o.display != "" {
+		currentLabel += " v" + o.display
+	}
 	// Linkify spec references before image/figure rewrites to avoid processing HTML attributes.
-	content = db.LinkifyRefs(content, bracketMap, func(spec, section string) string {
-		if strings.HasPrefix(spec, "RFC ") {
-			u := "https://www.rfc-editor.org/rfc/rfc" + strings.TrimPrefix(spec, "RFC ")
+	content = db.LinkifyRefs(content, db.LinkifyRefsOpts{
+		BracketMap: o.bracketMap,
+		URLFor: func(spec, section string) string {
+			if strings.HasPrefix(spec, "RFC ") {
+				u := "https://www.rfc-editor.org/rfc/rfc" + strings.TrimPrefix(spec, "RFC ")
+				if section != "" {
+					u += "#section-" + section
+				}
+				return u
+			}
+			if spec == "" { // bare reference: the current spec
+				spec = specID
+			}
+			u := "/specs/" + url.PathEscape(spec)
 			if section != "" {
-				u += "#section-" + section
+				u += "/sections/" + section
+			}
+			if version != "" && spec == specID {
+				u += "?version=" + url.QueryEscape(version)
 			}
 			return u
-		}
-		if spec == "" { // bare reference: the current spec
-			spec = specID
-		}
-		u := "/specs/" + url.PathEscape(spec)
-		if section != "" {
-			u += "/sections/" + section
-		}
-		if version != "" && spec == specID {
-			u += "?version=" + url.QueryEscape(version)
-		}
-		return u
-	}, sectionExists)
+		},
+		SectionExists: o.sectionExists,
+		CurrentLabel:  currentLabel,
+		TargetInfo:    o.targetInfo,
+	})
 	escapedSpec := url.PathEscape(specID)
 	imageURL := func(name string) string {
 		src := "/specs/" + escapedSpec + "/images/" + url.PathEscape(name)
@@ -135,7 +159,7 @@ func renderMarkdown(content, specID, version string, bracketMap map[string]strin
 			continue
 		}
 		text := protectMath(seg.text, token, &mathSpans)
-		sb.WriteString(escapeUnknownHTML(text))
+		sb.WriteString(escapeOutsideTables(text))
 	}
 	content = sb.String()
 
@@ -148,6 +172,46 @@ func renderMarkdown(content, specID, version string, bracketMap map[string]strin
 		out = strings.Replace(out, mathPlaceholder(token, i), span, 1)
 	}
 	return sanitizeHTML(out)
+}
+
+// tableOpenRE matches the start of a converter-emitted table region: the
+// converter emits each table as its own block, so a real opener sits at the
+// start of a line. The anchor and boundary character keep prose mentioning
+// "<table>" mid-sentence — or words like "<tabletop" — from opening a region
+// and letting the text up to a real table's closer bypass escaping.
+var tableOpenRE = regexp.MustCompile(`(?m)^<table[\s>]`)
+
+// escapeOutsideTables applies escapeUnknownHTML to text outside
+// <table>...</table> regions and passes table regions through verbatim.
+// Table markup is pipeline-generated — the DOCX converter's tags with cell
+// text already entity-escaped at build time, plus db.LinkifyRefs's raw
+// anchors — so escaping there would turn the anchors into visible text
+// (and did, before this function existed). An opener with no closer is not
+// treated as a region: the rest is escaped normally, which keeps document
+// prose mentioning "<table>" from disabling escaping. sanitizeHTML still
+// attribute-sanitizes everything afterwards.
+func escapeOutsideTables(text string) string {
+	var b strings.Builder
+	for {
+		loc := tableOpenRE.FindStringIndex(text)
+		if loc == nil {
+			if b.Len() == 0 {
+				return escapeUnknownHTML(text)
+			}
+			b.WriteString(escapeUnknownHTML(text))
+			return b.String()
+		}
+		rest := text[loc[0]:]
+		end := strings.Index(rest, "</table>")
+		if end < 0 {
+			b.WriteString(escapeUnknownHTML(text))
+			return b.String()
+		}
+		b.WriteString(escapeUnknownHTML(text[:loc[0]]))
+		end += len("</table>")
+		b.WriteString(rest[:end])
+		text = rest[end:]
+	}
 }
 
 // randRead is cryptorand.Read, injectable so tests can exercise the

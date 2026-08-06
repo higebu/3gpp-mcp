@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	htmlpkg "html"
@@ -350,8 +351,13 @@ func (h *handler) renderSpecPage(w http.ResponseWriter, r *http.Request, specID,
 	for _, s := range toc {
 		secNums[s.Number] = true
 	}
-	rendered := renderSections(sections, specID, urlVersion, bracketMap, func(number string) bool {
-		return secNums[number]
+	rendered := renderSections(sections, renderOpts{
+		specID:        specID,
+		version:       urlVersion,
+		display:       toc[0].Version,
+		bracketMap:    bracketMap,
+		sectionExists: func(number string) bool { return secNums[number] },
+		targetInfo:    h.targetInfo(r.Context(), specID, toc[0].Version, secNums),
 	})
 	prev, next := adjacentSections(toc, number)
 
@@ -581,17 +587,52 @@ func (h *handler) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 
 // Helper functions
 
-func renderSections(sections []db.Section, specID, version string, bracketMap map[string]string, sectionExists func(string) bool) []sectionRendered {
+func renderSections(sections []db.Section, o renderOpts) []sectionRendered {
 	rendered := make([]sectionRendered, len(sections))
 	for i, s := range sections {
 		rendered[i] = sectionRendered{
 			Number:  s.Number,
 			Title:   s.Title,
 			Level:   s.Level,
-			Content: template.HTML(renderMarkdown(s.Content, specID, version, bracketMap, sectionExists)), //nolint:gosec
+			Content: template.HTML(renderMarkdown(s.Content, o)), //nolint:gosec
 		}
 	}
 	return rendered
+}
+
+// targetInfo returns a per-request validator of cross-spec section references
+// against the database's version of each target spec, with the section-number
+// sets fetched lazily and cached for the request. References to the spec
+// being viewed are validated against the viewed version's own TOC instead, so
+// archived pages do not judge their self-references by the database version.
+// A spec that is not in the database — or whose lookup fails, which is logged
+// — reports ok=false and is not validated.
+func (h *handler) targetInfo(ctx context.Context, specID, version string, secNums map[string]bool) func(spec, section string) (bool, string, bool) {
+	type entry struct {
+		set     map[string]bool
+		version string
+	}
+	cache := map[string]entry{}
+	return func(spec, section string) (bool, string, bool) {
+		if spec == specID {
+			return secNums[section], version, true
+		}
+		e, ok := cache[spec]
+		if !ok {
+			set, ver, err := h.db.SectionNumbers(ctx, spec)
+			if err != nil {
+				log.Printf("cross-reference validation for %s: %v", spec, err)
+			} else if len(set) > 0 {
+				e.set = set
+				e.version = ver
+			}
+			cache[spec] = e
+		}
+		if e.set == nil {
+			return false, "", false
+		}
+		return e.set[section], e.version, true
+	}
 }
 
 func refURL(ref db.Reference) string {

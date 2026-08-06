@@ -88,7 +88,7 @@ func TestDiameterLexerDigitLeadingNameNotSplit(t *testing.T) {
 
 func TestRenderMarkdownHighlightsDiameter(t *testing.T) {
 	content := "```diameter\n< Session-Id >\n{ Origin-Host }\n```"
-	got := renderMarkdown(content, "TS 29.272", "", nil, nil)
+	got := renderMarkdown(content, renderOpts{specID: "TS 29.272"})
 	if !strings.Contains(got, "chroma") {
 		t.Errorf("renderMarkdown() = %q, want chroma-highlighted output", got)
 	}

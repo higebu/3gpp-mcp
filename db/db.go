@@ -743,6 +743,33 @@ func (d *DB) GetTOC(ctx context.Context, specID, version string) ([]Section, err
 // AllSections returns every section of a spec version, content included, in
 // document order. An empty version resolves to the version this database
 // holds; a version it does not hold yields no rows.
+// SectionNumbers returns the set of section numbers of the database version
+// of a spec and that version — a light existence index for cross-reference
+// validation, without loading titles or content. An unknown spec returns an
+// empty set and no error.
+func (d *DB) SectionNumbers(ctx context.Context, specID string) (map[string]bool, string, error) {
+	rows, err := d.conn.QueryContext(ctx,
+		"SELECT number, version FROM sections WHERE spec_id = ?", specID)
+	if err != nil {
+		return nil, "", fmt.Errorf("section numbers: %w", err)
+	}
+	defer rows.Close()
+
+	numbers := make(map[string]bool)
+	version := ""
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n, &version); err != nil {
+			return nil, "", fmt.Errorf("scan section number: %w", err)
+		}
+		numbers[n] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("section numbers: iterate: %w", err)
+	}
+	return numbers, version, nil
+}
+
 func (d *DB) AllSections(ctx context.Context, specID, version string) ([]Section, error) {
 	version, err := d.ResolveVersion(ctx, specID, version)
 	if errors.Is(err, ErrNoVersion) {
@@ -1250,11 +1277,18 @@ const secNum = `([A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 // secNumRaw is secNum without capture group, used for multi-section list matching.
 const secNumRaw = `(?:[A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 
+// coordElemTail matches the reference part of one coordinated-list element:
+// an optional preposition-plus-keyword or bare keyword, then a section
+// number. A preposition requires a keyword after it ("and in clause 4.12.2a"
+// but not "and in 2024") so a bare number after "of"/"in" is never read as a
+// section reference.
+const coordElemTail = `(?:(?:of|in)` + sp + `+(?:[Cc]lauses?|[Ss]ections?|[Ss]ubclauses?|[Aa]nnexe?s?)` + sp + `+|(?:(?:[Cc]lauses?|[Ss]ections?|[Ss]ubclauses?|[Aa]nnexe?s?)` + sp + `+)?)` + secNumRaw
+
 // bareRefChain matches zero or more coordinated references (", clause 4.3",
-// " and 4.4", ", and 4.4", "; or Annex B") so bareTrailingQualRE and
-// barePresentDocRE can see through a list to the "of"/"in" that qualifies its
-// every element.
-const bareRefChain = `(?:` + sp + `*(?:[,;]` + sp + `*(?:and|or)?|and|or)` + sp + `*(?:(?:[Cc]lauses?|[Ss]ections?|[Ss]ubclauses?|[Aa]nnexe?s?)` + sp + `+)?` + secNumRaw + `)*`
+// " and 4.4", ", and 4.4", "; or Annex B", " and in clause 4.12.2a") so
+// bareTrailingQualRE and barePresentDocRE can see through a list to the
+// "of"/"in" that qualifies its every element.
+const bareRefChain = `(?:` + sp + `*(?:[,;]` + sp + `*(?:and|or)?|and|or)` + sp + `*` + coordElemTail + `)*`
 
 var (
 	// "TS 23.501 clause 5.1" or "3GPP TS 33.203 Annex H"
@@ -1283,8 +1317,27 @@ var (
 			`(clauses?|subclauses?|sections?|[Aa]nnexe?s?)` + sp + `+` +
 			`(` + secNumRaw + `(?:(?:,` + sp + `*` + secNumRaw + `)*` + sp + `+and` + sp + `+` + secNumRaw + `))\b`)
 
+	// tsCoordPrefixRefRE matches a coordinated list whose elements may repeat
+	// the keyword and a preposition before naming the spec —
+	// "clause 4.12.2 and in clause 4.12.2a of TS 23.502",
+	// "clause 8.2 and in clauses 8.3 and 8.4 of TS 23.402" — which
+	// tsMultiPrefixRefRE (bare-number lists) does not cover. Every element
+	// belongs to the named spec. Where both patterns match the same range,
+	// candidate collection order decides (this pattern first).
+	// Groups: 1=reference-list, 2=TS|TR, 3=spec-number.
+	tsCoordPrefixRefRE = regexp.MustCompile(
+		`((?:[Cc]lauses?|[Ss]ubclauses?|[Ss]ections?|[Aa]nnexe?s?)` + sp + `+` + secNumRaw +
+			`(?:` + sp + `*(?:,|and|or)` + sp + `*` + coordElemTail + `)+)` +
+			sp + `+(?:of|in)` + sp + `+(?:3GPP` + sp + `+)?(TS|TR)` + sp + `+(\d+\.\d+)`)
+
 	// secNumListRE extracts individual section numbers from a comma/and-separated list.
 	secNumListRE = regexp.MustCompile(secNumRaw)
+
+	// coordElemRE extracts one element of a coordinated list matched by
+	// tsCoordPrefixRefRE, sharing its keyword classes (plural forms included,
+	// unlike bareRefRE; the keyword is optional, as in the list pattern).
+	// Group 1 = section number.
+	coordElemRE = regexp.MustCompile(`\b(?:(?:[Cc]lauses?|[Ss]ubclauses?|[Ss]ections?|[Aa]nnexe?s?)` + sp + `+)?` + secNum)
 
 	// bareRefRE matches a reference with no spec designator: "clause 4.2",
 	// "Subclause 5.15.2", "Annex B". Such a reference means the current
@@ -1362,18 +1415,20 @@ func rfcExtractor(m []int, content string) (string, string, bool) {
 }
 
 // multiRefExtractor converts regex submatch indices into replacement text containing multiple links.
-// urlFor is called with (targetSpec, targetSection) and returns a URL string.
-// mkLink renders a single link from (linkText, url); it lets the caller choose
-// Markdown or HTML link syntax depending on the surrounding context.
+// opts resolves target URLs and validates target sections (see
+// LinkifyRefsOpts.resolveTarget). mkLink renders a single link from
+// (linkText, url); it lets the caller choose Markdown or HTML link syntax
+// depending on the surrounding context. Elements whose target section is
+// missing render with unresolvedLink instead.
 // Returns (replacementText, ok). When ok is false, the match is skipped.
-type multiRefExtractor func(m []int, content string, urlFor func(string, string) string, mkLink func(text, url string) string) (string, bool)
+type multiRefExtractor func(m []int, content string, opts *LinkifyRefsOpts, mkLink func(text, url string) string) (string, bool)
 
 // multiRefSpecSections extracts (spec, []sections) from a multi-section regex match.
 // Returns ("", nil, false) if fewer than 2 sections are found.
 type multiRefSpecSections func(m []int, content string) (string, []string, bool)
 
 // tsMultiPrefixMRExtractor handles "clauses 8.2 and 16.11 of TS 23.402 [45]".
-func tsMultiPrefixMRExtractor(m []int, content string, urlFor func(string, string) string, mkLink func(text, url string) string) (string, bool) {
+func tsMultiPrefixMRExtractor(m []int, content string, opts *LinkifyRefsOpts, mkLink func(text, url string) string) (string, bool) {
 	keyword := content[m[2]:m[3]]
 	secList := content[m[4]:m[5]]
 	specType := content[m[6]:m[7]]
@@ -1386,9 +1441,13 @@ func tsMultiPrefixMRExtractor(m []int, content string, urlFor func(string, strin
 	}
 
 	linkedSecList := secNumListRE.ReplaceAllStringFunc(secList, func(sec string) string {
-		return mkLink(sec, urlFor(spec, sec))
+		u, title := opts.resolveTarget(spec, sec)
+		if title != "" {
+			return unresolvedLink(sec, u, title)
+		}
+		return mkLink(sec, u)
 	})
-	specLink := mkLink(specType+" "+specNum, urlFor(spec, ""))
+	specLink := mkLink(specType+" "+specNum, opts.URLFor(spec, ""))
 	result := keyword + " " + linkedSecList + " of " + specLink
 
 	if m[10] >= 0 {
@@ -1410,8 +1469,41 @@ func tsMultiPrefixSpecSections(m []int, content string) (string, []string, bool)
 	return spec, sections, true
 }
 
+// tsCoordPrefixMRExtractor handles "clause 4.12.2 and in clause 4.12.2a of
+// TS 23.502": each keyword-prefixed element links to the named spec. The
+// original text — separators, prepositions, the optional 3GPP prefix — is
+// kept intact around the links.
+func tsCoordPrefixMRExtractor(m []int, content string, opts *LinkifyRefsOpts, mkLink func(text, url string) string) (string, bool) {
+	spec := content[m[4]:m[5]] + " " + content[m[6]:m[7]]
+	linked := coordElemRE.ReplaceAllStringFunc(content[m[2]:m[3]], func(ref string) string {
+		sec := coordElemRE.FindStringSubmatch(ref)[1]
+		u, title := opts.resolveTarget(spec, sec)
+		if title != "" {
+			return ref[:len(ref)-len(sec)] + unresolvedLink(sec, u, title)
+		}
+		return ref[:len(ref)-len(sec)] + mkLink(sec, u)
+	})
+	specLink := mkLink(content[m[4]:m[7]], opts.URLFor(spec, ""))
+	return linked + content[m[3]:m[4]] + specLink, true
+}
+
+// tsCoordPrefixSpecSections extracts spec and sections from a coordinated
+// keyword-per-element list for ExtractReferences.
+func tsCoordPrefixSpecSections(m []int, content string) (string, []string, bool) {
+	spec := content[m[4]:m[5]] + " " + content[m[6]:m[7]]
+	list := content[m[2]:m[3]]
+	var sections []string
+	for _, em := range coordElemRE.FindAllStringSubmatchIndex(list, -1) {
+		sections = append(sections, list[em[2]:em[3]])
+	}
+	if len(sections) < 2 {
+		return "", nil, false
+	}
+	return spec, sections, true
+}
+
 // tsMultiMRExtractor handles "TS 23.402 clauses 8.2 and 16.11".
-func tsMultiMRExtractor(m []int, content string, urlFor func(string, string) string, mkLink func(text, url string) string) (string, bool) {
+func tsMultiMRExtractor(m []int, content string, opts *LinkifyRefsOpts, mkLink func(text, url string) string) (string, bool) {
 	specType := content[m[2]:m[3]]
 	specNum := content[m[4]:m[5]]
 	keyword := content[m[6]:m[7]]
@@ -1424,9 +1516,13 @@ func tsMultiMRExtractor(m []int, content string, urlFor func(string, string) str
 	}
 
 	linkedSecList := secNumListRE.ReplaceAllStringFunc(secList, func(sec string) string {
-		return mkLink(sec, urlFor(spec, sec))
+		u, title := opts.resolveTarget(spec, sec)
+		if title != "" {
+			return unresolvedLink(sec, u, title)
+		}
+		return mkLink(sec, u)
 	})
-	specLink := mkLink(specType+" "+specNum, urlFor(spec, ""))
+	specLink := mkLink(specType+" "+specNum, opts.URLFor(spec, ""))
 	return specLink + " " + keyword + " " + linkedSecList, true
 }
 
@@ -1482,6 +1578,7 @@ func ExtractReferences(sourceSpecID, sectionNumber, content string, bracketMap m
 		re      *regexp.Regexp
 		extract multiRefSpecSections
 	}{
+		{tsCoordPrefixRefRE, tsCoordPrefixSpecSections},
 		{tsMultiPrefixRefRE, tsMultiPrefixSpecSections},
 		{tsMultiRefRE, tsMultiSpecSections},
 	}
