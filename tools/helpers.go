@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/higebu/3gpp-mcp/db"
 	"github.com/higebu/3gpp-mcp/internal/specver"
@@ -86,12 +87,13 @@ func paginateText(content string, offset, maxLines, maxChars int) *mcp.CallToolR
 		end = totalLines
 	}
 
-	charLimited := false
 	if maxChars > 0 {
 		charCount := 0
 		charEnd := end
 		for i := offset; i < end; i++ {
-			charCount += len(lines[i]) + 1
+			// Count characters, not bytes: max_chars is documented as a
+			// character limit and non-ASCII text must not truncate early.
+			charCount += utf8.RuneCountInString(lines[i]) + 1
 			if charCount > maxChars {
 				if i > offset {
 					charEnd = i
@@ -103,14 +105,14 @@ func paginateText(content string, offset, maxLines, maxChars int) *mcp.CallToolR
 		}
 		if charEnd < end {
 			end = charEnd
-			charLimited = true
 		}
 	}
 
 	// Smart cut: extend to the next paragraph boundary (empty line).
-	// maxLines * 1.2 caps how far we look ahead. When the character budget
-	// decided the cut, extending would silently exceed it, so skip.
-	if !charLimited && end < totalLines {
+	// maxLines * 1.2 caps how far we look ahead. Extending would silently
+	// exceed a character budget — even one the window happened to fit
+	// exactly — so any max_chars disables the extension.
+	if maxChars <= 0 && end < totalLines {
 		linesUsed := end - offset
 		hardLimit := end + linesUsed/5
 		if hardLimit <= end {

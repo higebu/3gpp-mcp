@@ -168,7 +168,9 @@ func (s *Source) GetSection(ctx context.Context, specID, version, number string,
 		return nil, res, err
 	}
 	if res.Archived {
-		sections, err := s.Store.GetSection(specID, res.Version, number, includeSubsections)
+		sections, err := s.archivedSection(specID, res, number, includeSubsections, func() ([]db.Section, error) {
+			return s.Store.GetSection(specID, res.Version, number, includeSubsections)
+		})
 		return sections, res, err
 	}
 	sections, err := s.DB.GetSection(specID, res.Version, number, includeSubsections)
@@ -183,7 +185,9 @@ func (s *Source) AllSections(ctx context.Context, specID, version string) ([]db.
 		return nil, res, err
 	}
 	if res.Archived {
-		sections, err := s.Store.AllSections(specID, res.Version)
+		sections, err := s.archivedSections(specID, res, func() ([]db.Section, error) {
+			return s.Store.AllSections(specID, res.Version)
+		})
 		return sections, res, err
 	}
 	sections, err := s.DB.AllSections(specID, res.Version)
@@ -197,7 +201,9 @@ func (s *Source) GetTOC(ctx context.Context, specID, version string) ([]db.Secti
 		return nil, res, err
 	}
 	if res.Archived {
-		sections, err := s.Store.GetTOC(specID, res.Version)
+		sections, err := s.archivedSections(specID, res, func() ([]db.Section, error) {
+			return s.Store.GetTOC(specID, res.Version)
+		})
 		return sections, res, err
 	}
 	sections, err := s.DB.GetTOC(specID, res.Version)
@@ -249,6 +255,74 @@ func (s *Source) ListImages(ctx context.Context, specID, version string) ([]db.I
 	}
 	infos, err := s.DB.ListImages(specID, res.Version)
 	return infos, res, err
+}
+
+// archivedSections runs a whole-version section read against the version
+// cache, converting an empty result into a retryable FetchInProgressError. A
+// successfully fetched version always holds at least one section
+// (pipeline.FetchVersion fails on a document that produced none), and the
+// cache writes and evicts a version's rows in one transaction, so a single
+// whole-version query reading empty proves the version was not cached at that
+// moment: a concurrent fetch's eviction dropped it between resolve and the
+// read. Answering a definitive not-found then would hide content a retry
+// re-fetches.
+func (s *Source) archivedSections(specID string, res Resolution, read func() ([]db.Section, error)) ([]db.Section, error) {
+	sections, err := read()
+	if err != nil {
+		return nil, err
+	}
+	if len(sections) == 0 {
+		return nil, &FetchInProgressError{SpecID: specID, Version: res.Version}
+	}
+	return sections, nil
+}
+
+// archivedSection reads one section (via read) from the version cache. An
+// empty per-number read is ambiguous — the version may genuinely lack the
+// section, or the read may have raced an eviction — so it is settled against
+// a whole-version TOC snapshot, which is atomic and empty exactly when the
+// version is not cached (see archivedSections). Every copy of a given version
+// holds the same sections, so the snapshot's verdict on the number is
+// definitive no matter how many evictions and re-fetches surround the reads.
+func (s *Source) archivedSection(specID string, res Resolution, number string, includeSubsections bool, read func() ([]db.Section, error)) ([]db.Section, error) {
+	sections, err := read()
+	if err != nil || len(sections) > 0 {
+		return sections, err
+	}
+
+	toc, err := s.archivedSections(specID, res, func() ([]db.Section, error) {
+		return s.Store.GetTOC(specID, res.Version)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !sectionInTOC(toc, number, includeSubsections) {
+		// A complete copy of the version lacks the section: definitively
+		// not found.
+		return nil, nil
+	}
+
+	// The snapshot holds the section, so the empty read was stale: an
+	// eviction hit between resolve and the read, and a fetch has since
+	// restored the version. Read again; if the eviction window reopens even
+	// here, tell the caller to retry rather than deny content that exists.
+	sections, err = read()
+	if err != nil || len(sections) > 0 {
+		return sections, err
+	}
+	return nil, &FetchInProgressError{SpecID: specID, Version: res.Version}
+}
+
+// sectionInTOC reports whether a TOC snapshot holds the section a read asked
+// for, mirroring the store's match: the exact number, or — with subsections —
+// any dotted descendant of it.
+func sectionInTOC(toc []db.Section, number string, includeSubsections bool) bool {
+	for _, sec := range toc {
+		if sec.Number == number || (includeSubsections && strings.HasPrefix(sec.Number, number+".")) {
+			return true
+		}
+	}
+	return false
 }
 
 // imagesStillCached distinguishes "the version holds no such images" from "the

@@ -1638,9 +1638,12 @@ func TestImageCRUD(t *testing.T) {
 		t.Errorf("image bytes length = %d, want %d", len(got.Data), len(payload))
 	}
 
-	// Missing image.
-	if _, err := d.GetImage("TS 23.501", "", "missing.png"); err == nil {
-		t.Error("expected error for missing image")
+	// A missing image is nil without an error, so callers can distinguish
+	// "no such image" from a real failure.
+	if missing, err := d.GetImage("TS 23.501", "", "missing.png"); err != nil {
+		t.Errorf("GetImage(missing) returned error: %v", err)
+	} else if missing != nil {
+		t.Errorf("GetImage(missing) = %+v, want nil", missing)
 	}
 
 	// ListImages returns only the inserted image.
