@@ -147,11 +147,7 @@
     const sectionBody = document.querySelector('.section-body');
     if (sectionBody) {
         let lightbox = null;
-        sectionBody.addEventListener('click', function (e) {
-            const img = e.target.closest('img');
-            if (!img) {
-                return;
-            }
+        const openLightbox = function (img) {
             if (!lightbox) {
                 lightbox = document.createElement('dialog');
                 lightbox.className = 'lightbox';
@@ -166,6 +162,24 @@
             large.alt = img.alt;
             lightbox.setAttribute('aria-label', img.alt || 'Figure');
             lightbox.showModal();
+        };
+        // Figures are focusable buttons so keyboard users can open the
+        // lightbox too; closing a <dialog> restores focus to the figure.
+        sectionBody.querySelectorAll('img').forEach(function (img) {
+            img.tabIndex = 0;
+            img.setAttribute('role', 'button');
+        });
+        sectionBody.addEventListener('click', function (e) {
+            const img = e.target.closest('img');
+            if (img) {
+                openLightbox(img);
+            }
+        });
+        sectionBody.addEventListener('keydown', function (e) {
+            if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('img')) {
+                e.preventDefault();
+                openLightbox(e.target);
+            }
         });
     }
 
