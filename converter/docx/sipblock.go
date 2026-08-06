@@ -223,32 +223,29 @@ func sdpExampleStart(elements []bodyElement, idx int) (label, text string, ok bo
 	return label, rest, true
 }
 
-// wrappedValueLine reports whether line can be the wrapped remainder of a
-// backslash-folded value, so a prose paragraph following a folded value is
-// not mistaken for its continuation (issue #101). Two signals mark prose: a
-// trailing period (a sentence end — the same signal sdpFieldLine relies on)
-// and a run of three or more consecutive purely-alphabetic words. Real
-// wrapped values are parameter tokens — "sprop-parameter-sets=" plus a
+// wrappedValueLine reports whether line looks like the wrapped remainder of
+// a backslash-folded value, so a prose paragraph following a folded value is
+// not mistaken for its continuation (issue #101). Rejecting prose shapes one
+// by one proved fragile ("Figure 1: message flow" has no sentence period and
+// its digit breaks any word-run test), so the check demands the positive
+// signal the genuine corpus folds share. The continuations this exemption
+// exists for are parameter-value tails — "sprop-parameter-sets=" plus a
 // base64 blob (TS 26.234 A.1), "mode-change-period=2", folded
-// 3GPP-QoE-Metrics values like "metrics={…};rate=End" — whose tokens carry
-// '=', ';', digits, hyphens or braces, so three bare words in a row never
-// occur in them, while a natural-language sentence almost always has such a
-// run even without its final period.
+// 3GPP-QoE-Metrics values like "metrics={…};rate=End" — which always carry
+// the '=' or ';' of the parameter syntax they continue, or are one unbroken
+// non-word token (a bare wrapped blob). Sentence shapes are still rejected
+// on top — a trailing period or three consecutive purely-alphabetic words —
+// so prose that quotes a parameter fragment ("The value mode-set=0 is used
+// by the UE") stays out even though it contains an '='.
 func wrappedValueLine(line string) bool {
 	line = strings.TrimSpace(line)
 	if strings.HasSuffix(line, ".") {
 		return false
 	}
+	fields := strings.Fields(line)
 	bareRun := 0
-	for _, tok := range strings.Fields(line) {
-		bare := true
-		for _, r := range tok {
-			if !unicode.IsLetter(r) {
-				bare = false
-				break
-			}
-		}
-		if !bare {
+	for _, tok := range fields {
+		if strings.ContainsFunc(tok, func(r rune) bool { return !unicode.IsLetter(r) }) {
 			bareRun = 0
 			continue
 		}
@@ -257,7 +254,10 @@ func wrappedValueLine(line string) bool {
 			return false
 		}
 	}
-	return true
+	if strings.ContainsAny(line, "=;") {
+		return true
+	}
+	return len(fields) == 1 && strings.ContainsFunc(fields[0], func(r rune) bool { return !unicode.IsLetter(r) })
 }
 
 // sipMessageLinesFrom reports whether every non-blank line of text is

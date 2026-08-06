@@ -535,11 +535,46 @@ func TestBlockContinues_BackslashContinuation(t *testing.T) {
 			want: true,
 		},
 		{
-			// Bare-word runs shorter than three, broken up by value tokens,
-			// stay accepted: only sentence-length word runs mark prose.
-			name: "value tokens interleaved with words continue",
-			text: "codec mode 0,2 change AMR",
+			name: "single parameter token continues",
+			text: "mode-change-period=2",
 			want: true,
+		},
+		{
+			// A fold split right after "=", leaving the bare blob alone on
+			// the wrapped line.
+			name: "bare wrapped blob token continues",
+			text: "Z2QAHpWQC0PaAfyQ,aOuOoA",
+			want: true,
+		},
+		{
+			// The digit-bearing "1:" token breaks any consecutive-word test,
+			// so the positive parameter-syntax requirement has to reject it.
+			name: "figure caption does not continue",
+			text: "Figure 1: message flow",
+			want: false,
+		},
+		{
+			name: "table caption does not continue",
+			text: "Table 5.1: parameters",
+			want: false,
+		},
+		{
+			name: "step prose does not continue",
+			text: "Step 2: the UE sends",
+			want: false,
+		},
+		{
+			name: "short reference prose does not continue",
+			text: "See below",
+			want: false,
+		},
+		{
+			// Prose quoting a parameter fragment carries an '=' but is still
+			// sentence-shaped: the word-run rejection applies on top of the
+			// positive signal.
+			name: "prose quoting a parameter does not continue",
+			text: "The value mode-set=0 is used by the UE",
+			want: false,
 		},
 		{
 			name: "prose after the wrapped remainder does not continue",
