@@ -1815,6 +1815,12 @@ func TestHandleCompare_RenumberedSectionDiff(t *testing.T) {
 	if !strings.Contains(body2, "7 &rarr; 5.1.1") {
 		t.Errorf("expected the header to show the renumbering, got:\n%s", body2)
 	}
+	// #154: the filter form must carry old_section as a hidden field, or
+	// resubmitting it (e.g. clicking Compare again unchanged) drops the old
+	// number and the old side wrongly resolves against the new number.
+	if !strings.Contains(body2, `<input type="hidden" name="old_section" value="7">`) {
+		t.Errorf("expected the filter form to preserve old_section as a hidden field, got:\n%s", body2)
+	}
 }
 
 // TestHandleCompare_IdenticalSection reports identity instead of an empty diff.

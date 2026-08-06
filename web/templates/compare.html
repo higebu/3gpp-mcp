@@ -8,6 +8,7 @@
         <input type="text" name="new" id="new" value="{{.NewParam}}" placeholder="database version">
         <label for="section">Section:</label>
         <input type="text" name="section" id="section" value="{{.Section}}" placeholder="whole spec">
+        {{if and .OldSection (ne .OldSection .Section)}}<input type="hidden" name="old_section" value="{{.OldSection}}">{{end}}
         <button type="submit" class="filter-btn">Compare</button>
     </form>
 
