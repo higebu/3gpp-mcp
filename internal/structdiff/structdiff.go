@@ -92,16 +92,21 @@ func Diff(oldSecs, newSecs []db.Section) Result {
 }
 
 // SectionLines joins section contents the way get_section renders them and
-// splits into diffable lines, without trailing blank-line noise.
+// splits into diffable lines, without trailing blank-line noise: sections with
+// no content contribute nothing — not even a separator — and empty input
+// yields nil rather than a phantom blank line, so an empty side diffs cleanly
+// against a non-empty one.
 func SectionLines(secs []db.Section) []string {
-	var full strings.Builder
-	for i, s := range secs {
-		if i > 0 {
-			full.WriteString("\n\n")
+	var parts []string
+	for _, s := range secs {
+		if c := strings.TrimRight(s.Content, "\n"); c != "" {
+			parts = append(parts, c)
 		}
-		full.WriteString(strings.TrimRight(s.Content, "\n"))
 	}
-	return strings.Split(full.String(), "\n")
+	if len(parts) == 0 {
+		return nil
+	}
+	return strings.Split(strings.Join(parts, "\n\n"), "\n")
 }
 
 // promoteRenumbered pairs removed and added sections whose title is unique on
