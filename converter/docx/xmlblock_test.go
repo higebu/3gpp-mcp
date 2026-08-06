@@ -382,6 +382,77 @@ func TestParseSections_XMLLongElementContentStaysFenced(t *testing.T) {
 	}
 }
 
+// Element content interleaved with child elements is still confirmed by the
+// close of the element it belongs to, so mixed content stays in one fence.
+func TestParseSections_XMLMixedContentStaysFenced(t *testing.T) {
+	elements := []bodyElement{
+		xmlTestHeading("6.6\tXML body"),
+		xmlTestPara(`<?xml version="1.0" encoding="UTF-8"?>`),
+		xmlTestPara(`<tuple id="t1">`),
+		xmlTestPara("Text content of the tuple."),
+		xmlTestPara(`<status>`),
+		xmlTestPara(`<basic>open</basic>`),
+		xmlTestPara(`</status>`),
+		xmlTestPara("More text content."),
+		xmlTestPara(`</tuple>`),
+		xmlTestPara("Trailing prose."),
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(sections))
+	}
+	content := sections[0].Content
+	if len(content) != 2 {
+		t.Fatalf("expected one fence + trailing prose, got %v", content)
+	}
+	for _, line := range []string{
+		"Text content of the tuple.", "<basic>open</basic>", "More text content.", "</tuple>",
+	} {
+		if !strings.Contains(content[0], line) {
+			t.Errorf("expected %q inside the fence, got %q", line, content[0])
+		}
+	}
+	if content[1] != "Trailing prose." {
+		t.Errorf("expected trailing prose outside the fence, got %q", content[1])
+	}
+}
+
+// Unconfirmed paragraphs must not be fenced by markup that merely turns up
+// later in the clause: an unrelated tag line does not close the element they
+// were absorbed under, so the clause text between the two stays prose.
+func TestParseSections_XMLHeldProseNotFencedByUnrelatedMarkup(t *testing.T) {
+	elements := []bodyElement{
+		xmlTestHeading("6.7\tXML body"),
+		xmlTestPara(`<?xml version="1.0" encoding="UTF-8"?>`),
+		xmlTestPara(`<presence>`),
+		xmlTestPara("This clause text must stay prose."),
+		xmlTestPara("So must this second paragraph."),
+		xmlTestPara(`<status>Open</status>`),
+		xmlTestPara("Tail prose."),
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	if len(sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(sections))
+	}
+	content := sections[0].Content
+	if len(content) != 5 {
+		t.Fatalf("expected the fence + 4 replayed paragraphs, got %v", content)
+	}
+	if !strings.HasPrefix(content[0], "```xml\n") || strings.Contains(content[0], "clause text") {
+		t.Errorf("expected a fence holding only the markup lines, got %q", content[0])
+	}
+	for i, want := range []string{
+		"This clause text must stay prose.",
+		"So must this second paragraph.",
+		"<status>Open</status>",
+		"Tail prose.",
+	} {
+		if content[i+1] != want {
+			t.Errorf("content[%d] = %q, want %q", i+1, content[i+1], want)
+		}
+	}
+}
+
 // An unterminated tag joined with the next line's comment must not fabricate
 // an element: the block stays balanced and the trailing prose stays out of the
 // fence (issue #136).

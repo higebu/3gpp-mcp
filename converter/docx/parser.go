@@ -358,13 +358,14 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 	inXML := false
 	// Paragraphs absorbed only because an element is still open (they carry no
 	// markup of their own) are held here instead of going straight into the
-	// fence: element text content is confirmed by the markup that follows it,
-	// while a block whose closing tag never comes must not turn the rest of the
-	// clause into code (issue #136). Held paragraphs join the fence as soon as
-	// another markup line arrives, and are replayed as ordinary paragraphs when
-	// the block ends before that happens.
+	// fence: a block whose closing tag never comes must not turn the rest of
+	// the clause into code (issue #136). They join the fence only once the
+	// element that was open when holding started — recorded in xmlHeldDepth —
+	// is closed, which is what proves they were its content; if the block ends
+	// first they are replayed as the ordinary paragraphs they are.
 	var xmlHeld []paragraphInfo
 	var xmlHeldStyles []string
+	xmlHeldDepth := 0
 	holdXMLLine := func(info paragraphInfo, styleName string) {
 		xmlHeld = append(xmlHeld, info)
 		xmlHeldStyles = append(xmlHeldStyles, styleName)
@@ -602,17 +603,34 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 						continue
 					case !isCodePara && len(info.Images) == 0 && matchXMLContinuation(info, &xmlTracker):
 						line := codeLineText(info)
-						if matchXMLLine(info, &xmlTracker) {
-							// A line that looks like XML by itself confirms
-							// whatever content was held before it.
-							commitXMLHeld()
+						switch {
+						case len(xmlHeld) > 0:
+							// Only the close of the element that was open when
+							// holding started proves the held paragraphs were
+							// its content. Any other line — including a tag that
+							// merely opens something new — is held as well, so
+							// document order survives and unrelated markup later
+							// in the clause cannot fence the prose in between.
+							probe := xmlTracker
+							probe.observe(line)
+							if probe.depth < xmlHeldDepth {
+								commitXMLHeld()
+								xmlBuffer = append(xmlBuffer, line)
+							} else {
+								holdXMLLine(info, styleName)
+							}
+							xmlTracker = probe
+						case matchXMLLine(info, &xmlTracker):
+							// Markup in its own right: straight into the fence.
 							xmlBuffer = append(xmlBuffer, line)
-						} else {
-							// Absorbed only on the strength of an open element:
-							// hold it until markup confirms it belongs inside.
+							xmlTracker.observe(line)
+						default:
+							// Absorbed only on the strength of an open element,
+							// so hold it until that element closes.
+							xmlHeldDepth = xmlTracker.depth
 							holdXMLLine(info, styleName)
+							xmlTracker.observe(line)
 						}
-						xmlTracker.observe(line)
 						continue
 					default:
 						// First non-matching (or code-styled) paragraph ends
