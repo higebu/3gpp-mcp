@@ -80,20 +80,32 @@ func (h *handler) renderCompare(w http.ResponseWriter, data compareData) {
 // renderCompareErrors reports version-resolution failures of a two-version
 // read. Like the compare_versions tool, both sides are resolved before
 // reporting, so a single retry can find both fetches done.
+//
+// A permanent error (anything but a fetch still in progress) is a confirmed
+// result and takes priority over an in-progress fetch on the other side:
+// showing it right away beats looping on the fetching page until that
+// unrelated fetch completes, which can take minutes.
 func (h *handler) renderCompareErrors(w http.ResponseWriter, oldErr, newErr error) bool {
 	if oldErr == nil && newErr == nil {
 		return false
 	}
 	var oldIP, newIP *tools.FetchInProgressError
-	if errors.As(oldErr, &oldIP) && errors.As(newErr, &newIP) {
-		h.renderFetching(w, oldIP)
-		return true
-	}
-	if oldErr != nil {
+	oldInProgress := errors.As(oldErr, &oldIP)
+	newInProgress := errors.As(newErr, &newIP)
+
+	if oldErr != nil && !oldInProgress {
 		h.renderVersionError(w, oldErr)
 		return true
 	}
-	h.renderVersionError(w, newErr)
+	if newErr != nil && !newInProgress {
+		h.renderVersionError(w, newErr)
+		return true
+	}
+	if oldInProgress {
+		h.renderFetching(w, oldIP)
+		return true
+	}
+	h.renderFetching(w, newIP)
 	return true
 }
 

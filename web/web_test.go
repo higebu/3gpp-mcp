@@ -1943,6 +1943,36 @@ func TestHandleCompare_UnknownNewVersion(t *testing.T) {
 	}
 }
 
+// TestHandleCompare_NewSideErrorShownImmediately pins issue #153: a permanent
+// new-side error (a version that exists nowhere) must be reported right away,
+// not hidden behind an old-side fetch that is still in progress. The old-side
+// fetcher blocks past the budget, so before the fix this would answer 202
+// (auto-refreshing "fetching" page) instead of the confirmed 404 for the
+// unknown new version.
+func TestHandleCompare_NewSideErrorShownImmediately(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	ts, src := setupVersionedServer(t, func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+		<-release
+		return cannedFetcher(ctx, sv)
+	}, nil)
+	src.Budget = 20 * time.Millisecond
+
+	resp, err := http.Get(ts.URL + "/specs/TS 23.501/compare?old=19.5.0&new=12.0.0")
+	if err != nil {
+		t.Fatalf("GET compare: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (confirmed new-side error, not the fetching page), got body:\n%s", resp.StatusCode, body)
+	}
+	if strings.Contains(body, `http-equiv="refresh"`) {
+		t.Errorf("the confirmed new-side error must not be masked by an auto-refreshing fetching page, got:\n%s", body)
+	}
+}
+
 // TestSpecHeaderTabs verifies the Document / Versions / Compare tabs are on
 // every spec-scoped page with the current page marked, and that only the
 // document page carries the contents drawer.
