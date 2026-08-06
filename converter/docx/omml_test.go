@@ -228,6 +228,33 @@ func TestOMMLToLaTeX(t *testing.T) {
 			want: "\\begin{gathered} a=1 \\\\ b=2 \\\\ c=3 \\end{gathered}",
 		},
 		{
+			// Math mode drops ordinary spaces, so "n mod 2" would otherwise
+			// render as "nmod2" (issue #140).
+			name: "spaces inside a run survive math mode",
+			xml:  `<m:oMath ` + mXMLNS + `>` + mrun("n mod 2") + `</m:oMath>`,
+			want: "n\\text{ }mod\\text{ }2",
+		},
+		{
+			name: "padding around a formula is trimmed, not protected",
+			xml:  `<m:oMath ` + mXMLNS + `>` + mrun(" x+1 ") + `</m:oMath>`,
+			want: "x+1",
+		},
+		{
+			// A padded function name still has to match the operator table.
+			name: "function name with surrounding spaces",
+			xml: `<m:oMath ` + mXMLNS + `><m:func>` +
+				`<m:fName>` + mrun(" cos ") + `</m:fName>` +
+				`<m:e>` + mrun("x") + `</m:e></m:func></m:oMath>`,
+			want: "\\cos x",
+		},
+		{
+			name: "radical with blank degree hides the degree",
+			xml: `<m:oMath ` + mXMLNS + `><m:rad>` +
+				`<m:deg>` + mrun(" ") + `</m:deg><m:e>` + mrun("x") + `</m:e>` +
+				`</m:rad></m:oMath>`,
+			want: "\\sqrt{x}",
+		},
+		{
 			name: "greek and relation symbols",
 			xml:  `<m:oMath ` + mXMLNS + `>` + mrun("α≤β") + `</m:oMath>`,
 			want: "\\alpha \\leq \\beta",
@@ -262,6 +289,10 @@ func TestEscapeMathText(t *testing.T) {
 		{"a^b", "a\\text{\\textasciicircum}b"},
 		{"$x", "\\$x"},
 		{"β≥γ", "\\beta \\geq \\gamma "},
+		// Spaces need the same treatment: math mode would collapse them and
+		// turn "n mod 2" into "nmod2".
+		{"n mod 2", "n\\text{ }mod\\text{ }2"},
+		{"a  b", "a\\text{ }\\text{ }b"},
 		{"a×b", "a\\times b"},
 	}
 	for _, tt := range tests {

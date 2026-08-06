@@ -50,7 +50,7 @@ const maxOMMLDepth = 100
 // without surrounding "$" delimiters.
 func ommlToLaTeX(d *xml.Decoder, start xml.StartElement) string {
 	root := parseOMMLNode(d, start, 0)
-	return strings.TrimSpace(renderOMML(root))
+	return trimMathSpace(renderOMML(root))
 }
 
 // parseOMMLNode builds the subtree rooted at start, reading tokens from d until
@@ -249,7 +249,7 @@ func renderRadical(n *ommlNode) string {
 	e := renderOMML(child(n, "e"))
 	degHide, present := mVal(child(n, "radPr"), "degHide")
 	deg := renderOMML(child(n, "deg"))
-	if isTrue(degHide, present) || strings.TrimSpace(deg) == "" {
+	if isTrue(degHide, present) || trimMathSpace(deg) == "" {
 		return "\\sqrt{" + e + "}"
 	}
 	return "\\sqrt[" + deg + "]{" + e + "}"
@@ -315,7 +315,7 @@ func renderMatrix(n *ommlNode) string {
 }
 
 func renderFunc(n *ommlNode) string {
-	name := strings.TrimSpace(renderOMML(child(n, "fName")))
+	name := trimMathSpace(renderOMML(child(n, "fName")))
 	arg := renderOMML(child(n, "e"))
 	var op string
 	switch name {
@@ -461,6 +461,27 @@ var mathSymbols = map[rune]string{
 	'−': "-", // U+2212 minus sign → ASCII hyphen
 }
 
+// mathSpace is the protected form of a literal space inside m:t. Math mode
+// discards ordinary spaces ("n mod 2" would render as "nmod2"), so a space has
+// to be re-emitted as a text-mode group to survive rendering (issue #140).
+// \text{ } is used rather than "\ " because it also survives whitespace
+// trimming: TrimSpace would strip the space off "\ " and leave a stray
+// backslash behind.
+const mathSpace = "\\text{ }"
+
+// trimMathSpace trims whitespace and protected spaces from both ends of
+// rendered math. Math that is nothing but spacing therefore still compares
+// equal to "", and a padded function name still matches the operator table.
+func trimMathSpace(s string) string {
+	for prev := ""; s != prev; {
+		prev = s
+		s = strings.TrimSpace(s)
+		s = strings.TrimPrefix(s, mathSpace)
+		s = strings.TrimSuffix(s, mathSpace)
+	}
+	return s
+}
+
 // escapeMathText escapes LaTeX-special literals in ordinary math text and maps
 // common Unicode symbols to LaTeX commands.
 func escapeMathText(s string) string {
@@ -494,6 +515,8 @@ func escapeMathText(s string) string {
 			b.WriteString("\\text{\\textasciitilde}")
 		case '^':
 			b.WriteString("\\text{\\textasciicircum}")
+		case ' ':
+			b.WriteString(mathSpace)
 		default:
 			b.WriteRune(r)
 		}
