@@ -990,12 +990,16 @@ var fts5Operators = map[string]bool{
 // column-filter/NOT operator), a period (e.g. spec numbers like "38.101",
 // which FTS5 otherwise rejects with "syntax error near \".\""), a stray
 // double quote, a parenthesis riding along inside the token (an unquoted
-// "(38.331" or "SMF)" is a hard syntax error), or a star (valid only as a
+// "(38.331" or "SMF)" is a hard syntax error), a star (valid only as a
 // trailing prefix operator; quoteFTS5Term keeps that meaning and quotes
 // every other placement, so a bare "*" degrades to no results instead of
-// "unknown special query").
+// "unknown special query"), a comma (only valid as the NEAR distance
+// separator, so "AMF, SMF" is a syntax error), or a colon (valid only as
+// the separator of a column filter naming a real column, which
+// classifyToken checks before falling back here: "NOTE: mentions" would
+// otherwise fail the whole match with "no such column: NOTE").
 func needsFTS5Quoting(s string) bool {
-	return strings.ContainsAny(s, `-."()*`)
+	return strings.ContainsAny(s, `-."()*,:`)
 }
 
 // quoteFTS5String wraps s in double quotes, doubling any quote already
@@ -1018,12 +1022,17 @@ func quoteFTS5Term(s string) string {
 }
 
 // classifyToken quotes a bareword or "col:val" column-filter token if it
-// contains a character FTS5 cannot parse in an unquoted bareword.
+// contains a character FTS5 cannot parse in an unquoted bareword. Only a
+// prefix naming a real column of sections_fts is treated as a column filter
+// (FTS5 matches column names case-insensitively, so the lookup does too);
+// anything else before the colon is ordinary query text and is quoted along
+// with the rest of the token, because FTS5 answers an unknown column with a
+// hard "no such column" error that fails the entire search.
 func classifyToken(token string) string {
 	if colIdx := strings.IndexByte(token, ':'); colIdx > 0 {
 		col := token[:colIdx]
 		val := token[colIdx+1:]
-		if fts5Columns[col] {
+		if fts5Columns[strings.ToLower(col)] {
 			if val == "" {
 				// "content:" with no value is a syntax error; treat the
 				// whole token as a literal search term instead.
@@ -1048,6 +1057,96 @@ func classifyToken(token string) string {
 		return quoteFTS5Term(token)
 	}
 	return token
+}
+
+// splitFTS5Tokens splits s on whitespace, keeping a double-quoted phrase —
+// including the spaces inside it — in a single token.
+func splitFTS5Tokens(s string) []string {
+	var tokens []string
+	i, n := 0, len(s)
+	for i < n {
+		if s[i] == ' ' || s[i] == '\t' || s[i] == '\n' {
+			i++
+			continue
+		}
+		j := i
+		for j < n && s[j] != ' ' && s[j] != '\t' && s[j] != '\n' {
+			if s[j] == '"' {
+				j++
+				for j < n && s[j] != '"' {
+					j++
+				}
+				if j < n {
+					j++
+				}
+				continue
+			}
+			j++
+		}
+		tokens = append(tokens, s[i:j])
+		i = j
+	}
+	return tokens
+}
+
+// isDecimal reports whether s is a non-empty run of ASCII digits.
+func isDecimal(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// quoteNEAROperand applies to one operand of a NEAR group the same quoting a
+// standalone term gets. An operand is a phrase or a bareword only: a column
+// filter belongs outside the group (content:NEAR(a b)) and AND/OR/NOT are
+// syntax errors inside it, so both are quoted as literal text.
+func quoteNEAROperand(token string) string {
+	if strings.HasPrefix(token, "\"") {
+		body, star := token, ""
+		if stem, ok := strings.CutSuffix(body, "*"); ok && len(stem) >= 2 && strings.HasSuffix(stem, "\"") {
+			body, star = stem, "*"
+		}
+		if len(body) < 2 || !strings.HasSuffix(body, "\"") {
+			// Unterminated phrase; supply the missing closing quote.
+			body += "\""
+		}
+		return body + star
+	}
+	if fts5Operators[token] || needsFTS5Quoting(token) {
+		return quoteFTS5Term(token)
+	}
+	return token
+}
+
+// sanitizeNEARGroup quotes the operands of a balanced NEAR(...) group. FTS5
+// parses a NEAR operand exactly as it parses a standalone term, so a dotted
+// or hyphenated bareword — NEAR(38.101 23.501), NEAR(IMS-AKA SMF) — is the
+// same hard syntax error there, and it rejects the whole MATCH. The group's
+// own syntax is preserved: the NEAR( ) wrapper and a trailing ", N" distance.
+func sanitizeNEARGroup(run string) string {
+	body := run[len("NEAR(") : len(run)-1]
+
+	// FTS5 allows one trailing ", N" distance and nothing else after it, so
+	// only a final all-digit tail is kept as the distance; any other comma is
+	// query text and is quoted along with its token.
+	distance := ""
+	if idx := strings.LastIndexByte(body, ','); idx >= 0 {
+		if tail := strings.TrimSpace(body[idx+1:]); isDecimal(tail) {
+			body, distance = body[:idx], ", "+tail
+		}
+	}
+
+	operands := splitFTS5Tokens(body)
+	for i, token := range operands {
+		operands[i] = quoteNEAROperand(token)
+	}
+	return "NEAR(" + strings.Join(operands, " ") + distance + ")"
 }
 
 // sanitizeFTS5Query wraps bare hyphenated or dotted tokens in double quotes
@@ -1082,6 +1181,13 @@ func sanitizeFTS5Query(query string) string {
 				// An unterminated phrase would reach FTS5 as a syntax
 				// error; supply the missing closing quote.
 				run += "\""
+			} else if j < n && query[j] == '*' {
+				// "38.101"* is a prefix phrase. Splitting the star off into
+				// its own token silently demoted it to an exact phrase
+				// match, so keep it attached. A second star is left behind
+				// as a separate token ("a"** is a syntax error).
+				run += "*"
+				j++
 			}
 			result = append(result, run)
 			i = j
@@ -1115,6 +1221,8 @@ func sanitizeFTS5Query(query string) string {
 				return r == '"' || unicode.IsLetter(r) || unicode.IsDigit(r)
 			}) {
 				run = quoteFTS5String(query[i:j])
+			} else {
+				run = sanitizeNEARGroup(run)
 			}
 			result = append(result, run)
 			i = j

@@ -424,6 +424,25 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"multi-word phrase column filter kept whole", `content:"core network"`, `content:"core network"`},
 		{"multi-word phrase column filter with trailing term", `title:"band requirements" AMF`, `title:"band requirements" AMF`},
 		{"unterminated multi-word phrase column filter repaired", `content:"core network`, `content:"core network"`},
+		{"unknown column quoted literally", "NOTE: mentions", `"NOTE:" mentions`},
+		{"unknown column with value quoted literally", "NOTE:mentions", `"NOTE:mentions"`},
+		{"leading colon quoted literally", ":foo", `":foo"`},
+		{"colon inside column filter value quoted", "content:a:b", `content:"a:b"`},
+		{"column name matched case-insensitively", "Content:band", "Content:band"},
+		{"bare comma quoted", "AMF, SMF", `"AMF," SMF`},
+		{"NEAR with dotted operands quoted", "NEAR(38.101 23.501)", `NEAR("38.101" "23.501")`},
+		{"NEAR with hyphenated operands quoted", "NEAR(IMS-AKA SMF)", `NEAR("IMS-AKA" SMF)`},
+		{"NEAR keeps distance while quoting operands", "NEAR(38.101 23.501, 10)", `NEAR("38.101" "23.501", 10)`},
+		{"unterminated NEAR quotes operands", "NEAR(38.101 23.501", `NEAR("38.101" "23.501")`},
+		{"NEAR phrase operand kept", `NEAR("core network" 38.101)`, `NEAR("core network" "38.101")`},
+		{"NEAR prefix phrase operand kept", `NEAR("core network"* AMF)`, `NEAR("core network"* AMF)`},
+		{"NEAR unterminated phrase operand repaired", `NEAR("core network 38.101)`, `NEAR("core network 38.101")`},
+		{"NEAR operator operand quoted", "NEAR(AND AMF)", `NEAR("AND" AMF)`},
+		{"NEAR extra comma quoted", "NEAR(a b, 5, 6)", `NEAR(a "b," 5, 6)`},
+		{"NEAR non-integer distance quoted", "NEAR(a b, x)", `NEAR(a "b," x)`},
+		{"phrase prefix kept attached", `"38.101"*`, `"38.101"*`},
+		{"phrase prefix kept with following term", `"38.101"* AND UE`, `"38.101"* AND UE`},
+		{"phrase with repeated stars keeps one", `"38.101"**`, `"38.101"* "*"`},
 	}
 
 	for _, tt := range tests {
@@ -473,6 +492,16 @@ func TestSanitizeFTS5Query_ExecutesWithoutError(t *testing.T) {
 		`AMF"`, `content:"band`, `content:"core network"`, `content:"core network`,
 		"38.10*", "title:38.10*", "RRCSetup-IEs*", "38.10**", "AMF -38.10*",
 		`content:"core network"*`,
+		// Issue #132: unknown column names, NEAR operands and phrase
+		// prefixes all reached FTS5 unquoted and failed the whole MATCH.
+		"NOTE: mentions", "NOTE:mentions", ":foo", "content:a:b",
+		"Content:band", "AMF, SMF", "AMF -NOTE: mentions",
+		"NEAR(38.101 23.501)", "NEAR(IMS-AKA SMF)", "NEAR(38.101 23.501, 10)",
+		"NEAR(38.101 23.501", "NEAR(AND AMF)", "NEAR(a b, 5, 6)", "NEAR(a b, x)",
+		"NEAR(NEAR(a b) c)", "NEAR(a b)*", "NEAR(content:a b)",
+		`NEAR("core network" 38.101)`, `NEAR("core network"* AMF)`,
+		`NEAR("core network 38.101)`, `NEAR(38.101 23.501) AND band`,
+		`"38.101"*`, `"38.101"**`, `"38.101"* AND UE`, `title:"38.101"*`,
 		"*", "**", "handov*",
 		"AND", "OR", "NOT", "AND AMF", "AMF AND", "AMF AND AND SMF",
 		"NEAR(a b", "NEAR(AMF UE, 5", "NEAR(", "NEAR()",
@@ -568,6 +597,99 @@ func TestSanitizeFTS5Query_PrefixWildcard(t *testing.T) {
 		if n != tt.want {
 			t.Errorf("query %q sanitized to %q and matched %d rows, want %d", tt.query, sanitized, n, tt.want)
 		}
+	}
+}
+
+// TestSanitizeFTS5Query_Issue132 checks the three ways the sanitizer used to
+// hand FTS5 a query that either failed the whole MATCH or silently searched
+// for something else: a "col:" token naming a column that does not exist, an
+// unquoted operand inside a NEAR group, and a "*" after a quoted phrase that
+// was split off into its own term (turning a prefix phrase into an exact one).
+func TestSanitizeFTS5Query_Issue132(t *testing.T) {
+	dbConn, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbConn.Close()
+	dbConn.SetMaxOpenConns(1)
+
+	if _, err := dbConn.Exec(`CREATE VIRTUAL TABLE t USING fts5(spec_id, number, title, content)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dbConn.Exec(
+		`INSERT INTO t(spec_id, number, title, content) VALUES (?, ?, ?, ?)`,
+		"TS 38.101-1", "5.1", "Band requirements",
+		"NOTE: this clause mentions 38.101 and 23.501, IMS-AKA and the SMF",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name  string
+		query string
+		want  int
+	}{
+		{"unknown column is a literal term", "NOTE: mentions", 1},
+		{"unknown column with no match", "NOTE: absent", 0},
+		{"colon inside a term", "content:a:b", 0},
+		{"known column still filters", "content:mentions", 1},
+		{"known column is case-insensitive", "Content:mentions", 1},
+		{"comma between terms", "mentions, SMF", 1},
+		{"NEAR with dotted operands", "NEAR(38.101 23.501)", 1},
+		{"NEAR with hyphenated operands", "NEAR(IMS-AKA SMF)", 1},
+		{"NEAR distance kept", "NEAR(38.101 SMF, 10)", 1},
+		{"NEAR distance is honoured", "NEAR(38.101 SMF, 1)", 0},
+		{"NEAR with phrase operand", `NEAR("this clause" 38.101)`, 1},
+		{"NEAR unterminated", "NEAR(38.101 23.501", 1},
+		{"phrase prefix matches longer term", `"38.10"*`, 1},
+		{"phrase prefix on full term", `"38.101"*`, 1},
+		{"phrase prefix that matches nothing", `"39.10"*`, 0},
+		{"phrase prefix combined with operator", `"38.10"* AND SMF`, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sanitized := sanitizeFTS5Query(tt.query)
+			var n int
+			if err := dbConn.QueryRow(`SELECT count(*) FROM t WHERE t MATCH ?`, sanitized).Scan(&n); err != nil {
+				t.Fatalf("query %q sanitized to %q, which FTS5 rejected: %v", tt.query, sanitized, err)
+			}
+			if n != tt.want {
+				t.Errorf("query %q sanitized to %q and matched %d rows, want %d", tt.query, sanitized, n, tt.want)
+			}
+		})
+	}
+}
+
+// TestSearch_QuerySyntax runs the same queries end to end through Search, so a
+// sanitizer change that FTS5 accepts but that loses hits still shows up.
+func TestSearch_QuerySyntax(t *testing.T) {
+	d := setupTestDB(t)
+
+	for _, tt := range []struct {
+		name    string
+		query   string
+		wantMin int
+	}{
+		{"unknown column term", "NOTE: registration", 0},
+		{"unknown column term that matches", "IMS: registration", 1},
+		{"known column filter", "title:Registration", 1},
+		{"NEAR over hyphenated and dotted terms", "NEAR(IMS-AKA 33.203, 10)", 1},
+		{"NEAR that matches nothing", "NEAR(IMS-AKA 38.101, 10)", 0},
+		{"phrase prefix", `"23.50"*`, 1},
+		{"phrase prefix with operator", `"23.50"* AND architecture`, 1},
+		{"comma separated terms", "IMS-AKA, registration", 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			page, err := d.Search(t.Context(), tt.query, nil, 10, 0)
+			if err != nil {
+				t.Fatalf("Search(%q) failed: %v", tt.query, err)
+			}
+			if len(page.Results) < tt.wantMin {
+				t.Errorf("Search(%q) returned %d results, want at least %d", tt.query, len(page.Results), tt.wantMin)
+			}
+			if tt.wantMin == 0 && len(page.Results) != 0 {
+				t.Errorf("Search(%q) returned %d results, want 0", tt.query, len(page.Results))
+			}
+		})
 	}
 }
 
