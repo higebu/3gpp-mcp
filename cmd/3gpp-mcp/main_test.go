@@ -196,6 +196,23 @@ func TestCmdCompletion_ListsEveryCommand(t *testing.T) {
 	}
 }
 
+// TestLookupCommand pins registry dispatch: primary names and aliases both
+// resolve, unknown names do not.
+func TestLookupCommand(t *testing.T) {
+	if c := lookupCommand("build"); c == nil || c.name != "build" {
+		t.Errorf("lookupCommand(build) = %v", c)
+	}
+	if c := lookupCommand("pipeline"); c == nil || c.name != "build" {
+		t.Errorf("expected alias pipeline to resolve to build, got %v", c)
+	}
+	if c := lookupCommand("convert-dir"); c == nil || c.name != "import-dir" {
+		t.Errorf("expected alias convert-dir to resolve to import-dir, got %v", c)
+	}
+	if c := lookupCommand("no-such-command"); c != nil {
+		t.Errorf("expected nil for unknown command, got %v", c)
+	}
+}
+
 // TestCmdCompletion_EscapesQuotes pins the quoting of descriptions containing
 // apostrophes ("Print a specification's ..."): unescaped, the apostrophe
 // would terminate the script's single-quoted string and corrupt it.

@@ -39,6 +39,16 @@ func TestRunListSpecs(t *testing.T) {
 	if !strings.Contains(out.String(), "TS 29.510") || strings.Contains(out.String(), "TS 23.501") {
 		t.Errorf("series filter not applied:\n%s", out.String())
 	}
+
+	// A negative limit is reserved for internal callers and clamps to the
+	// default rather than dumping the whole table.
+	out.Reset()
+	if err := runListSpecs(t.Context(), &out, d, "", "", -1, 0); err != nil {
+		t.Fatalf("runListSpecs negative limit: %v", err)
+	}
+	if !strings.Contains(out.String(), `"limit": 20`) {
+		t.Errorf("expected default limit for a negative input, got:\n%s", out.String())
+	}
 }
 
 func TestRunSearch(t *testing.T) {
@@ -308,6 +318,10 @@ func TestRunGetOpenAPI(t *testing.T) {
 	if !strings.Contains(out.String(), "/nf-instances") {
 		t.Errorf("path filter not applied:\n%s", out.String())
 	}
+
+	if err := runGetOpenAPI(t.Context(), &out, d, "TS 29.510", "Nope_API", "", ""); err == nil {
+		t.Error("expected error for unknown API name")
+	}
 }
 
 // seedTestImage inserts one PNG image row for TS 23.501.
@@ -508,6 +522,23 @@ func TestWaitForFetch(t *testing.T) {
 		t.Errorf("expected one announcement, got %d: %s", got, errOut.String())
 	}
 
+	// An image fetch names the images, not the spec text.
+	errOut.Reset()
+	calls = 0
+	err = waitForFetch(t.Context(), &errOut, func() error {
+		calls++
+		if calls == 1 {
+			return &tools.FetchInProgressError{SpecID: "TS 23.501", Version: "17.9.0", Images: true}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("waitForFetch images: %v", err)
+	}
+	if !strings.Contains(errOut.String(), "images for TS 23.501") {
+		t.Errorf("expected images announcement, got: %s", errOut.String())
+	}
+
 	// A terminal error passes through unchanged.
 	sentinel := errors.New("boom")
 	if err := waitForFetch(t.Context(), &errOut, func() error { return sentinel }); !errors.Is(err, sentinel) {
@@ -609,6 +640,106 @@ func TestCmdGetImage_ToFile(t *testing.T) {
 	}
 	if !bytes.Equal(written, data) {
 		t.Error("file bytes differ from stored image")
+	}
+}
+
+// TestCmdListVersions_Offline drives list-versions through its full cmd
+// layer with the archive unreachable: the database version still lists, the
+// incomplete-listing warning goes to stderr, and no version cache is created.
+func TestCmdListVersions_Offline(t *testing.T) {
+	path := seedDBPath(t)
+	cacheRoot := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheRoot)
+	orig := queryClient
+	queryClient = &http.Client{Transport: errorRoundTripper{}}
+	t.Cleanup(func() { queryClient = orig })
+
+	out := captureStdout(t, func() {
+		cmdListVersions([]string{"-db", path, "TS 23.501"})
+	})
+	if !strings.Contains(out, "18.6.0") {
+		t.Errorf("expected the database version in the listing, got:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(cacheRoot, "3gpp-mcp", "versions.db")); err == nil {
+		t.Error("list-versions must not create the version cache")
+	}
+}
+
+// TestOpenSource_Store covers the store-open path shared by all version-aware
+// commands.
+func TestOpenSource_Store(t *testing.T) {
+	path := seedDBPath(t)
+	qf := &queryFlags{db: path, versionCache: filepath.Join(t.TempDir(), "versions.db"), versionCacheMB: 1}
+	src, cleanup, err := qf.openSource(true)
+	if err != nil {
+		t.Fatalf("openSource: %v", err)
+	}
+	defer cleanup()
+	if src.Store == nil {
+		t.Error("expected the version store to be opened")
+	}
+
+	// -no-fetch skips the store even when a version was requested.
+	qf.noFetch = true
+	src, cleanup, err = qf.openSource(true)
+	if err != nil {
+		t.Fatalf("openSource with -no-fetch: %v", err)
+	}
+	defer cleanup()
+	if src.Store != nil {
+		t.Error("expected no store with -no-fetch")
+	}
+}
+
+// TestFamilyPartsHint covers the split-file family hint shared by the query
+// commands: a family ID never resolves to content of its own, so the parts
+// listing is the useful answer.
+func TestFamilyPartsHint(t *testing.T) {
+	d := testutil.SetupTestDB(t)
+	if err := d.ExecScript(`
+INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+    ('TS 38.101-1', '18.0.0', 'i00', 'NR UE radio Part 1', '18', '38'),
+    ('TS 38.101-2', '18.0.0', 'i00', 'NR UE radio Part 2', '18', '38');`); err != nil {
+		t.Fatalf("seed family parts: %v", err)
+	}
+	src := tools.NewSource(d)
+	var out, errOut bytes.Buffer
+
+	err := runGetTOC(t.Context(), &out, &errOut, src, "TS 38.101", "")
+	if err == nil || !strings.Contains(err.Error(), "multiple parts") {
+		t.Errorf("expected family parts hint from get-toc, got: %v", err)
+	}
+	err = runGetSection(t.Context(), &out, &errOut, src, "TS 38.101", "1", "", false)
+	if err == nil || !strings.Contains(err.Error(), "multiple parts") {
+		t.Errorf("expected family parts hint from get-section, got: %v", err)
+	}
+	err = runListImages(t.Context(), &out, &errOut, src, "TS 38.101", "")
+	if err == nil || !strings.Contains(err.Error(), "multiple parts") {
+		t.Errorf("expected family parts hint from list-images, got: %v", err)
+	}
+}
+
+// TestRunGetImage_NotConverted pins the EMF passthrough: unlike the MCP tool,
+// the bytes are still written, with a conversion note on stderr.
+func TestRunGetImage_NotConverted(t *testing.T) {
+	d := testutil.SetupTestDB(t)
+	src := tools.NewSource(d)
+	data := []byte{0x01, 0x00, 0x00, 0x00}
+	if err := d.Exec(
+		"INSERT INTO images (spec_id, version, name, mime_type, data, llm_readable) VALUES (?, ?, ?, ?, ?, 0)",
+		"TS 23.501", "18.6.0", "figure2.emf", "image/emf", data,
+	); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if err := runGetImage(t.Context(), &out, &errOut, src, "TS 23.501", "figure2.emf", "", ""); err != nil {
+		t.Fatalf("runGetImage: %v", err)
+	}
+	if !bytes.Equal(out.Bytes(), data) {
+		t.Error("expected raw EMF bytes on stdout")
+	}
+	if !strings.Contains(errOut.String(), "--convert-image") {
+		t.Errorf("expected conversion note on stderr, got: %s", errOut.String())
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -51,6 +52,12 @@ func addQueryFlags(fs *flag.FlagSet, withFetch bool) *queryFlags {
 	return qf
 }
 
+// queryClient is the HTTP client the query commands hand to their Source for
+// archive access. It is nil in production — the pipeline then falls back to
+// its default client, same as serve — and is swapped in tests to keep them
+// off the network, mirroring newHTTPClient.
+var queryClient *http.Client
+
 // openSource opens the database read-only and wraps it in a Source. The
 // version cache — which creates its directory and a SQLite file on open — is
 // only touched when needStore is set, so plain database queries stay pure
@@ -63,6 +70,7 @@ func (qf *queryFlags) openSource(needStore bool) (*tools.Source, func(), error) 
 	}
 	src := tools.NewSource(d)
 	src.Budget = qf.fetchBudget
+	src.Client = queryClient
 	cleanup := func() { _ = d.Close() }
 	if needStore && !qf.noFetch {
 		store, err := versionstore.Open(versionstore.Options{
