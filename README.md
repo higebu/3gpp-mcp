@@ -350,7 +350,7 @@ old output until rebuilt with `3gpp-mcp build` (or `make build-db`).
 
 ### Separate databases per release
 
-You can create separate databases for different 3GPP releases and register them as independent MCP servers. This is useful when you need to compare behavior across releases or work on a specific release.
+For spot comparisons across releases, `compare_versions` and the `version` parameter need no extra setup. Building a separate database per release still pays off when you work against one release continuously: full-text `search`, `get_references` and OpenAPI definitions only cover the version baked into the database, so a release-specific database gives you all three for that release, with no on-demand downloads.
 
 ```bash
 # Build databases for different releases
