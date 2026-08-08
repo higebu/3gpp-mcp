@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,9 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/higebu/3gpp-mcp/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/db"
 	"github.com/higebu/3gpp-mcp/internal/testutil"
 	"github.com/higebu/3gpp-mcp/tools"
+	"github.com/higebu/3gpp-mcp/versionstore"
 )
 
 func TestRunListSpecs(t *testing.T) {
@@ -740,6 +744,61 @@ func TestRunGetImage_NotConverted(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "--convert-image") {
 		t.Errorf("expected conversion note on stderr, got: %s", errOut.String())
+	}
+}
+
+// TestRunGetImage_ArchivedHint covers the archived branch of the EMF note: an
+// image fetched on demand is converted at fetch time, so the note must point
+// at LibreOffice, not at rebuilding the prebuilt database.
+func TestRunGetImage_ArchivedHint(t *testing.T) {
+	origPoll := fetchPollInterval
+	fetchPollInterval = 10 * time.Millisecond
+	defer func() { fetchPollInterval = origPoll }()
+
+	d := testutil.SetupTestDB(t)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `<a href="23501-j50.zip">23501-j50.zip</a>`+"\n")
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	data := []byte{0x01, 0x00, 0x00, 0x00}
+	store, err := versionstore.Open(versionstore.Options{
+		Path:       filepath.Join(t.TempDir(), "versions.db"),
+		LimitBytes: -1,
+		Fetcher: func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.Section, error) {
+			return db.Spec{Title: "System architecture", Release: "19", Series: "23"},
+				[]db.Section{{Number: "5.1", Title: "General", Level: 2, Content: "Archived text."}}, nil
+		},
+		ImageFetcher: func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error) {
+			return []db.Image{{Name: "figure3.emf", MIMEType: "image/emf", Data: data, LLMReadable: false}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("versionstore.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	src := tools.NewSource(d)
+	src.Store = store
+	src.Client = &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+	src.UseCache = false
+	src.Budget = 5 * time.Second
+
+	var out, errOut bytes.Buffer
+	if err := runGetImage(t.Context(), &out, &errOut, src, "TS 23.501", "figure3.emf", "19.5.0", ""); err != nil {
+		t.Fatalf("runGetImage archived: %v", err)
+	}
+	if !bytes.Equal(out.Bytes(), data) {
+		t.Error("expected raw image bytes on stdout")
+	}
+	if !strings.Contains(errOut.String(), "LibreOffice") {
+		t.Errorf("expected the fetch-time LibreOffice hint for an archived image, got: %s", errOut.String())
+	}
+	if strings.Contains(errOut.String(), "--convert-image") {
+		t.Errorf("the rebuild hint does not apply to archived versions, got: %s", errOut.String())
 	}
 }
 
