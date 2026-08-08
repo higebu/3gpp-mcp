@@ -217,7 +217,17 @@ func FetchSpecZips(ctx context.Context, client *http.Client, specID string, useC
 	log.Printf("Found %d versions for %s", len(entries), specDir)
 
 	if useCache {
-		if err := SaveCache(cacheKey, entries); err != nil {
+		// A listing with no .zip in it is not a real answer: every spec
+		// directory in the archive holds at least one version, so an empty
+		// result means the response was unusable (an error page served as
+		// 200, a redirect, a truncated body). Caching it would pin the spec
+		// to "no versions available" for the whole TTL, because an empty
+		// cache file counts as a hit and never triggers a re-fetch.
+		// FetchSpecList refuses to cache its own partial results for the
+		// same reason.
+		if len(entries) == 0 {
+			log.Printf("warning: no .zip entries found for %s; not caching this empty listing", specDir)
+		} else if err := SaveCache(cacheKey, entries); err != nil {
 			log.Printf("warning: failed to save cache: %v", err)
 		}
 	}

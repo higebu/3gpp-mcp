@@ -281,6 +281,52 @@ func TestFetchSpecZips(t *testing.T) {
 	})
 }
 
+// TestFetchSpecZips_EmptyListingNotCached verifies that a directory listing
+// which yields no .zip at all is never written to the cache. An empty cache
+// file is a hit rather than a miss (see TestLoadCache_EmptyResultIsCacheHit),
+// so caching one unusable response -- an error page served as 200, a redirect,
+// a truncated body -- would pin the spec to "no versions available" for the
+// full 24h TTL with no way to re-fetch.
+func TestFetchSpecZips_EmptyListingNotCached(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	var zipsServed bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/23_series/23.501/", func(w http.ResponseWriter, r *http.Request) {
+		if !zipsServed {
+			// First response looks fine to HTTP but lists no archive.
+			fmt.Fprint(w, `<a href="index.html">index.html</a>`+"\n")
+			return
+		}
+		fmt.Fprint(w, `<a href="23501-k10.zip">23501-k10.zip</a>`+"\n")
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	client := &http.Client{
+		Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL},
+	}
+
+	entries, err := FetchSpecZips(context.Background(), client, "23.501", true)
+	if err != nil {
+		t.Fatalf("FetchSpecZips: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("got %d entries, want 0: %v", len(entries), entries)
+	}
+
+	// The next call must reach the server again instead of replaying the
+	// empty result from cache.
+	zipsServed = true
+	entries, err = FetchSpecZips(context.Background(), client, "23.501", true)
+	if err != nil {
+		t.Fatalf("FetchSpecZips (retry): %v", err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("got %d entries, want 1: the empty listing must not have been cached", len(entries))
+	}
+}
+
 // TestFetchSpecList_Race exercises FetchSpecList with a mock 3GPP directory
 // structure to detect race conditions in the two-phase goroutine fan-out.
 func TestFetchSpecList_Race(t *testing.T) {
