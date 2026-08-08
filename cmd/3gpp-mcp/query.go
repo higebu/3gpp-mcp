@@ -133,8 +133,10 @@ var fetchPollInterval = 5 * time.Second
 
 // waitForFetch runs call and, unlike the MCP tools which tell the caller to
 // retry, polls until an on-demand fetch finishes: a CLI user expects the
-// command to come back with the content. The underlying fetch is deduplicated
-// and detached, so re-calling is cheap and Ctrl-C does not discard the work.
+// command to come back with the content. Re-calling is cheap — the
+// versionstore deduplicates the fetch within this process. Ctrl-C exits the
+// process and abandons the fetch with it; the next invocation restarts it
+// from scratch.
 func waitForFetch(ctx context.Context, errOut io.Writer, call func() error) error {
 	announced := false
 	for {
@@ -698,12 +700,13 @@ func cmdGetImage(args []string) {
 
 func runGetImage(ctx context.Context, out, errOut io.Writer, src *tools.Source, specID, name, version, output string) error {
 	var img *db.Image
+	var res tools.Resolution
 	err := waitForFetch(ctx, errOut, func() error {
 		var err error
 		// A missing image comes back as a nil image, not an error, so an error
 		// here is a real failure (bad version, failed download, database
 		// trouble) and must not be labeled "not found".
-		img, _, err = src.GetImage(ctx, specID, version, name)
+		img, res, err = src.GetImage(ctx, specID, version, name)
 		return err
 	})
 	if err != nil {
@@ -713,9 +716,15 @@ func runGetImage(ctx context.Context, out, errOut io.Writer, src *tools.Source, 
 		return fmt.Errorf("image %q not found in %s", name, specID)
 	}
 	// Unlike the MCP tool, an EMF/WMF image is still written out — a shell
-	// user can open it — with a note about the conversion option.
+	// user can open it — with a note about the conversion option. An archived
+	// version's images are converted at fetch time, not at build time, so
+	// rebuilding the database would not help there.
 	if !img.LLMReadable {
-		fmt.Fprintf(errOut, "NOTE: %s is in %s format; rebuild with --convert-image to store PNG instead.\n", img.Name, img.MIMEType)
+		hint := "rebuild with --convert-image to store PNG instead."
+		if res.Archived {
+			hint = "converting it needs LibreOffice (soffice), which was missing or failed when this version's images were fetched."
+		}
+		fmt.Fprintf(errOut, "NOTE: %s is in %s format; %s\n", img.Name, img.MIMEType, hint)
 	}
 	fmt.Fprintf(errOut, "%s (%s, %d bytes)\n", img.Name, img.MIMEType, len(img.Data))
 	if output != "" {
