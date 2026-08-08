@@ -557,9 +557,13 @@ func TestDownloadSpecs_ConvertDocDuplicateBasenameWithinOneSpec(t *testing.T) {
 // counted OK, and the scratch-dir cleanup that follows would delete the only
 // copy of the file that had ever existed -- leaving an "OK" spec with no
 // .docx anywhere. This plants a directory at the exact path the converted
-// .docx would publish to, which makes os.Rename fail deterministically
-// (renaming a regular file onto a directory always errors), and checks the
-// spec stays DOC_ONLY with the scratch file gone rather than orphaned.
+// .docx would publish to, which makes the publish fail deterministically
+// (neither linking nor renaming a regular file onto a directory can succeed),
+// and checks the spec stays DOC_ONLY.
+//
+// The scratch directory is kept in that case: an unpublishable converted file
+// is the only copy that exists, so deleting it destroys the conversion's only
+// result on any publish failure that is not the deliberate no-clobber skip.
 func TestDownloadSpecs_ConvertDocPublishFailureStaysDocOnly(t *testing.T) {
 	writeFakeLibreOffice(t)
 
@@ -593,10 +597,82 @@ func TestDownloadSpecs_ConvertDocPublishFailureStaysDocOnly(t *testing.T) {
 	}
 
 	// The blocking directory must still be the untouched directory it was:
-	// the rename must not have partially clobbered it.
+	// the publish must not have partially clobbered it.
 	info, err := os.Stat(filepath.Join(outputDir, "blocked.docx"))
 	if err != nil || !info.IsDir() {
 		t.Errorf("blocked.docx = %v (isDir=%v), want the original directory intact", err, info != nil && info.IsDir())
+	}
+
+	// The converted file is unreachable from outputDir, so the scratch copy
+	// is all there is; the cleanup must have left it alone.
+	if !scratchDocxExists(t, outputDir, "blocked.docx") {
+		t.Error("converted blocked.docx not found in any scratch dir: an unpublishable conversion result must not be deleted")
+	}
+}
+
+// scratchDocxExists reports whether a converted file with the given basename
+// survives in one of the .doc-convert-* scratch directories under outputDir.
+func scratchDocxExists(t *testing.T, outputDir, name string) bool {
+	t.Helper()
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		t.Fatalf("read outputDir: %v", err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), ".doc-convert-") {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(outputDir, e.Name(), name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// TestDownloadSpecs_ConvertDocRepeatRunPromotes verifies that running the same
+// download --convert-doc into the same persistent --output-dir twice reports
+// the spec OK both times. The publish step deliberately refuses to clobber an
+// existing destination, but the file a second run collides with is the first
+// run's own converted output: treating that as a lost race left the spec
+// reported DOC_ONLY forever, with the freshly converted .docx thrown away by
+// the scratch-dir cleanup even though the spec was fully converted on disk.
+func TestDownloadSpecs_ConvertDocRepeatRunPromotes(t *testing.T) {
+	writeFakeLibreOffice(t)
+
+	zip := makeZipWithFiles(t, map[string][]byte{
+		"specJ.doc": []byte("j1"),
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Write(zip)
+	}))
+	defer ts.Close()
+
+	specs := []*SpecVersion{
+		{SpecID: "TS 88.010", URL: ts.URL + "/j.zip"},
+	}
+
+	outputDir := t.TempDir()
+	if stats := DownloadSpecs(context.Background(), &http.Client{}, specs, outputDir, 2, true, 10*time.Second); stats["OK"] != 1 {
+		t.Fatalf("first run: OK = %d, want 1", stats["OK"])
+	}
+
+	// A converted .doc must not be left in the shared _doc_files directory:
+	// it is converted wholesale on every run, so a finished file left behind
+	// is re-run through LibreOffice on every later invocation.
+	if _, err := os.Stat(filepath.Join(outputDir, "_doc_files", "specJ.doc")); !os.IsNotExist(err) {
+		t.Errorf("specJ.doc stat = %v, want it removed after a successful conversion", err)
+	}
+
+	stats := DownloadSpecs(context.Background(), &http.Client{}, specs, outputDir, 2, true, 10*time.Second)
+	if stats["OK"] != 1 {
+		t.Errorf("second run: OK = %d, want 1 (the existing .docx is this spec's own output from the first run)", stats["OK"])
+	}
+	if stats["DOC_ONLY"] != 0 {
+		t.Errorf("second run: DOC_ONLY = %d, want 0", stats["DOC_ONLY"])
+	}
+	if scratchDocxExists(t, outputDir, "specJ.docx") {
+		t.Error("scratch dir kept after a successful publish: the converted file did reach outputDir")
 	}
 }
 
