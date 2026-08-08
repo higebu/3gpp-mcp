@@ -128,6 +128,83 @@ func TestRunCompareVersions_SameVersion(t *testing.T) {
 	}
 }
 
+// seedSecondVersion inserts a second version of TS 23.501 directly. The build
+// pipeline keeps one version per spec, but resolve serves any version the
+// specs table has, so this exercises the comparison paths without network.
+func seedSecondVersion(t *testing.T, d *db.DB) {
+	t.Helper()
+	if err := d.ExecScript(`
+INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+    ('TS 23.501', '18.7.0', 'i70', 'System architecture for the 5G System (5GS)', '18', '23');
+INSERT INTO sections (spec_id, version, number, title, level, parent_number, content) VALUES
+    ('TS 23.501', '18.7.0', '1', 'Scope', 1, NULL, '# 1 Scope
+This document defines the system architecture.'),
+    ('TS 23.501', '18.7.0', '5', 'Architecture', 1, NULL, '# 5 Architecture
+The 5G system architecture is defined here, with amendments.'),
+    ('TS 23.501', '18.7.0', '5.2', 'Additions', 2, '5', '## 5.2 Additions
+A section that only the newer version has.');
+`); err != nil {
+		t.Fatalf("seed second version: %v", err)
+	}
+}
+
+func TestRunCompareVersions_Structural(t *testing.T) {
+	d := testutil.SetupTestDB(t)
+	seedSecondVersion(t, d)
+	src := tools.NewSource(d)
+	var out, errOut bytes.Buffer
+	err := runCompareVersions(t.Context(), &out, &errOut, src, "TS 23.501", "18.6.0", "18.7.0", "", false, 0)
+	if err != nil {
+		t.Fatalf("runCompareVersions: %v", err)
+	}
+	for _, want := range []string{"[Compare: TS 23.501", "Structural changes", "5.2 Additions"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("expected output to contain %q, got:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestRunCompareVersions_SectionDiff(t *testing.T) {
+	d := testutil.SetupTestDB(t)
+	seedSecondVersion(t, d)
+	src := tools.NewSource(d)
+
+	// Changed content renders as a unified diff.
+	var out, errOut bytes.Buffer
+	err := runCompareVersions(t.Context(), &out, &errOut, src, "TS 23.501", "18.6.0", "18.7.0", "5", false, 0)
+	if err != nil {
+		t.Fatalf("runCompareVersions section: %v", err)
+	}
+	for _, want := range []string{"Section 5", "with amendments"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("expected diff output to contain %q, got:\n%s", want, out.String())
+		}
+	}
+
+	// Identical content is an informational answer.
+	out.Reset()
+	if err := runCompareVersions(t.Context(), &out, &errOut, src, "TS 23.501", "18.6.0", "18.7.0", "1", false, 0); err != nil {
+		t.Fatalf("runCompareVersions identical section: %v", err)
+	}
+	if !strings.Contains(out.String(), "identical between") {
+		t.Errorf("expected identical notice, got:\n%s", out.String())
+	}
+
+	// A section on one side only is an informational answer, not a failure.
+	out.Reset()
+	if err := runCompareVersions(t.Context(), &out, &errOut, src, "TS 23.501", "18.6.0", "18.7.0", "5.2", false, 0); err != nil {
+		t.Fatalf("runCompareVersions one-sided section: %v", err)
+	}
+	if !strings.Contains(out.String(), "does not exist in") {
+		t.Errorf("expected one-sided notice, got:\n%s", out.String())
+	}
+
+	// A section in neither version is an error.
+	if err := runCompareVersions(t.Context(), &out, &errOut, src, "TS 23.501", "18.6.0", "18.7.0", "9.9", false, 0); err == nil {
+		t.Error("expected error for a section absent from both versions")
+	}
+}
+
 func TestRunCompareVersions_UnavailableVersion(t *testing.T) {
 	d := testutil.SetupTestDB(t)
 	src := tools.NewSource(d) // no Store: archived versions cannot be fetched
@@ -345,6 +422,11 @@ func TestRunListVersions_ArchiveUnreachable(t *testing.T) {
 	if !strings.Contains(errOut.String(), "WARNING") {
 		t.Errorf("expected archive warning on stderr, got: %s", errOut.String())
 	}
+
+	// A spec with no versions anywhere reports the archive failure.
+	if err := runListVersions(t.Context(), &out, &errOut, src, "TS 99.999"); err == nil {
+		t.Error("expected error for a spec with no versions")
+	}
 }
 
 // TestCompareSides_CacheThrash covers the eviction-livelock guard: when two
@@ -440,6 +522,107 @@ func TestWaitForFetch(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}
+
+// seedDBPath writes the standard schema and seed data to a closed database
+// file, so cmd-level tests can open it by path the way a user would.
+func seedDBPath(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.OpenReadWrite(path)
+	if err != nil {
+		t.Fatalf("open seed db: %v", err)
+	}
+	if err := d.ExecScript(db.Schema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	if err := d.ExecScript(testutil.SeedData); err != nil {
+		t.Fatalf("seed data: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close seed db: %v", err)
+	}
+	return path
+}
+
+// TestCmdQueryCommands drives each query command through its full cmd layer —
+// flag parsing, source setup, output — the way a shell invocation would.
+func TestCmdQueryCommands(t *testing.T) {
+	path := seedDBPath(t)
+	// Keep any cache access inside the test's sandbox.
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	tests := []struct {
+		name string
+		run  func()
+		want []string
+	}{
+		{"list-specs", func() { cmdListSpecs([]string{"-db", path, "-series", "23"}) }, []string{"TS 23.501", "total_count"}},
+		{"search", func() { cmdSearch([]string{"-db", path, "-limit", "2", "architecture"}) }, []string{"results", "total_count"}},
+		{"search multi-arg", func() { cmdSearch([]string{"-db", path, "architecture", "AND", "5G"}) }, []string{"total_count"}},
+		{"get-toc", func() { cmdGetTOC([]string{"-db", path, "TS 23.501"}) }, []string{"Table of Contents", "5.1.1 Overview"}},
+		{"get-section", func() { cmdGetSection([]string{"-db", path, "-subsections", "TS 23.501", "5.1"}) }, []string{"[Source: TS 23.501", "Overview of the architecture"}},
+		{"compare-versions", func() {
+			cmdCompareVersions([]string{"-db", path, "-no-fetch", "-old", "18.6.0", "TS 23.501"})
+		}, []string{"nothing to compare"}},
+		{"get-references", func() { cmdGetReferences([]string{"-db", path, "TS 24.229", "5.1"}) }, []string{"TS 23.228"}},
+		{"list-openapi", func() { cmdListOpenAPI([]string{"-db", path}) }, []string{"Nnrf_NFManagement"}},
+		{"get-openapi", func() { cmdGetOpenAPI([]string{"-db", path, "-schema", "NFProfile", "TS 29.510", "Nnrf_NFManagement"}) }, []string{"NFProfile"}},
+		{"list-images", func() { cmdListImages([]string{"-db", path, "TS 23.501"}) }, []string{`"count"`}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := captureStdout(t, tt.run)
+			for _, want := range tt.want {
+				if !strings.Contains(out, want) {
+					t.Errorf("expected output to contain %q, got:\n%s", want, out)
+				}
+			}
+		})
+	}
+}
+
+// TestCmdGetImage_ToFile covers the -o path through the cmd layer.
+func TestCmdGetImage_ToFile(t *testing.T) {
+	path := seedDBPath(t)
+	d, err := db.OpenReadWrite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte{0x89, 'P', 'N', 'G'}
+	if err := d.Exec(
+		"INSERT INTO images (spec_id, version, name, mime_type, data, llm_readable) VALUES (?, ?, ?, ?, ?, 1)",
+		"TS 23.501", "18.6.0", "figure1.png", "image/png", data,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	outFile := filepath.Join(t.TempDir(), "img.png")
+	cmdGetImage([]string{"-db", path, "-o", outFile, "TS 23.501", "figure1.png"})
+	written, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read output file: %v", err)
+	}
+	if !bytes.Equal(written, data) {
+		t.Error("file bytes differ from stored image")
+	}
+}
+
+// TestCmdQuery_ExitsOnError pins the failure path: a query command against a
+// missing database reports the error and exits 1.
+func TestCmdQuery_ExitsOnError(t *testing.T) {
+	orig := exit
+	code := 0
+	exit = func(c int) { code = c }
+	t.Cleanup(func() { exit = orig })
+
+	cmdListSpecs([]string{"-db", filepath.Join(t.TempDir(), "missing.db")})
+	if code != 1 {
+		t.Errorf("expected exit code 1, got %d", code)
 	}
 }
 
