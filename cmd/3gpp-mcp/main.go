@@ -85,36 +85,84 @@ func buildHTTPHandler(src *tools.Source, s *mcp.Server, bearerToken string, enab
 	return mux
 }
 
+// command is one CLI subcommand. The dispatch in main, the usage line and
+// the shell completion scripts are all generated from the commands table, so
+// registering a command there is the only step needed to expose it everywhere.
+type command struct {
+	name    string
+	aliases []string
+	desc    string
+	run     func(args []string)
+}
+
+// commands is ordered for the usage line and completion listings. Aliases are
+// dispatchable but stay out of both. Populated in init because cmdCompletion
+// renders this very table, which a composite literal would turn into an
+// initialization cycle.
+var commands []command
+
+func init() {
+	commands = []command{
+		{name: "serve", desc: "Start the MCP server", run: cmdServe},
+		{name: "build", aliases: []string{"pipeline"}, desc: "Download and import specs into database", run: cmdPipeline},
+		{name: "download", desc: "Download spec files from 3GPP archive", run: cmdDownload},
+		{name: "import", aliases: []string{"convert"}, desc: "Import a single DOCX file into database", run: cmdConvert},
+		{name: "import-dir", aliases: []string{"convert-dir"}, desc: "Import a directory of DOCX files into database", run: cmdConvertDir},
+		{name: "update", desc: "Update database to latest spec versions", run: cmdUpdate},
+		{name: "list-specs", desc: "List specifications in the database", run: cmdListSpecs},
+		{name: "list-versions", desc: "List versions of a specification", run: cmdListVersions},
+		{name: "get-toc", desc: "Print a specification's table of contents", run: cmdGetTOC},
+		{name: "get-section", desc: "Print a section's markdown content", run: cmdGetSection},
+		{name: "compare-versions", desc: "Compare two versions of a specification", run: cmdCompareVersions},
+		{name: "search", desc: "Full-text search across specifications", run: cmdSearch},
+		{name: "list-openapi", desc: "List OpenAPI definitions", run: cmdListOpenAPI},
+		{name: "get-openapi", desc: "Print an OpenAPI definition", run: cmdGetOpenAPI},
+		{name: "get-references", desc: "Print cross-references as JSON", run: cmdGetReferences},
+		{name: "list-images", desc: "List embedded images in a specification", run: cmdListImages},
+		{name: "get-image", desc: "Write an embedded image to a file or stdout", run: cmdGetImage},
+		{name: "completion", desc: "Generate shell completion scripts", run: cmdCompletion},
+	}
+}
+
+// commandNames returns the primary command names in table order.
+func commandNames() []string {
+	names := make([]string, len(commands))
+	for i, c := range commands {
+		names[i] = c.name
+	}
+	return names
+}
+
+// lookupCommand resolves a primary name or alias to its command.
+func lookupCommand(name string) *command {
+	for i := range commands {
+		c := &commands[i]
+		if c.name == name {
+			return c
+		}
+		for _, a := range c.aliases {
+			if a == name {
+				return c
+			}
+		}
+	}
+	return nil
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: 3gpp-mcp <command> [options]")
-		fmt.Fprintln(os.Stderr, "Commands: serve, build, download, import, import-dir, update, completion")
+		fmt.Fprintln(os.Stderr, "Commands: "+strings.Join(commandNames(), ", "))
 		os.Exit(1)
 	}
 
-	command := os.Args[1]
-	args := os.Args[2:]
-
-	switch command {
-	case "serve":
-		cmdServe(args)
-	case "download":
-		cmdDownload(args)
-	case "import", "convert":
-		cmdConvert(args)
-	case "import-dir", "convert-dir":
-		cmdConvertDir(args)
-	case "build", "pipeline":
-		cmdPipeline(args)
-	case "update":
-		cmdUpdate(args)
-	case "completion":
-		cmdCompletion(args)
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", command)
-		fmt.Fprintln(os.Stderr, "Commands: serve, build, download, import, import-dir, update, completion")
+	c := lookupCommand(os.Args[1])
+	if c == nil {
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", os.Args[1])
+		fmt.Fprintln(os.Stderr, "Commands: "+strings.Join(commandNames(), ", "))
 		os.Exit(1)
 	}
+	c.run(os.Args[2:])
 }
 
 // defaultVersionCacheMB reads the version cache limit from the environment,
@@ -590,48 +638,32 @@ func cmdCompletion(args []string) {
 		fmt.Fprintln(os.Stderr, "Usage: 3gpp-mcp completion <bash|zsh|fish>")
 		os.Exit(1)
 	}
+	names := strings.Join(commandNames(), " ")
 	switch args[0] {
 	case "bash":
-		fmt.Print(`# bash completion for 3gpp-mcp
+		fmt.Printf(`# bash completion for 3gpp-mcp
 _3gpp_mcp() {
-    local commands="serve build download import import-dir update completion"
+    local commands="%s"
     local cur="${COMP_WORDS[COMP_CWORD]}"
     if [[ ${COMP_CWORD} -eq 1 ]]; then
         COMPREPLY=($(compgen -W "${commands}" -- "${cur}"))
     fi
 }
 complete -F _3gpp_mcp 3gpp-mcp
-`)
+`, names)
 	case "zsh":
-		fmt.Print(`#compdef 3gpp-mcp
-
-_3gpp_mcp() {
-    local -a commands
-    commands=(
-        'serve:Start the MCP server'
-        'build:Download and import specs into database'
-        'download:Download spec files from 3GPP archive'
-        'import:Import a single DOCX file into database'
-        'import-dir:Import a directory of DOCX files into database'
-        'update:Update database to latest spec versions'
-        'completion:Generate shell completion scripts'
-    )
-    _describe '3gpp-mcp command' commands
-}
-
-_3gpp_mcp
-`)
+		fmt.Print("#compdef 3gpp-mcp\n\n_3gpp_mcp() {\n    local -a commands\n    commands=(\n")
+		for _, c := range commands {
+			// A description with an apostrophe would terminate the quoted
+			// string and corrupt the script.
+			fmt.Printf("        '%s:%s'\n", c.name, strings.ReplaceAll(c.desc, "'", `'\''`))
+		}
+		fmt.Print("    )\n    _describe '3gpp-mcp command' commands\n}\n\n_3gpp_mcp\n")
 	case "fish":
-		fmt.Print(`# fish completion for 3gpp-mcp
-complete -c 3gpp-mcp -f
-complete -c 3gpp-mcp -n "not __fish_seen_subcommand_from serve build download import import-dir update completion" -a serve      -d 'Start the MCP server'
-complete -c 3gpp-mcp -n "not __fish_seen_subcommand_from serve build download import import-dir update completion" -a build      -d 'Download and import specs into database'
-complete -c 3gpp-mcp -n "not __fish_seen_subcommand_from serve build download import import-dir update completion" -a download   -d 'Download spec files from 3GPP archive'
-complete -c 3gpp-mcp -n "not __fish_seen_subcommand_from serve build download import import-dir update completion" -a import     -d 'Import a single DOCX file into database'
-complete -c 3gpp-mcp -n "not __fish_seen_subcommand_from serve build download import import-dir update completion" -a import-dir -d 'Import a directory of DOCX files into database'
-complete -c 3gpp-mcp -n "not __fish_seen_subcommand_from serve build download import import-dir update completion" -a update     -d 'Update database to latest spec versions'
-complete -c 3gpp-mcp -n "not __fish_seen_subcommand_from serve build download import import-dir update completion" -a completion -d 'Generate shell completion scripts'
-`)
+		fmt.Print("# fish completion for 3gpp-mcp\ncomplete -c 3gpp-mcp -f\n")
+		for _, c := range commands {
+			fmt.Printf("complete -c 3gpp-mcp -n \"not __fish_seen_subcommand_from %s\" -a %s -d '%s'\n", names, c.name, strings.ReplaceAll(c.desc, "'", `\'`))
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown shell: %s (supported: bash, zsh, fish)\n", args[0])
 		os.Exit(1)

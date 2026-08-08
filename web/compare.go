@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/higebu/3gpp-mcp/db"
-	"github.com/higebu/3gpp-mcp/internal/specver"
 	"github.com/higebu/3gpp-mcp/internal/structdiff"
 	"github.com/higebu/3gpp-mcp/internal/textdiff"
 	"github.com/higebu/3gpp-mcp/tools"
@@ -207,7 +206,7 @@ func (h *handler) compareNotice(ctx context.Context, specID string, oldSecs, new
 		}
 		return fmt.Sprintf("No sections found for %s in either version.", specID)
 	}
-	oldV, newV := resolvedVersion(oldSecs, oldRes), resolvedVersion(newSecs, newRes)
+	oldV, newV := tools.ResolvedVersion(oldSecs, oldRes), tools.ResolvedVersion(newSecs, newRes)
 	if oldV != "" && oldV == newV {
 		return fmt.Sprintf("Both versions resolve to v%s; nothing to compare.", oldV)
 	}
@@ -217,49 +216,14 @@ func (h *handler) compareNotice(ctx context.Context, specID string, oldSecs, new
 // fillLabels derives the display labels and the version each side's section
 // links must carry.
 func (d *compareData) fillLabels(oldSecs []db.Section, oldRes tools.Resolution, newSecs []db.Section, newRes tools.Resolution) {
-	d.OldLabel = versionLabel(oldSecs, oldRes)
-	d.NewLabel = versionLabel(newSecs, newRes)
+	d.OldLabel = tools.VersionLabel(oldSecs, oldRes)
+	d.NewLabel = tools.VersionLabel(newSecs, newRes)
 	if oldRes.Archived {
 		d.OldURLVersion = oldRes.Version
 	}
 	if newRes.Archived {
 		d.NewURLVersion = newRes.Version
 	}
-}
-
-// resolvedVersion names the version a request landed on. The Resolution knows
-// it except on the database default path, where the rows do.
-func resolvedVersion(secs []db.Section, res tools.Resolution) string {
-	if res.Version != "" {
-		return res.Version
-	}
-	if len(secs) > 0 {
-		return secs[0].Version
-	}
-	return ""
-}
-
-// versionLabel renders one side of a comparison, e.g. "v17.9.0 (Rel-17,
-// archived)", matching the compare_versions tool's wording.
-func versionLabel(secs []db.Section, res tools.Resolution) string {
-	name := resolvedVersion(secs, res)
-	if name == "" {
-		return "the database version"
-	}
-	label := "v" + name
-	var notes []string
-	if len(secs) > 0 {
-		if rel := specver.ReleaseLabel(secs[0].Release); rel != "" {
-			notes = append(notes, rel)
-		}
-	}
-	if res.Archived {
-		notes = append(notes, "archived")
-	}
-	if len(notes) > 0 {
-		label += " (" + strings.Join(notes, ", ") + ")"
-	}
-	return label
 }
 
 // classifyDiff splits unified-diff text into display lines. Every line of

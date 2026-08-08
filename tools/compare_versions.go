@@ -65,8 +65,15 @@ func compareStructure(ctx context.Context, src *Source, input CompareVersionsInp
 	}
 
 	d := structdiff.Diff(oldSecs, newSecs)
-	oldLabel, newLabel := versionLabel(oldSecs, oldRes), versionLabel(newSecs, newRes)
+	oldLabel, newLabel := VersionLabel(oldSecs, oldRes), VersionLabel(newSecs, newRes)
 
+	header := CompareHeader(input.SpecID, "", oldLabel, newLabel)
+	return prependLine(header, paginateText(RenderStructuralSummary(d, oldLabel, newLabel), input.Offset, input.MaxLines, input.MaxChars))
+}
+
+// RenderStructuralSummary renders a structural diff between two versions as
+// Markdown. It is shared with the CLI's compare-versions command.
+func RenderStructuralSummary(d structdiff.Result, oldLabel, newLabel string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Structural changes: %d sections in %s, %d in %s\n", d.OldCount, oldLabel, d.NewCount, newLabel)
 	fmt.Fprintf(&sb, "Added: %d | Removed: %d | Renumbered: %d | Title changed: %d | Content changed: %d | Unchanged: %d\n",
@@ -106,9 +113,7 @@ func compareStructure(ctx context.Context, src *Source, input CompareVersionsInp
 		}
 		sb.WriteString("\nUse compare_versions with section_number to see the text diff of a changed section.")
 	}
-
-	header := compareHeader(input.SpecID, "", oldLabel, newLabel)
-	return prependLine(header, paginateText(sb.String(), input.Offset, input.MaxLines, input.MaxChars))
+	return sb.String()
 }
 
 // compareSection renders a unified diff of one section's text.
@@ -125,7 +130,7 @@ func compareSection(ctx context.Context, src *Source, input CompareVersionsInput
 		return r
 	}
 
-	oldLabel, newLabel := versionLabel(oldSecs, oldRes), versionLabel(newSecs, newRes)
+	oldLabel, newLabel := VersionLabel(oldSecs, oldRes), VersionLabel(newSecs, newRes)
 
 	// A section present on one side only is an informational answer, not a
 	// failure: numbers move between releases, and the structural summary or
@@ -145,7 +150,7 @@ func compareSection(ctx context.Context, src *Source, input CompareVersionsInput
 		ctxLines = defaultContextLines
 	}
 
-	header := compareHeader(input.SpecID, input.SectionNumber, oldLabel, newLabel)
+	header := CompareHeader(input.SpecID, input.SectionNumber, oldLabel, newLabel)
 	diff := textdiff.UnifiedKeyed(structdiff.SectionLines(oldSecs), structdiff.SectionLines(newSecs), ctxLines, structdiff.NormalizeImageRefs)
 	if diff == "" {
 		msg := fmt.Sprintf("Section %s is identical between %s and %s.", input.SectionNumber, oldLabel, newLabel)
@@ -204,16 +209,16 @@ func checkComparable(ctx context.Context, src *Source, specID, sectionNumber str
 		}
 		return errorResult(fmt.Sprintf("no sections found for %s in either version", specID))
 	}
-	oldV, newV := resolvedVersion(oldSecs, oldRes), resolvedVersion(newSecs, newRes)
+	oldV, newV := ResolvedVersion(oldSecs, oldRes), ResolvedVersion(newSecs, newRes)
 	if oldV != "" && oldV == newV {
 		return textResult(fmt.Sprintf("%s: old_version and new_version both resolve to v%s; nothing to compare.", specID, oldV))
 	}
 	return nil
 }
 
-// resolvedVersion names the version a request landed on. The Resolution knows
+// ResolvedVersion names the version a request landed on. The Resolution knows
 // it except on the database default path, where the rows do.
-func resolvedVersion(secs []db.Section, res Resolution) string {
+func ResolvedVersion(secs []db.Section, res Resolution) string {
 	if res.Version != "" {
 		return res.Version
 	}
@@ -223,9 +228,9 @@ func resolvedVersion(secs []db.Section, res Resolution) string {
 	return ""
 }
 
-// versionLabel renders one side of a comparison, e.g. "v17.9.0 (Rel-17, archived)".
-func versionLabel(secs []db.Section, res Resolution) string {
-	name := resolvedVersion(secs, res)
+// VersionLabel renders one side of a comparison, e.g. "v17.9.0 (Rel-17, archived)".
+func VersionLabel(secs []db.Section, res Resolution) string {
+	name := ResolvedVersion(secs, res)
 	if name == "" {
 		return "the database version"
 	}
@@ -245,8 +250,9 @@ func versionLabel(secs []db.Section, res Resolution) string {
 	return label
 }
 
-// compareHeader builds the provenance line prepended to every page.
-func compareHeader(specID, sectionNumber, oldLabel, newLabel string) string {
+// CompareHeader builds the provenance line prepended to every page of a
+// comparison. It is shared with the CLI's compare-versions command.
+func CompareHeader(specID, sectionNumber, oldLabel, newLabel string) string {
 	h := "[Compare: " + specID
 	if sectionNumber != "" {
 		h += " — Section " + sectionNumber

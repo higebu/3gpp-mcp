@@ -203,6 +203,10 @@ To run on Cloud Run, see `cloudbuild.yaml` (build + push + deploy) and
 
 ## MCP Tools
 
+Every tool below also has a CLI twin (`list_specs` → `3gpp-mcp list-specs`, and
+so on) for shell use and scripting — see the
+[query commands](#query-commands) in the Command Reference.
+
 ### Browsing specifications
 
 | Tool | Description | Key Parameters |
@@ -506,6 +510,153 @@ Update specifications in the database to latest versions.
 | `--no-cache` | Disable the spec list cache | `false` |
 | `--scrape-workers` | Concurrency for scraping spec listings (`0` = auto) | `0` |
 | `--timeout` | HTTP timeout | `30s` |
+
+### Query commands
+
+The query commands mirror the MCP read tools 1:1, so the database can be
+inspected and scripted from a shell without an MCP client:
+
+```bash
+3gpp-mcp search --db data/3gpp.db --limit 3 "AMF AND authentication" | jq '.results[].section_number'
+3gpp-mcp get-section --db data/3gpp.db "TS 23.501" 5.15.2 | less
+```
+
+Conventions shared by all of them:
+
+- Flags must come before positional arguments.
+- JSON results print to stdout indented and unpaginated — pipe to `jq`,
+  `head` or `less`. Warnings and progress notes go to stderr, so stdout stays
+  parseable.
+- Commands that accept `--version` (and `compare-versions`) take the same
+  version forms as the MCP tools (`15.8.0`, `f80`, `Rel-15`, `latest`) and
+  wait for an on-demand download to finish instead of asking you to retry;
+  interrupt with Ctrl-C. They share `serve`'s fetch flags: `--no-fetch`,
+  `--version-cache`, `--version-cache-mb`, `--fetch-budget`. Queries that name
+  no version never create the version cache (`list-versions` reads an existing
+  cache to report `cached` availability, but will not create one).
+- Every command takes `--db` (default `3gpp.db`).
+
+### `list-specs`
+
+List specifications in the database as JSON.
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--series` | Filter by series number (e.g. `23`) | |
+| `--query` | Filter specs whose ID starts with this text (e.g. `38.21`) | |
+| `--limit` | Maximum number of results | `20` |
+| `--offset` | Number of results to skip | `0` |
+
+### `list-versions`
+
+List the versions of a specification as JSON, newest first, with each
+version's availability (`database`, `cached` or `archive`). An unreachable
+archive is reported as a warning on stderr and the listing continues with the
+cache and the database.
+
+Usage: `3gpp-mcp list-versions [flags] <spec-id>`
+
+### `get-toc`
+
+Print a specification's table of contents as Markdown.
+
+Usage: `3gpp-mcp get-toc [--version <v>] [fetch flags] <spec-id>`
+
+### `get-section`
+
+Print a section's Markdown content, prefixed with the same provenance header
+as the MCP tool, without pagination.
+
+Usage: `3gpp-mcp get-section [flags] <spec-id> <section-number>`
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--version` | Specification version to read | the database version |
+| `--subsections` | Include all subsections | `false` |
+
+### `compare-versions`
+
+Compare two versions of a specification: a structural summary, or a unified
+diff of one section with `--section`.
+
+Usage: `3gpp-mcp compare-versions [flags] --old <version> <spec-id>`
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--old` | Older version to compare from (required) | |
+| `--new` | Newer version to compare to | the database version |
+| `--section` | Compare only this section's text as a unified diff | |
+| `--subsections` | With `--section`: include subsections in the diff | `false` |
+| `--context` | Unchanged lines shown around each change in a section diff (`0` shows none) | `3` |
+
+### `search`
+
+Full-text search; results print as JSON. The query supports the same FTS5
+syntax as the MCP tool, and everything after the flags is joined into one
+query, so multi-term queries need no quoting: `3gpp-mcp search AMF AND authentication`.
+
+Usage: `3gpp-mcp search [flags] <query>`
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--specs` | Limit search to specific specs, comma-separated (e.g. `"TS 23.501,TS 23.502"`) | |
+| `--limit` | Maximum number of results per page (max 200) | `10` |
+| `--offset` | Number of results to skip | `0` |
+
+### `list-openapi`
+
+List OpenAPI definitions as JSON.
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--spec` | Filter by specification ID (e.g. `TS 29.510`) | |
+
+### `get-openapi`
+
+Print an OpenAPI definition as YAML, without pagination.
+
+Usage: `3gpp-mcp get-openapi [flags] <spec-id> <api-name>`
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--path` | Filter by API path (e.g. `/nf-instances`) | |
+| `--schema` | Filter by schema name (e.g. `NFProfile`) | |
+
+### `get-references`
+
+Print cross-references as JSON. Unlike the MCP tool, the full result is
+printed with no 500-row cap — that cap protects an LLM context window, which
+a shell pipeline does not have.
+
+Usage: `3gpp-mcp get-references [flags] <spec-id> [section-number]`
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--direction` | `outgoing`: references FROM a section (section number required); `incoming`: references TO this spec | `outgoing` |
+| `--subsections` | Include subsections when collecting outgoing references | `false` |
+
+### `list-images`
+
+List a specification's embedded images as JSON (`{images, count}`).
+
+Usage: `3gpp-mcp list-images [--version <v>] [fetch flags] <spec-id>`
+
+### `get-image`
+
+Write an embedded image's raw bytes to a file or stdout. Name, MIME type and
+size go to stderr. Unlike the MCP tool, an EMF/WMF image is still written —
+a shell user can open it — with a conversion note on stderr.
+
+Usage: `3gpp-mcp get-image [flags] <spec-id> <image-name>`
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--version` | Specification version to read | the database version |
+| `-o` | Write the image to this file | stdout |
+
+```bash
+3gpp-mcp get-image --db data/3gpp.db -o figure1.png "TS 23.501" image1.png
+```
 
 ### `completion`
 

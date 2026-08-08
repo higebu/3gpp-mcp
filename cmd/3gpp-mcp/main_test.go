@@ -178,6 +178,55 @@ func TestCmdCompletion(t *testing.T) {
 	}
 }
 
+// TestCmdCompletion_ListsEveryCommand pins the completion scripts to the
+// command registry: a command registered in commands must appear in all three
+// shells' output.
+func TestCmdCompletion_ListsEveryCommand(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh", "fish"} {
+		t.Run(shell, func(t *testing.T) {
+			out := captureStdout(t, func() {
+				cmdCompletion([]string{shell})
+			})
+			for _, c := range commands {
+				if !strings.Contains(out, c.name) {
+					t.Errorf("%s completion is missing command %q", shell, c.name)
+				}
+			}
+		})
+	}
+}
+
+// TestLookupCommand pins registry dispatch: primary names and aliases both
+// resolve, unknown names do not.
+func TestLookupCommand(t *testing.T) {
+	if c := lookupCommand("build"); c == nil || c.name != "build" {
+		t.Errorf("lookupCommand(build) = %v", c)
+	}
+	if c := lookupCommand("pipeline"); c == nil || c.name != "build" {
+		t.Errorf("expected alias pipeline to resolve to build, got %v", c)
+	}
+	if c := lookupCommand("convert-dir"); c == nil || c.name != "import-dir" {
+		t.Errorf("expected alias convert-dir to resolve to import-dir, got %v", c)
+	}
+	if c := lookupCommand("no-such-command"); c != nil {
+		t.Errorf("expected nil for unknown command, got %v", c)
+	}
+}
+
+// TestCmdCompletion_EscapesQuotes pins the quoting of descriptions containing
+// apostrophes ("Print a specification's ..."): unescaped, the apostrophe
+// would terminate the script's single-quoted string and corrupt it.
+func TestCmdCompletion_EscapesQuotes(t *testing.T) {
+	zsh := captureStdout(t, func() { cmdCompletion([]string{"zsh"}) })
+	if !strings.Contains(zsh, `specification'\''s`) {
+		t.Errorf("zsh completion does not escape apostrophes:\n%s", zsh)
+	}
+	fish := captureStdout(t, func() { cmdCompletion([]string{"fish"}) })
+	if !strings.Contains(fish, `specification\'s`) {
+		t.Errorf("fish completion does not escape apostrophes:\n%s", fish)
+	}
+}
+
 // projectRoot returns the path to the repository root by walking up from the
 // current test file location.
 func projectRoot(t *testing.T) string {

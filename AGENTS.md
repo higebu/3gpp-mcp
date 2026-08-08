@@ -21,7 +21,10 @@ make web                  # HTTP server with web viewer at :8080
 
 ## Package Map
 
-- `cmd/3gpp-mcp/` — CLI entry point (serve, build, download, import, import-dir, update)
+- `cmd/3gpp-mcp/` — CLI entry point (serve, build, download, import, import-dir,
+  update, plus query subcommands mirroring the MCP read tools 1:1 in `query.go`).
+  New subcommands register in the `commands` slice in `main.go` — dispatch, the
+  usage line and the shell completion scripts are all generated from it
 - `converter/docx/` — DOCX → Markdown parser; `converter/pipeline/` — streaming download + convert worker pool
 - `db/` — SQLite schema, queries, FTS5
 - `versionstore/` — on-demand cache of spec versions not in the prebuilt database
