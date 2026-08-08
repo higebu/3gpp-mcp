@@ -196,6 +196,20 @@ func TestCmdCompletion_ListsEveryCommand(t *testing.T) {
 	}
 }
 
+// TestCmdCompletion_EscapesQuotes pins the quoting of descriptions containing
+// apostrophes ("Print a specification's ..."): unescaped, the apostrophe
+// would terminate the script's single-quoted string and corrupt it.
+func TestCmdCompletion_EscapesQuotes(t *testing.T) {
+	zsh := captureStdout(t, func() { cmdCompletion([]string{"zsh"}) })
+	if !strings.Contains(zsh, `specification'\''s`) {
+		t.Errorf("zsh completion does not escape apostrophes:\n%s", zsh)
+	}
+	fish := captureStdout(t, func() { cmdCompletion([]string{"fish"}) })
+	if !strings.Contains(fish, `specification\'s`) {
+		t.Errorf("fish completion does not escape apostrophes:\n%s", fish)
+	}
+}
+
 // projectRoot returns the path to the repository root by walking up from the
 // current test file location.
 func projectRoot(t *testing.T) string {

@@ -654,13 +654,15 @@ complete -F _3gpp_mcp 3gpp-mcp
 	case "zsh":
 		fmt.Print("#compdef 3gpp-mcp\n\n_3gpp_mcp() {\n    local -a commands\n    commands=(\n")
 		for _, c := range commands {
-			fmt.Printf("        '%s:%s'\n", c.name, c.desc)
+			// A description with an apostrophe would terminate the quoted
+			// string and corrupt the script.
+			fmt.Printf("        '%s:%s'\n", c.name, strings.ReplaceAll(c.desc, "'", `'\''`))
 		}
 		fmt.Print("    )\n    _describe '3gpp-mcp command' commands\n}\n\n_3gpp_mcp\n")
 	case "fish":
 		fmt.Print("# fish completion for 3gpp-mcp\ncomplete -c 3gpp-mcp -f\n")
 		for _, c := range commands {
-			fmt.Printf("complete -c 3gpp-mcp -n \"not __fish_seen_subcommand_from %s\" -a %s -d '%s'\n", names, c.name, c.desc)
+			fmt.Printf("complete -c 3gpp-mcp -n \"not __fish_seen_subcommand_from %s\" -a %s -d '%s'\n", names, c.name, strings.ReplaceAll(c.desc, "'", `\'`))
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown shell: %s (supported: bash, zsh, fish)\n", args[0])
