@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/higebu/3gpp-mcp/db"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -36,17 +37,22 @@ func HandleGetTOC(src *Source) func(ctx context.Context, req *mcp.CallToolReques
 			return errorResult(fmt.Sprintf("no sections found for %s%s", input.SpecID, versionSuffix(res))), nil, nil
 		}
 
-		var sb strings.Builder
-		fmt.Fprintf(&sb, "# %s - Table of Contents\n\n", specLabel(sections[0]))
-		for _, s := range sections {
-			indent := strings.Repeat("  ", s.Level-1)
-			if s.Number != "" && s.Number != s.Title {
-				fmt.Fprintf(&sb, "%s- %s %s\n", indent, s.Number, s.Title)
-			} else {
-				fmt.Fprintf(&sb, "%s- %s\n", indent, s.Title)
-			}
-		}
-
-		return textResult(sb.String()), nil, nil
+		return textResult(RenderTOC(sections)), nil, nil
 	}
+}
+
+// RenderTOC renders a specification's sections as a Markdown table of
+// contents. It is shared with the CLI's get-toc command.
+func RenderTOC(sections []db.Section) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# %s - Table of Contents\n\n", specLabel(sections[0]))
+	for _, s := range sections {
+		indent := strings.Repeat("  ", s.Level-1)
+		if s.Number != "" && s.Number != s.Title {
+			fmt.Fprintf(&sb, "%s- %s %s\n", indent, s.Number, s.Title)
+		} else {
+			fmt.Fprintf(&sb, "%s- %s\n", indent, s.Title)
+		}
+	}
+	return sb.String()
 }

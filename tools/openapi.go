@@ -75,7 +75,7 @@ func HandleGetOpenAPI(d *db.DB) func(ctx context.Context, req *mcp.CallToolReque
 
 		// If path or schema filter is specified, parse YAML and extract
 		if input.Path != "" || input.Schema != "" {
-			filtered, err := filterOpenAPI(content, input.Path, input.Schema)
+			filtered, err := FilterOpenAPI(content, input.Path, input.Schema)
 			if err != nil {
 				return errorResult(fmt.Sprintf("failed to filter openapi: %v", err)), nil, nil
 			}
@@ -86,7 +86,9 @@ func HandleGetOpenAPI(d *db.DB) func(ctx context.Context, req *mcp.CallToolReque
 	}
 }
 
-func filterOpenAPI(content, pathFilter, schemaFilter string) (string, error) {
+// FilterOpenAPI narrows an OpenAPI YAML document to a path and/or schema
+// subset. It is shared with the CLI's get-openapi command.
+func FilterOpenAPI(content, pathFilter, schemaFilter string) (string, error) {
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
 		return "", fmt.Errorf("parse yaml: %w", err)
