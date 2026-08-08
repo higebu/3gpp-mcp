@@ -366,16 +366,27 @@ const defaultCLIContextLines = 3
 // compareSides reads both versions' sections in one poll round so both
 // on-demand fetches run concurrently, mirroring the MCP handler.
 func compareSides(ctx context.Context, errOut io.Writer, read func() (oldErr, newErr error)) error {
+	var oldSeen, newSeen bool
 	return waitForFetch(ctx, errOut, func() error {
 		oldErr, newErr := read()
+		var ip *tools.FetchInProgressError
+		oldFetching, newFetching := errors.As(oldErr, &ip), errors.As(newErr, &ip)
+		// A side that had its content and is fetching again lost it to the
+		// other side's fetch: the cache cannot hold both versions (a version
+		// cache limit of 0 keeps only the newest), so polling on would
+		// alternate the two downloads forever.
+		if (oldSeen && oldFetching) || (newSeen && newFetching) {
+			return fmt.Errorf("the version cache cannot hold both versions at once; raise -version-cache-mb")
+		}
+		oldSeen = oldSeen || oldErr == nil
+		newSeen = newSeen || newErr == nil
 		// Report the in-progress side so waitForFetch keeps polling even when
 		// the other side already failed for good; the terminal error surfaces
 		// once its partner's fetch has finished.
-		var ip *tools.FetchInProgressError
-		if errors.As(oldErr, &ip) {
+		if oldFetching {
 			return oldErr
 		}
-		if errors.As(newErr, &ip) {
+		if newFetching {
 			return newErr
 		}
 		if oldErr != nil {
@@ -700,8 +711,13 @@ func runGetImage(ctx context.Context, out, errOut io.Writer, src *tools.Source, 
 	}
 	fmt.Fprintf(errOut, "%s (%s, %d bytes)\n", img.Name, img.MIMEType, len(img.Data))
 	if output != "" {
-		return os.WriteFile(output, img.Data, 0o644)
+		if err := os.WriteFile(output, img.Data, 0o644); err != nil {
+			return fmt.Errorf("write image: %w", err)
+		}
+		return nil
 	}
-	_, err = out.Write(img.Data)
-	return err
+	if _, err := out.Write(img.Data); err != nil {
+		return fmt.Errorf("write image: %w", err)
+	}
+	return nil
 }

@@ -347,6 +347,44 @@ func TestRunListVersions_ArchiveUnreachable(t *testing.T) {
 	}
 }
 
+// TestCompareSides_CacheThrash covers the eviction-livelock guard: when two
+// archived versions evict each other from a cache too small to hold both,
+// each poll would re-download the side the previous poll evicted, forever.
+func TestCompareSides_CacheThrash(t *testing.T) {
+	orig := fetchPollInterval
+	fetchPollInterval = time.Millisecond
+	defer func() { fetchPollInterval = orig }()
+
+	inProgress := &tools.FetchInProgressError{SpecID: "TS 23.501", Version: "17.9.0"}
+	round := 0
+	var errOut bytes.Buffer
+	// Round 1: old ready, new fetching. Round 2: fetching new evicted old.
+	err := compareSides(t.Context(), &errOut, func() (error, error) {
+		round++
+		if round == 1 {
+			return nil, inProgress
+		}
+		return inProgress, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot hold both versions") {
+		t.Errorf("expected cache-thrash error, got: %v", err)
+	}
+
+	// A side that simply finishes while the other is still fetching must not
+	// trip the guard.
+	round = 0
+	err = compareSides(t.Context(), &errOut, func() (error, error) {
+		round++
+		if round < 3 {
+			return nil, inProgress
+		}
+		return nil, nil
+	})
+	if err != nil {
+		t.Errorf("expected success once both sides are ready, got: %v", err)
+	}
+}
+
 // TestVersionCacheExists covers the guard that keeps list-versions from
 // creating a cache that is not already on disk.
 func TestVersionCacheExists(t *testing.T) {
