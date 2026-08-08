@@ -347,6 +347,22 @@ func TestRunListVersions_ArchiveUnreachable(t *testing.T) {
 	}
 }
 
+// TestVersionCacheExists covers the guard that keeps list-versions from
+// creating a cache that is not already on disk.
+func TestVersionCacheExists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "versions.db")
+	qf := &queryFlags{versionCache: path}
+	if qf.versionCacheExists() {
+		t.Error("expected false for a missing cache file")
+	}
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !qf.versionCacheExists() {
+		t.Error("expected true once the cache file exists")
+	}
+}
+
 func TestWaitForFetch(t *testing.T) {
 	orig := fetchPollInterval
 	fetchPollInterval = time.Millisecond

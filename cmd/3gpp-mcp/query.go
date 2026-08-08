@@ -82,6 +82,20 @@ func (qf *queryFlags) openSource(needStore bool) (*tools.Source, func(), error) 
 	return src, cleanup, nil
 }
 
+// versionCacheExists reports whether the on-demand version cache file is
+// already on disk, so a command can read it without ever creating one.
+func (qf *queryFlags) versionCacheExists() bool {
+	path := qf.versionCache
+	if path == "" {
+		var err error
+		if path, err = versionstore.DefaultPath(); err != nil {
+			return false
+		}
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // requireArgs exits with usage unless exactly want positional arguments were
 // given. flag stops parsing at the first non-flag argument, so options placed
 // after a positional would be silently ignored — the reminder mirrors import's.
@@ -201,9 +215,10 @@ func cmdListVersions(args []string) {
 	requireArgs(fs, 1, "3gpp-mcp list-versions [options] <spec-id>")
 
 	runQuery("list-versions", func(ctx context.Context) error {
-		// The store is opened so cached versions are reported; without it the
-		// listing still covers the database and the archive.
-		src, cleanup, err := qf.openSource(true)
+		// An existing cache is read so its versions are reported as cached,
+		// but a listing must not create one; without the store the listing
+		// still covers the database and the archive.
+		src, cleanup, err := qf.openSource(qf.versionCacheExists())
 		if err != nil {
 			return err
 		}
@@ -413,7 +428,7 @@ func runCompareVersions(ctx context.Context, out, errOut io.Writer, src *tools.S
 	oldLabel, newLabel := tools.VersionLabel(oldSecs, oldRes), tools.VersionLabel(newSecs, newRes)
 
 	if section == "" {
-		fmt.Fprintf(out, "[Compare: %s — %s → %s]\n", specID, oldLabel, newLabel)
+		fmt.Fprintln(out, tools.CompareHeader(specID, "", oldLabel, newLabel))
 		_, err := io.WriteString(out, tools.RenderStructuralSummary(structdiff.Diff(oldSecs, newSecs), oldLabel, newLabel))
 		if err == nil {
 			_, err = io.WriteString(out, "\n")
@@ -433,10 +448,12 @@ func runCompareVersions(ctx context.Context, out, errOut io.Writer, src *tools.S
 		return nil
 	}
 
-	if contextLines <= 0 {
+	// Only a negative value falls back to the default: an explicit -context 0
+	// is a deliberate request for a diff with no context lines.
+	if contextLines < 0 {
 		contextLines = defaultCLIContextLines
 	}
-	fmt.Fprintf(out, "[Compare: %s — Section %s — %s → %s]\n", specID, section, oldLabel, newLabel)
+	fmt.Fprintln(out, tools.CompareHeader(specID, section, oldLabel, newLabel))
 	diff := textdiff.UnifiedKeyed(structdiff.SectionLines(oldSecs), structdiff.SectionLines(newSecs), contextLines, structdiff.NormalizeImageRefs)
 	if diff == "" {
 		fmt.Fprintf(out, "Section %s is identical between %s and %s.\n", section, oldLabel, newLabel)

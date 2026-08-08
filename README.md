@@ -532,7 +532,8 @@ Conventions shared by all of them:
   wait for an on-demand download to finish instead of asking you to retry;
   interrupt with Ctrl-C. They share `serve`'s fetch flags: `--no-fetch`,
   `--version-cache`, `--version-cache-mb`, `--fetch-budget`. Queries that name
-  no version never touch the version cache.
+  no version never create the version cache (`list-versions` reads an existing
+  cache to report `cached` availability, but will not create one).
 - Every command takes `--db` (default `3gpp.db`).
 
 ### `list-specs`
@@ -586,7 +587,7 @@ Usage: `3gpp-mcp compare-versions [flags] --old <version> <spec-id>`
 | `--new` | Newer version to compare to | the database version |
 | `--section` | Compare only this section's text as a unified diff | |
 | `--subsections` | With `--section`: include subsections in the diff | `false` |
-| `--context` | Unchanged lines shown around each change in a section diff | `3` |
+| `--context` | Unchanged lines shown around each change in a section diff (`0` shows none) | `3` |
 
 ### `search`
 
