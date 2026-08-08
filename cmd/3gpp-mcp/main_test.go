@@ -178,6 +178,24 @@ func TestCmdCompletion(t *testing.T) {
 	}
 }
 
+// TestCmdCompletion_ListsEveryCommand pins the completion scripts to the
+// command registry: a command registered in commands must appear in all three
+// shells' output.
+func TestCmdCompletion_ListsEveryCommand(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh", "fish"} {
+		t.Run(shell, func(t *testing.T) {
+			out := captureStdout(t, func() {
+				cmdCompletion([]string{shell})
+			})
+			for _, c := range commands {
+				if !strings.Contains(out, c.name) {
+					t.Errorf("%s completion is missing command %q", shell, c.name)
+				}
+			}
+		})
+	}
+}
+
 // projectRoot returns the path to the repository root by walking up from the
 // current test file location.
 func projectRoot(t *testing.T) string {
