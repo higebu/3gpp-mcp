@@ -23,56 +23,21 @@ This tool addresses these challenges by parsing the `.docx` files, structuring t
 
 ### Why not RAG?
 
-A RAG (Retrieval-Augmented Generation) approach — chunking documents, generating embeddings, and performing vector similarity search — is a common solution for document Q&A. However, 3GPP specifications are highly structured technical documents where that approach has significant drawbacks:
-
-- **Loss of structure** - RAG splits documents into flat chunks, discarding the section hierarchy that is essential for navigating specs.
-- **No reference traversal** - Vector search cannot follow cross-references between specifications.
-- **Noisy retrieval** - Similarity search may return loosely related chunks instead of the exact section needed.
-- **Additional cost** - Embedding generation and vector database hosting add infrastructure and API costs.
-
-This tool takes a structure-aware approach: it preserves the document hierarchy, enables precise section-level retrieval, supports full-text search with FTS5 syntax, and extracts OpenAPI definitions separately. All data is stored in a single SQLite file with no external dependencies.
+Embedding-based RAG is a common way to improve accuracy on document Q&A, and RAG systems specialized for 3GPP documents exist ([Telco-RAG](https://arxiv.org/abs/2404.15939), [TelcoAI](https://arxiv.org/abs/2601.16984)). This tool takes a simpler approach: instead of building a retrieval pipeline in front of the model, it gives the model search and navigation tools and lets it explore the specifications the way an engineer would — full-text search, then following the section hierarchy and cross-references. Since retrieval is plain FTS5 search over structured sections, there is no embedding model or vector database to run, and everything lives in a single SQLite file.
 
 ## Getting Started
-
-### Build a self-contained Docker image
-
-The `Dockerfile` is multi-stage and builds the database for a release directly,
-producing a self-contained image with the SQLite database (sections, OpenAPI
-definitions, and embedded images) baked in. No pre-built database is needed in
-the build context.
-
-```bash
-# Build an image with the latest version of every spec baked in (default)
-docker build -t 3gpp-mcp:latest .
-
-# ...or restrict the database to a single release
-docker build --build-arg RELEASE=19 -t 3gpp-mcp:rel19 .
-
-# stdio transport (Claude Code / IDE integration)
-docker run --rm -i 3gpp-mcp:latest
-
-# HTTP transport
-docker run --rm -p 8080:8080 3gpp-mcp:latest serve --db /3gpp.db --transport http --addr :8080
-```
-
-`RELEASE` defaults to `latest`, which bakes in the latest version of every spec
-across all releases. Set `--build-arg RELEASE=<n>` (e.g. `19`) to restrict the
-database to a single release.
-
-### Deploy to Cloud Run
-
-To run on Cloud Run, see `cloudbuild.yaml` (build + push + deploy) and
-`service.yaml` (Cloud Run service spec).
-
----
 
 ### 1. Install
 
 ```bash
+# Homebrew
+brew install higebu/tap/3gpp-mcp
+
+# ...or with Go 1.26+
 go install github.com/higebu/3gpp-mcp/cmd/3gpp-mcp@latest
 ```
 
-Requires Go 1.26+. LibreOffice is optional (needed for `.doc` to `.docx` conversion and EMF/WMF image to PNG conversion).
+Prebuilt binaries are also available on the [releases page](https://github.com/higebu/3gpp-mcp/releases). LibreOffice is optional (needed for `.doc` to `.docx` conversion and EMF/WMF image to PNG conversion).
 
 ### 2. Build the database
 
@@ -138,7 +103,27 @@ Add to your configuration file (`~/Library/Application Support/Claude/claude_des
 }
 ```
 
-#### Streamable HTTP (remote deployment)
+### 4. Web viewer (optional)
+
+Browse specifications in your browser by adding `--web` to the HTTP transport:
+
+```bash
+3gpp-mcp serve --db data/3gpp.db --transport http --addr :8080 --web
+# MCP endpoint: http://localhost:8080/mcp/
+# Web viewer:   http://localhost:8080/
+```
+
+Features: spec list with filtering, section viewer with TOC sidebar, full-text search with pagination, past-version browsing (versions are listed per spec and downloaded on demand, like the MCP tools), version comparison (structural summary and per-section diffs), embedded images, cross-reference links, OpenAPI definitions with syntax highlighting, LaTeX math rendering, dark mode, responsive design.
+
+Code blocks are syntax-highlighted per notation — ASN.1, Diameter, SIP/RTSP,
+SDP and XML (see [Code blocks](#code-blocks)). The color theme — Catppuccin
+(default), GitHub, Monokai or Xcode/Dracula — is selectable from the settings
+popover in the navbar; each has a light and a dark variant, picked by the
+site's light/dark mode.
+
+## Deployment
+
+### Streamable HTTP
 
 The HTTP transport is stateless: it supports MCP protocol version 2026-07-28 (no
 initialize handshake, no `Mcp-Session-Id`) while older clients (2024-11-05
@@ -186,24 +171,35 @@ When using `--web`, the MCP endpoint moves to `/mcp/`:
 
 See [`examples/systemd/`](examples/systemd/) for production deployment with systemd.
 
-### 4. Web viewer (optional)
+### Docker
 
-Browse specifications in your browser by adding `--web` to the HTTP transport:
+The `Dockerfile` is multi-stage and builds the database for a release directly,
+producing a self-contained image with the SQLite database (sections, OpenAPI
+definitions, and embedded images) baked in. No pre-built database is needed in
+the build context.
 
 ```bash
-3gpp-mcp serve --db data/3gpp.db --transport http --addr :8080 --web
-# MCP endpoint: http://localhost:8080/mcp/
-# Web viewer:   http://localhost:8080/
+# Build an image with the latest version of every spec baked in (default)
+docker build -t 3gpp-mcp:latest .
+
+# ...or restrict the database to a single release
+docker build --build-arg RELEASE=19 -t 3gpp-mcp:rel19 .
+
+# stdio transport (Claude Code / IDE integration)
+docker run --rm -i 3gpp-mcp:latest
+
+# HTTP transport
+docker run --rm -p 8080:8080 3gpp-mcp:latest serve --db /3gpp.db --transport http --addr :8080
 ```
 
-Features: spec list with filtering, section viewer with TOC sidebar, full-text search with pagination, past-version browsing (versions are listed per spec and downloaded on demand, like the MCP tools), version comparison (structural summary and per-section diffs), embedded images, cross-reference links, OpenAPI definitions with syntax highlighting, LaTeX math rendering, dark mode, responsive design.
+`RELEASE` defaults to `latest`, which bakes in the latest version of every spec
+across all releases. Set `--build-arg RELEASE=<n>` (e.g. `19`) to restrict the
+database to a single release.
 
-Code blocks are syntax-highlighted per notation — ASN.1, Diameter, SIP/RTSP,
-SDP and XML (see [Code blocks](#code-blocks)). The color theme is
-selectable from the settings popover (gear icon) in the navbar — Catppuccin
-(default), GitHub, Monokai or Xcode/Dracula — and is stored in the browser, so
-it needs no server state. Each theme has a light and a dark variant, picked by
-the site's light/dark mode.
+### Cloud Run
+
+To run on Cloud Run, see `cloudbuild.yaml` (build + push + deploy) and
+`service.yaml` (Cloud Run service spec).
 
 ## MCP Tools
 
@@ -211,7 +207,7 @@ the site's light/dark mode.
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `list_specs` | List available specifications | `series` (optional): filter by series number, e.g. `"23"` |
+| `list_specs` | List available specifications (paginated) | `series` (optional): filter by series number, e.g. `"23"`; `query` (optional): spec ID prefix, e.g. `"38.21"`; `limit`, `offset` |
 | `list_versions` | List the versions of a spec and where each can be read from | `spec_id` (required): e.g. `"TS 23.501"` |
 | `get_toc` | Get table of contents of a spec | `spec_id` (required), `version` |
 | `get_section` | Get section content (paginated) | `spec_id`, `section_number` (required), `version`, `include_subsections`, `offset`, `max_lines`, `max_chars` |
@@ -232,7 +228,9 @@ get_section    spec_id="TS 24.301" section_number="5.5.1" version="15.8.0"
 
 `version` accepts the dotted form (`15.8.0`), the archive token (`f80`), a
 release selector (`Rel-15` or `15`, picking the newest version in that release),
-or `latest`.
+or `latest`. Release selectors and `latest` are resolved against the 3GPP
+archive, so they require on-demand fetching (they do not work under
+`--no-fetch`).
 
 To see what changed between two versions, use `compare_versions`. Without
 `section_number` it summarizes which sections were added, removed, renumbered,
@@ -276,23 +274,28 @@ The `search` tool supports [SQLite FTS5](https://www.sqlite.org/fts5.html) query
 
 - Phrase search: `"service based interface"`
 - Boolean operators: `AMF AND UE`, `AMF OR SMF`, `NOT deprecated`
+- Exclusion after a positive term: `handover -conditional`
 - Prefix matching: `handov*`
 - Column filter: `title:authentication`, `content:handover`
 - Proximity: `NEAR(AMF UE, 5)`
+
+Terms containing hyphens or dots (`IMS-AKA`, `38.101`) are quoted automatically,
+so they need no manual escaping.
 
 Results come as `{results, total_count, limit, offset}`; use `limit` (default
 10, max 200) and `offset` to page through everything beyond the first page.
 Section-title matches rank above body matches, and the snippet is taken from
 whichever column matched best. The index uses porter stemming, so inflected
-English forms match each other (`handover` finds `handovers`). The tokenizer
-applies when the database is created, so a database built before this change
-keeps unstemmed search until rebuilt.
+English forms match each other (`handover` finds `handovers`).
 
 ### Cross-references
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `get_references` | Get cross-references between specs and RFCs | `spec_id` (required), `section_number`, `direction` (`"outgoing"` or `"incoming"`), `include_subsections`, `offset` |
+| `get_references` | Get cross-references between specs and RFCs | `spec_id` (required), `section_number` (required for `"outgoing"`), `direction` (`"outgoing"` or `"incoming"`), `include_subsections`, `offset` |
+
+Responses are capped at 500 references per page; the total count is reported
+and `offset` pages past the cap.
 
 ### OpenAPI definitions
 
@@ -339,9 +342,9 @@ Diameter, XML, SIP and SDP blocks carry no code style in the source `.docx`, so
 they are recognized by content during conversion. The web viewer highlights all
 of them.
 
-Tagged fences and the unified image notation are produced at build time, so a
-database built before these changes keeps the old plain output — rebuild it
-with `3gpp-mcp build` (or `make build-db`) to pick them up.
+Tagged fences and the unified image notation are produced when a spec is
+converted, so a database built with an older version of this tool keeps its
+old output until rebuilt with `3gpp-mcp build` (or `make build-db`).
 
 ## Tips
 
@@ -401,7 +404,7 @@ Start the MCP server.
 | `--bearer-token` | Bearer token for HTTP auth (env: `THREEGPP_MCP_BEARER_TOKEN`) | |
 | `--web` | Enable web viewer alongside MCP server (HTTP transport only) | `false` |
 | `--no-fetch` | Disable on-demand fetching of spec versions that are not in the database | `false` |
-| `--version-cache` | Path to the on-demand version cache | `$XDG_CACHE_HOME/3gpp-mcp/versions.db` |
+| `--version-cache` | Path to the on-demand version cache | `$XDG_CACHE_HOME/3gpp-mcp/versions.db` (`~/.cache/3gpp-mcp/versions.db` when unset) |
 | `--version-cache-mb` | Size limit of the version cache in MB. `0` keeps only the most recently fetched version, `-1` is unlimited (env: `THREEGPP_VERSION_CACHE_MB`) | `1024` |
 | `--fetch-budget` | How long a tool call waits for an on-demand fetch before asking the caller to retry (env: `THREEGPP_FETCH_BUDGET`) | `60s` |
 
