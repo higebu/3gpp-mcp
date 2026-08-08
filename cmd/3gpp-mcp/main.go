@@ -109,6 +109,17 @@ func init() {
 		{name: "import", aliases: []string{"convert"}, desc: "Import a single DOCX file into database", run: cmdConvert},
 		{name: "import-dir", aliases: []string{"convert-dir"}, desc: "Import a directory of DOCX files into database", run: cmdConvertDir},
 		{name: "update", desc: "Update database to latest spec versions", run: cmdUpdate},
+		{name: "list-specs", desc: "List specifications in the database", run: cmdListSpecs},
+		{name: "list-versions", desc: "List versions of a specification", run: cmdListVersions},
+		{name: "get-toc", desc: "Print a specification's table of contents", run: cmdGetTOC},
+		{name: "get-section", desc: "Print a section's markdown content", run: cmdGetSection},
+		{name: "compare-versions", desc: "Compare two versions of a specification", run: cmdCompareVersions},
+		{name: "search", desc: "Full-text search across specifications", run: cmdSearch},
+		{name: "list-openapi", desc: "List OpenAPI definitions", run: cmdListOpenAPI},
+		{name: "get-openapi", desc: "Print an OpenAPI definition", run: cmdGetOpenAPI},
+		{name: "get-references", desc: "Print cross-references as JSON", run: cmdGetReferences},
+		{name: "list-images", desc: "List embedded images in a specification", run: cmdListImages},
+		{name: "get-image", desc: "Write an embedded image to a file or stdout", run: cmdGetImage},
 		{name: "completion", desc: "Generate shell completion scripts", run: cmdCompletion},
 	}
 }
