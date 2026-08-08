@@ -67,7 +67,7 @@ func compareStructure(ctx context.Context, src *Source, input CompareVersionsInp
 	d := structdiff.Diff(oldSecs, newSecs)
 	oldLabel, newLabel := VersionLabel(oldSecs, oldRes), VersionLabel(newSecs, newRes)
 
-	header := compareHeader(input.SpecID, "", oldLabel, newLabel)
+	header := CompareHeader(input.SpecID, "", oldLabel, newLabel)
 	return prependLine(header, paginateText(RenderStructuralSummary(d, oldLabel, newLabel), input.Offset, input.MaxLines, input.MaxChars))
 }
 
@@ -150,7 +150,7 @@ func compareSection(ctx context.Context, src *Source, input CompareVersionsInput
 		ctxLines = defaultContextLines
 	}
 
-	header := compareHeader(input.SpecID, input.SectionNumber, oldLabel, newLabel)
+	header := CompareHeader(input.SpecID, input.SectionNumber, oldLabel, newLabel)
 	diff := textdiff.UnifiedKeyed(structdiff.SectionLines(oldSecs), structdiff.SectionLines(newSecs), ctxLines, structdiff.NormalizeImageRefs)
 	if diff == "" {
 		msg := fmt.Sprintf("Section %s is identical between %s and %s.", input.SectionNumber, oldLabel, newLabel)
@@ -250,8 +250,9 @@ func VersionLabel(secs []db.Section, res Resolution) string {
 	return label
 }
 
-// compareHeader builds the provenance line prepended to every page.
-func compareHeader(specID, sectionNumber, oldLabel, newLabel string) string {
+// CompareHeader builds the provenance line prepended to every page of a
+// comparison. It is shared with the CLI's compare-versions command.
+func CompareHeader(specID, sectionNumber, oldLabel, newLabel string) string {
 	h := "[Compare: " + specID
 	if sectionNumber != "" {
 		h += " — Section " + sectionNumber
