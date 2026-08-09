@@ -1,5 +1,5 @@
 # 1) Build the static binary.
-FROM golang:1.26-bookworm AS go-builder
+FROM golang:1.26-bookworm@sha256:6c5605ab3a9a9fb3c4eafe5b3d63cdbf3881caf113262b67862547b54a9db599 AS go-builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 #    release. LibreOffice is required for --convert-doc / --convert-image but
 #    lives only in this stage, so it never bloats the final image. Temp files are
 #    deleted as each spec is processed, keeping disk usage low.
-FROM golang:1.26-bookworm AS db-builder
+FROM golang:1.26-bookworm@sha256:6c5605ab3a9a9fb3c4eafe5b3d63cdbf3881caf113262b67862547b54a9db599 AS db-builder
 ARG RELEASE=latest
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libreoffice ca-certificates sqlite3 \

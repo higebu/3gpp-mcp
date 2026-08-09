@@ -46,7 +46,7 @@ timeout: 7200s
 
 steps:
   - id: clone
-    name: gcr.io/cloud-builders/git
+    name: gcr.io/cloud-builders/git@sha256:cd777b3c8a45e42dcfdb30ddaa44497968b11c6d314cd462121012d7004b03ec
     args:
       - clone
       - --depth=1
@@ -55,7 +55,7 @@ steps:
       - repo
 
   - id: build
-    name: gcr.io/cloud-builders/docker
+    name: gcr.io/cloud-builders/docker@sha256:617f98016081e2978c0b44184d7b09446027b909f1078b8fdc23efc4c74c5f20
     dir: repo
     args:
       - build
@@ -65,7 +65,7 @@ steps:
       - .
 
   - id: push
-    name: gcr.io/cloud-builders/docker
+    name: gcr.io/cloud-builders/docker@sha256:617f98016081e2978c0b44184d7b09446027b909f1078b8fdc23efc4c74c5f20
     args:
       - push
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}
