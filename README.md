@@ -25,6 +25,8 @@ This tool addresses these challenges by parsing the `.docx` files, structuring t
 
 Embedding-based RAG is a common way to improve accuracy on document Q&A, and RAG systems specialized for 3GPP documents exist ([Telco-RAG](https://arxiv.org/abs/2404.15939), [TelcoAI](https://arxiv.org/abs/2601.16984)). This tool takes a simpler approach: instead of building a retrieval pipeline in front of the model, it gives the model search and navigation tools and lets it explore the specifications the way an engineer would — full-text search, then following the section hierarchy and cross-references. Since retrieval is plain FTS5 search over structured sections, there is no embedding model or vector database to run, and everything lives in a single SQLite file.
 
+Measured on TeleQnA, this lifts accuracy on 3GPP standards questions by about 11 percentage points across three model families — see [BENCHMARK.md](BENCHMARK.md).
+
 ## Getting Started
 
 ### 1. Install
