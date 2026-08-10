@@ -346,6 +346,31 @@ func TestOMMLToLaTeX(t *testing.T) {
 			xml:  `<m:oMath ` + mXMLNS + `>` + mrun("α≤β") + `</m:oMath>`,
 			want: "\\alpha \\leq \\beta",
 		},
+		{
+			// Angle brackets never survive into the stored LaTeX: table
+			// cells embed formulas in raw HTML, where a "<" would open a
+			// tag. See escapeMathAngles.
+			name: "less-than and greater-than become commands",
+			xml:  `<m:oMath ` + mXMLNS + `>` + mrun("a&lt;b&gt;c") + `</m:oMath>`,
+			want: "a\\lt b\\gt c",
+		},
+		{
+			name: "angle-bracket delimiters use langle and rangle",
+			xml: `<m:oMath ` + mXMLNS + `><m:d>` +
+				`<m:dPr><m:begChr m:val="&lt;"/><m:endChr m:val="&gt;"/></m:dPr>` +
+				`<m:e>` + mrun("x") + `</m:e></m:d></m:oMath>`,
+			want: "\\left\\langle x\\right\\rangle",
+		},
+		{
+			// "<" is an operator for grouping purposes, so a linear fraction
+			// still parenthesises a numerator containing one.
+			name: "linear fraction groups a numerator holding a comparison",
+			xml: `<m:oMath ` + mXMLNS + `><m:f>` +
+				`<m:fPr><m:type m:val="lin"/></m:fPr>` +
+				`<m:num>` + mrun("a&lt;b") + `</m:num>` +
+				`<m:den>` + mrun("c") + `</m:den></m:f></m:oMath>`,
+			want: "\\left(a\\lt b\\right)/c",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

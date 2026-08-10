@@ -147,6 +147,44 @@ func TestTableToHTML_CoalesceAdjacentVertAlignRuns(t *testing.T) {
 	}
 }
 
+// Cell math is the one thing tableToHTML writes unescaped: "&" is a matrix
+// column separator, and "&amp;" would break the LaTeX for every consumer of
+// the stored Markdown (MCP clients, the CLI, compare_versions diffs).
+func TestTableToHTML_MathIsNotEscaped(t *testing.T) {
+	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` + mXMLNS + `>
+		<w:tr><w:tc><w:p>
+			<w:r><w:t xml:space="preserve">W &amp; V = </w:t></w:r>
+			<m:oMath><m:m>
+				<m:mr><m:e>` + mrun("1") + `</m:e><m:e>` + mrun("j") + `</m:e></m:mr>
+			</m:m></m:oMath>
+		</w:p></w:tc></w:tr>
+	</w:tbl>`
+	info := extractTable([]byte(xml))
+	html := tableToHTML(info, imageContext{})
+	if !strings.Contains(html, `$\begin{matrix} 1 & j \end{matrix}$`) {
+		t.Errorf("expected unescaped inline math in the cell: %s", html)
+	}
+	// Surrounding prose is still escaped.
+	if !strings.Contains(html, "W &amp; V = ") {
+		t.Errorf("expected cell prose to stay HTML-escaped: %s", html)
+	}
+}
+
+func TestTableToHTML_DisplayMathInCell(t *testing.T) {
+	// A fence cannot live in a <td>, so display math in a cell keeps the
+	// "$$...$$" notation and the web viewer renders it in display mode.
+	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` + mXMLNS + `>
+		<w:tr><w:tc><w:p><m:oMathPara><m:oMath><m:f>` +
+		`<m:num>` + mrun("1") + `</m:num><m:den>` + mrun("2") + `</m:den>` +
+		`</m:f></m:oMath></m:oMathPara></w:p></w:tc></w:tr>
+	</w:tbl>`
+	info := extractTable([]byte(xml))
+	html := tableToHTML(info, imageContext{})
+	if !strings.Contains(html, `<td><p>$$\frac{1}{2}$$</p></td>`) {
+		t.Errorf("expected display math delimiters in the cell: %s", html)
+	}
+}
+
 func TestTableToHTML_HTMLEscape(t *testing.T) {
 	// Cell text containing HTML special characters must be escaped.
 	xml := `<w:tbl xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">

@@ -50,7 +50,33 @@ const maxOMMLDepth = 100
 // without surrounding "$" delimiters.
 func ommlToLaTeX(d *xml.Decoder, start xml.StartElement) string {
 	root := parseOMMLNode(d, start, 0)
-	return trimMathSpace(renderOMML(root))
+	return trimMathSpace(escapeMathAngles(renderOMML(root)))
+}
+
+// angleReplacer rewrites the angle brackets escapeMathAngles removes. \lt and
+// \gt are defined by both KaTeX and MathJax; the trailing space keeps them
+// from running into a following letter, and trimMathSpace drops it at the
+// edges.
+var angleReplacer = strings.NewReplacer("<", "\\lt ", ">", "\\gt ")
+
+// escapeMathAngles enforces the invariant that rendered LaTeX never contains
+// "<" or ">". Table cells embed math in raw HTML without escaping it (see
+// writeParagraphInline in table.go), so an angle bracket there would open a
+// bogus tag and the web viewer's sanitizer would silently eat the rest of the
+// formula. Applying it once to the finished formula covers every source of a
+// bracket — literal text, an unmapped n-ary or accent character — rather than
+// leaving each render path to remember. Delimiters are the exception and are
+// mapped by latexDelim before this runs, because "\left" needs "\langle", not
+// the relation "\lt".
+//
+// "&" needs no such treatment: in HTML text content a lone ampersand is inert,
+// and every "&" this package emits is either a matrix column separator or an
+// escaped "\&".
+func escapeMathAngles(s string) string {
+	if !strings.ContainsAny(s, "<>") {
+		return s
+	}
+	return angleReplacer.Replace(s)
 }
 
 // parseOMMLNode builds the subtree rooted at start, reading tokens from d until
@@ -444,9 +470,9 @@ func latexDelim(chr string) string {
 		return "|"
 	case "‖":
 		return "\\|"
-	case "⟨", "〈":
+	case "⟨", "〈", "<":
 		return "\\langle "
-	case "⟩", "〉":
+	case "⟩", "〉", ">":
 		return "\\rangle "
 	case "⌊":
 		return "\\lfloor "

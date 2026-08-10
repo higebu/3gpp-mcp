@@ -250,6 +250,19 @@ func writeParagraphInline(b *strings.Builder, p paragraphInfo, ctx imageContext)
 			if r.Text == "" {
 				continue
 			}
+			// Math goes in unescaped: the cell's LaTeX has to stay valid for
+			// every consumer of the stored Markdown — MCP clients, the CLI,
+			// compare_versions diffs — and "&amp;" is not a matrix column
+			// separator. This is safe because ommlToLaTeX guarantees the
+			// formula contains no angle bracket (see escapeMathAngles), so it
+			// can never open a tag, and because the delimiters mark it for the
+			// web viewer, which lifts it out of the HTML before rendering.
+			// Emphasis and vertical alignment are skipped for the same reason
+			// as in runsToMarkdown: markup inside a formula is not LaTeX.
+			if r.Math {
+				b.WriteString(r.markdownText())
+				continue
+			}
 			esc := htmlpkg.EscapeString(r.Text)
 			switch {
 			case r.IsCode:

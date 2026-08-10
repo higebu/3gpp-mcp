@@ -43,6 +43,29 @@ type runInfo struct {
 	// Images) lets the markdown renderer emit the image where it actually
 	// occurs instead of after all of the paragraph's text (see issue #40).
 	Image *imageRef
+	// Math marks this entry as a formula converted from OMML. Text holds
+	// the bare LaTeX, without the "$" delimiters markdownText adds, so that
+	// callers which need the formula itself — the standalone-equation
+	// promotion in parser.go, the raw-HTML table renderer — do not have to
+	// strip them back off. MathDisplay distinguishes m:oMathPara (display)
+	// from m:oMath (inline).
+	Math        bool
+	MathDisplay bool
+}
+
+// markdownText renders a run's text as it appears in the converted Markdown.
+// It is the single source of the math delimiters: every path that turns runs
+// back into text goes through it, so inline math is always "$...$" and
+// display math always "$$...$$".
+func (r runInfo) markdownText() string {
+	switch {
+	case !r.Math:
+		return r.Text
+	case r.MathDisplay:
+		return "$$" + r.Text + "$$"
+	default:
+		return "$" + r.Text + "$"
+	}
 }
 
 // parseParagraph parses a w:p XML element from raw bytes into paragraphInfo.
@@ -117,12 +140,12 @@ func parseParagraphFromDecoderDepth(d *xml.Decoder, _ xml.StartElement, drawDept
 				latex := ommlToLaTeX(d, t)
 				depth--
 				if latex != "" {
-					delim := "$"
-					if local == "oMathPara" {
-						delim = "$$"
-					}
 					flushRunText()
-					info.Runs = append(info.Runs, runInfo{Text: delim + latex + delim})
+					info.Runs = append(info.Runs, runInfo{
+						Text:        latex,
+						Math:        true,
+						MathDisplay: local == "oMathPara",
+					})
 				}
 				continue
 			}
@@ -343,10 +366,12 @@ func parseParagraphFromDecoderDepth(d *xml.Decoder, _ xml.StartElement, drawDept
 		}
 	}
 
-	// Build full text
+	// Build full text. Math runs contribute their delimited form so that
+	// info.Text keeps reading like the converted Markdown: heading detection,
+	// the ASN.1/Diameter matchers and runsOrText's fallback all consume it.
 	var fullText []string
 	for _, r := range info.Runs {
-		fullText = append(fullText, r.Text)
+		fullText = append(fullText, r.markdownText())
 	}
 	info.Text = strings.Join(fullText, "")
 
@@ -548,10 +573,14 @@ func mergeAdjacentRuns(runs []runInfo) []runInfo {
 		if run.Image == nil && run.Text == "" {
 			continue
 		}
-		if run.Image == nil {
+		// A math run's Text is bare LaTeX; the delimiters live in
+		// markdownText. Merging one into a neighbour would concatenate the
+		// two texts and lose the delimiters silently, so math never merges —
+		// neither with plain text nor with another formula.
+		if run.Image == nil && !run.Math {
 			if n := len(merged); n > 0 {
 				last := &merged[n-1]
-				if last.Image == nil && last.Bold == run.Bold && last.Italic == run.Italic &&
+				if last.Image == nil && !last.Math && last.Bold == run.Bold && last.Italic == run.Italic &&
 					last.VertAlign == run.VertAlign && last.IsCode == run.IsCode {
 					last.Text += run.Text
 					continue
@@ -649,7 +678,14 @@ func runsToMarkdown(runs []runInfo) string {
 		if run.Image != nil {
 			continue
 		}
-		runText := run.Text
+		runText := run.markdownText()
+		// Math carries its own delimiters and its own notation: wrapping it
+		// in emphasis or <sup>/<sub> would put markup inside the formula,
+		// where KaTeX and any downstream LaTeX reader would choke on it.
+		if run.Math {
+			parts = append(parts, runText)
+			continue
+		}
 		if run.Bold && run.Italic {
 			runText = wrapEmphasis(runText, "***")
 		} else if run.Bold {

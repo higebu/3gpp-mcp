@@ -76,10 +76,14 @@ func TestParseDocx_OMMLMatrix(t *testing.T) {
 	if !strings.Contains(all, rawLatex) {
 		t.Errorf("paragraph inline LaTeX matrix missing:\n%s", all)
 	}
-	// Table-cell math flows through HTML escaping (& → &amp;).
-	escLatex := `$\begin{matrix} 1 &amp; j \\ -1 &amp; j \end{matrix}$`
-	if !strings.Contains(all, escLatex) {
-		t.Errorf("table-cell LaTeX matrix missing:\n%s", all)
+	// Table-cell math is written unescaped, so the matrix column separator
+	// stays a "&" rather than becoming "&amp;" and breaking the LaTeX for
+	// every consumer of the stored Markdown.
+	if !strings.Contains(all, "<td><p>W = "+rawLatex+"</p></td>") {
+		t.Errorf("table-cell LaTeX matrix missing or escaped:\n%s", all)
+	}
+	if strings.Contains(all, "&amp;") {
+		t.Errorf("table-cell math was HTML-escaped:\n%s", all)
 	}
 	// The old garbled form concatenated the entries with no structure.
 	if strings.Contains(all, "1j-1j") || strings.Contains(all, "11-1") {
