@@ -8,6 +8,11 @@ import "strings"
 type mdSegment struct {
 	text string
 	code bool
+	// lang is the lowercased first word of a fenced block's info string
+	// ("xml", "latex", ...), empty for a bare fence and for inline code.
+	// renderMarkdown uses it to divert ```latex blocks to the math renderer
+	// instead of letting Chroma syntax-highlight an equation.
+	lang string
 }
 
 // splitCodeSegments splits Markdown content into text and code segments so
@@ -25,6 +30,7 @@ func splitCodeSegments(content string) []mdSegment {
 	var fenced strings.Builder // current fenced block, opening fence included
 	var fenceChar byte
 	fenceLen := 0
+	fenceLang := ""
 
 	flushText := func() {
 		if text.Len() > 0 {
@@ -44,9 +50,10 @@ func splitCodeSegments(content string) []mdSegment {
 		if fenceChar != 0 {
 			fenced.WriteString(line)
 			if c, n, info := fenceInfo(line); c == fenceChar && n >= fenceLen && strings.TrimSpace(info) == "" {
-				segs = append(segs, mdSegment{fenced.String(), true})
+				segs = append(segs, mdSegment{text: fenced.String(), code: true, lang: fenceLang})
 				fenced.Reset()
 				fenceChar = 0
+				fenceLang = ""
 			}
 			continue
 		}
@@ -55,6 +62,7 @@ func splitCodeSegments(content string) []mdSegment {
 		if c, n, info := fenceInfo(line); c != 0 && (c != '`' || !strings.Contains(info, "`")) {
 			flushText()
 			fenceChar, fenceLen = c, n
+			fenceLang = fenceLanguage(info)
 			fenced.WriteString(line)
 			continue
 		}
@@ -62,9 +70,19 @@ func splitCodeSegments(content string) []mdSegment {
 	}
 	flushText()
 	if fenced.Len() > 0 { // unterminated fence runs to end of input
-		segs = append(segs, mdSegment{fenced.String(), true})
+		segs = append(segs, mdSegment{text: fenced.String(), code: true, lang: fenceLang})
 	}
 	return segs
+}
+
+// fenceLanguage returns the language token of a fence's info string — its
+// first word, lowercased — or "" when the fence is bare.
+func fenceLanguage(info string) string {
+	fields := strings.Fields(info)
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.ToLower(fields[0])
 }
 
 // fenceInfo reports whether line is a code fence: it returns the fence
@@ -117,14 +135,14 @@ func splitInlineCode(chunk string) []mdSegment {
 			continue
 		}
 		if i > textStart {
-			segs = append(segs, mdSegment{chunk[textStart:i], false})
+			segs = append(segs, mdSegment{text: chunk[textStart:i]})
 		}
-		segs = append(segs, mdSegment{chunk[i : end+n], true})
+		segs = append(segs, mdSegment{text: chunk[i : end+n], code: true})
 		i = end + n
 		textStart = i
 	}
 	if textStart < len(chunk) {
-		segs = append(segs, mdSegment{chunk[textStart:], false})
+		segs = append(segs, mdSegment{text: chunk[textStart:]})
 	}
 	return segs
 }
