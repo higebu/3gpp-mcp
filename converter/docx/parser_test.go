@@ -675,6 +675,158 @@ func TestParseSections_UnnumberedDashHeadings(t *testing.T) {
 	}
 }
 
+// TestParseSections_SectionNumberFormats pins down which heading shapes
+// sectionNumberRE splits into a number and a title, and which ones keep the
+// raw-text fallback. Every "numbered" case is a heading that exists in a
+// published spec; the ones that used to fall through to the fallback stored
+// the whole heading line (tab included) as the section number, so get_section
+// could not find them by their real clause number.
+func TestParseSections_SectionNumberFormats(t *testing.T) {
+	tests := []struct {
+		name    string
+		heading string
+		number  string
+		title   string
+	}{
+		// Existing numbering must keep parsing exactly as before.
+		{"plain", "5.3.2\tTitle", "5.3.2", "Title"},
+		{"annex", "A.1.2\tTitle", "A.1.2", "Title"},
+		{"zero suffix", "6.1.0\tGeneral", "6.1.0", "General"},
+		{"top level", "4\tScope", "4", "Scope"},
+		{"space separator", "5.4A.2 Channel raster for CA", "5.4A.2", "Channel raster for CA"},
+		{"single letter suffix", "4.2.1a\tSome title", "4.2.1a", "Some title"},
+
+		// Multi-character letter suffixes: 3GPP extends the suffix of the
+		// preceding clause every time it inserts a new one.
+		{"two letters lower", "10.5.2.21aa\tMultiRate configuration", "10.5.2.21aa", "MultiRate configuration"},
+		{"mixed case suffix", "7.2.160aA\tQuota-Indicator AVP", "7.2.160aA", "Quota-Indicator AVP"},
+		{"three letter suffix", "7.2.111AaD\tMonitoring-Event-Report-Data AVP", "7.2.111AaD", "Monitoring-Event-Report-Data AVP"},
+		{"suffix mid number", "5.10AA.1\tDefinition and applicability", "5.10AA.1", "Definition and applicability"},
+
+		// Trailing period after the number.
+		{"trailing period", "4.5.\tThe Visitor Location Register (VLR)", "4.5", "The Visitor Location Register (VLR)"},
+		{"trailing period annex", "A.1.\tGeneral", "A.1", "General"},
+
+		// Multi-letter annex prefixes (TS 23.228 runs past Annex Z).
+		{"annex AA", "AA.1\tGeneral", "AA.1", "General"},
+		{"annex AA deep", "AA.2.1.2.3\tNhss_ImsUECM_Registration service operation", "AA.2.1.2.3", "Nhss_ImsUECM_Registration service operation"},
+
+		// Letter/digit alternation inside a component (TS 24.483 management
+		// object leaves).
+		{"letter digit", "10.2.16F1\t/<x>/<x>/Common/OnetoOne", "10.2.16F1", "/<x>/<x>/Common/OnetoOne"},
+		{"repeated alternation", "10.2.97B3B0\t/<x>/<x>/OnNetwork", "10.2.97B3B0", "/<x>/<x>/OnNetwork"},
+		{"alternation then letter", "13.2.87A6A12A\tListOfLocationCriteria", "13.2.87A6A12A", "ListOfLocationCriteria"},
+
+		// "_"-joined variant tokens (RF test specs).
+		{"underscore digit", "10.1_1\tFDD MBMS performance", "10.1_1", "FDD MBMS performance"},
+		{"underscore letter", "8.2.1.7_A.1\tTest purpose", "8.2.1.7_A.1", "Test purpose"},
+		{"repeated underscore", "8.3.1.2.1_D_1.1\tInitial conditions", "8.3.1.2.1_D_1.1", "Initial conditions"},
+
+		// Headings with no clause number keep the documented fallback of
+		// reusing the heading text as the storage key.
+		{"foreword", "Foreword", "Foreword", "Foreword"},
+		{"ipr", "Intellectual Property Rights", "Intellectual Property Rights", "Intellectual Property Rights"},
+		// A range is not a single clause number; splitting it would either
+		// fabricate a clause or hide the rest of the range, so ranges stay on
+		// the fallback (out of scope, see sectionNumberRE).
+		{"range", "7.6.4.25-7.6.4.35\tVoid", "7.6.4.25-7.6.4.35\tVoid", "7.6.4.25-7.6.4.35\tVoid"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			elements := []bodyElement{
+				{Tag: "p", Paragraph: paragraphInfo{
+					StyleID: "Heading1", Text: tt.heading,
+					Runs: []runInfo{{Text: tt.heading}},
+				}},
+			}
+			styleMap := map[string]string{"Heading1": "Heading 1"}
+			sections := parseSections(elements, styleMap, nil, nil, nil)
+			if len(sections) != 1 {
+				t.Fatalf("parsed %d sections, want 1", len(sections))
+			}
+			if sections[0].Number != tt.number {
+				t.Errorf("Number = %q, want %q", sections[0].Number, tt.number)
+			}
+			if sections[0].Title != tt.title {
+				t.Errorf("Title = %q, want %q", sections[0].Title, tt.title)
+			}
+		})
+	}
+}
+
+// TestParseSections_MultiLetterAnnex covers annexes past Z: annexRE used to
+// capture only the first letter, so every "Annex Ax" collapsed onto number "A"
+// and overwrote the real Annex A on the (spec_id, version, number) key, while
+// their subclauses ("AA.1") missed sectionNumberRE entirely and kept the raw
+// heading text as their number.
+func TestParseSections_MultiLetterAnnex(t *testing.T) {
+	headings := []struct {
+		style string
+		text  string
+	}{
+		{"Heading1", "Annex A (informative): Change history"},
+		{"Heading1", "Annex AA (informative): IMS SBA"},
+		{"Heading2", "AA.1\tGeneral"},
+		{"Heading3", "AA.1.1\tArchitectural Support"},
+		{"Heading1", "Annex AB: Void"},
+	}
+	var elements []bodyElement
+	for _, h := range headings {
+		elements = append(elements, bodyElement{Tag: "p", Paragraph: paragraphInfo{
+			StyleID: h.style, Text: h.text,
+			Runs: []runInfo{{Text: h.text}},
+		}})
+	}
+	styleMap := map[string]string{"Heading1": "Heading 1", "Heading2": "Heading 2", "Heading3": "Heading 3"}
+	sections := parseSections(elements, styleMap, nil, nil, nil)
+
+	sectionMap := make(map[string]*Section)
+	for _, s := range sections {
+		if _, dup := sectionMap[s.Number]; dup {
+			t.Errorf("duplicate section number %q", s.Number)
+		}
+		sectionMap[s.Number] = s
+	}
+
+	want := []struct {
+		number, title, parent string
+		level                 int
+	}{
+		{"A", "Change history", "", 1},
+		{"AA", "IMS SBA", "", 1},
+		{"AA.1", "General", "AA", 2},
+		{"AA.1.1", "Architectural Support", "AA.1", 3},
+		{"AB", "Void", "", 1},
+	}
+	for _, w := range want {
+		s, ok := sectionMap[w.number]
+		if !ok {
+			t.Errorf("missing section %q", w.number)
+			continue
+		}
+		if s.Title != w.title {
+			t.Errorf("section %q title = %q, want %q", w.number, s.Title, w.title)
+		}
+		if s.Level != w.level {
+			t.Errorf("section %q level = %d, want %d", w.number, s.Level, w.level)
+		}
+		if s.ParentNumber != w.parent {
+			t.Errorf("section %q parent = %q, want %q", w.number, s.ParentNumber, w.parent)
+		}
+	}
+
+	// Every parent reference must resolve to a section that exists.
+	for _, s := range sections {
+		if s.ParentNumber == "" {
+			continue
+		}
+		if _, ok := sectionMap[s.ParentNumber]; !ok {
+			t.Errorf("section %q references missing parent %q", s.Number, s.ParentNumber)
+		}
+	}
+}
+
 func TestParseParagraphDrawingMLDimensions(t *testing.T) {
 	// DrawingML image with extent dimensions
 	paraXML := `<p><r><drawing><inline><extent cx="9525000" cy="4762500"/><graphic><graphicData><pic><blipFill><blip r:embed="rId5"/></blipFill></pic></graphicData></graphic></inline></drawing></r></p>`

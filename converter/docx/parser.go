@@ -13,11 +13,45 @@ import (
 	"strings"
 )
 
+// numberComponent matches one dot-separated component of a clause number:
+// digits, then any number of letter/digit alternations, then an optional
+// letter suffix, then any number of "_"-joined variant tokens.
+//
+//	5   4a   21aa   160aA   111AaD   16F1   97B3B0   1_1   1A_A   1_D_1
+//
+// None of the repetitions can be bounded: 3GPP inserts clauses by extending
+// the letter suffix of the preceding one (160 → 160A → 160Aa → 160aA, TS
+// 32.299), management-object specs number leaf nodes with letter/digit
+// alternations (10.2.97B3B0, TS 24.483), and the RF test specs append "_N" /
+// "_X" tokens for release- and band-specific test variants (8.3.1.2.1_D_1.1,
+// TS 36.521-1).
+const numberComponent = `\d+(?:[A-Za-z]+\d+)*[A-Za-z]*(?:_[A-Za-z0-9]+)*`
+
 var (
-	sectionNumberRE     = regexp.MustCompile(`^([A-Z](?:\.\d+[A-Za-z]?)+|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)[\t ]+(.+)$`)
-	annexRE             = regexp.MustCompile(`(?is)^Annex[\s\xa0]+([A-Z])[\s\xa0]*(?:\((?:normative|informative)\))?[\s\xa0]*[:\s\xa0]*(.*)$`)
+	// A clause number is either an annex letter followed by at least one
+	// component (A.1, AA.2.1.2.3) or a plain component sequence (5.3.2,
+	// 7.2.160aA), optionally followed by a stray trailing period (4.5.), and
+	// separated from the title by a tab or space. Headings that do not match
+	// keep the existing fallback of using the whole heading text as the
+	// number (Foreword, Intellectual Property Rights, ...).
+	//
+	// Deliberately not matched: range headings such as
+	// "7.6.4.25-7.6.4.35\tVoid". A range is not a single clause number, so
+	// storing one would either fabricate a clause or hide the rest of the
+	// range; a dash is not a separator here, so those keep the raw-text
+	// fallback. Ranges written with a word instead ("8.2.1.4.1_A to D", TS
+	// 36.521-1) do match, on their first number, with the rest of the range as
+	// the title — out of scope to detect, and no worse than the fallback.
+	sectionNumberRE = regexp.MustCompile(
+		`^([A-Z][A-Za-z]*(?:\.` + numberComponent + `)+` +
+			`|` + numberComponent + `(?:\.` + numberComponent + `)*)` +
+			`\.?[\t ]+(.+)$`)
+	// Annex letters run past Z into AA, AB, ... (TS 23.228 reaches Annex AI).
+	// Capturing only the first letter made every such annex collapse onto the
+	// single-letter number, so "Annex AA" overwrote "Annex A" in the database.
+	annexRE             = regexp.MustCompile(`(?is)^Annex[\s\xa0]+([A-Z]{1,2})[\s\xa0]*(?:\((?:normative|informative)\))?[\s\xa0]*[:\s\xa0]*(.*)$`)
 	headingNumRE        = regexp.MustCompile(`(?i)^[Hh]eading\s+(\d+)`)
-	annexSubRE          = regexp.MustCompile(`^[A-Z]\.`)
+	annexSubRE          = regexp.MustCompile(`^[A-Z][A-Za-z]*\.`)
 	unnumberedHeadingRE = regexp.MustCompile(`^\p{Pd}[\t ]+(.+)$`)
 
 	// 3GPP ASN.1 extraction markers on their own paragraph:
