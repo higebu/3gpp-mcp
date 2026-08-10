@@ -693,6 +693,7 @@ func TestParseSections_SectionNumberFormats(t *testing.T) {
 		{"annex", "A.1.2\tTitle", "A.1.2", "Title"},
 		{"zero suffix", "6.1.0\tGeneral", "6.1.0", "General"},
 		{"top level", "4\tScope", "4", "Scope"},
+		{"top level suffix", "6A\tGeneral", "6A", "General"},
 		{"space separator", "5.4A.2 Channel raster for CA", "5.4A.2", "Channel raster for CA"},
 		{"single letter suffix", "4.2.1a\tSome title", "4.2.1a", "Some title"},
 
@@ -726,6 +727,12 @@ func TestParseSections_SectionNumberFormats(t *testing.T) {
 		// reusing the heading text as the storage key.
 		{"foreword", "Foreword", "Foreword", "Foreword"},
 		{"ipr", "Intellectual Property Rights", "Intellectual Property Rights", "Intellectual Property Rights"},
+		// Prose that starts like a number must not be split: a word after the
+		// leading digits ("5GS", "3GPP") is not a clause suffix, and a
+		// capitalised abbreviation before a dot is not an annex letter.
+		{"digits then word", "5GS Bearer Contexts", "5GS Bearer Contexts", "5GS Bearer Contexts"},
+		{"spec reference", "3GPP TS 23.501 overview", "3GPP TS 23.501 overview", "3GPP TS 23.501 overview"},
+		{"abbreviation dot", "Fig.3 Overall architecture", "Fig.3 Overall architecture", "Fig.3 Overall architecture"},
 		// A range is not a single clause number; splitting it would either
 		// fabricate a clause or hide the rest of the range, so ranges stay on
 		// the fallback (out of scope, see sectionNumberRE).

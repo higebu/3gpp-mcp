@@ -28,12 +28,18 @@ import (
 const numberComponent = `\d+(?:[A-Za-z]+\d+)*[A-Za-z]*(?:_[A-Za-z0-9]+)*`
 
 var (
-	// A clause number is either an annex letter followed by at least one
-	// component (A.1, AA.2.1.2.3) or a plain component sequence (5.3.2,
-	// 7.2.160aA), optionally followed by a stray trailing period (4.5.), and
-	// separated from the title by a tab or space. Headings that do not match
-	// keep the existing fallback of using the whole heading text as the
-	// number (Foreword, Intellectual Property Rights, ...).
+	// A clause number is an annex letter followed by at least one component
+	// (A.1, AA.2.1.2.3), a dotted component sequence (5.3.2, 7.2.160aA), or a
+	// bare top-level number (4, 6A), optionally followed by a stray trailing
+	// period (4.5.) and separated from the title by a tab or space. Headings
+	// that do not match keep the existing fallback of using the whole heading
+	// text as the number (Foreword, Intellectual Property Rights, ...).
+	//
+	// A dotless number keeps the pre-existing one-letter suffix: a heading
+	// whose first token is digits followed by a word ("5GS Bearer Contexts",
+	// "3GPP TS 23.501 overview") is prose, not a clause number, and top-level
+	// clauses never carry a suffix longer than the single letter 3GPP appends
+	// when inserting one.
 	//
 	// Deliberately not matched: range headings such as
 	// "7.6.4.25-7.6.4.35\tVoid". A range is not a single clause number, so
@@ -43,15 +49,16 @@ var (
 	// 36.521-1) do match, on their first number, with the rest of the range as
 	// the title — out of scope to detect, and no worse than the fallback.
 	sectionNumberRE = regexp.MustCompile(
-		`^([A-Z][A-Za-z]*(?:\.` + numberComponent + `)+` +
-			`|` + numberComponent + `(?:\.` + numberComponent + `)*)` +
+		`^([A-Z]{1,2}(?:\.` + numberComponent + `)+` +
+			`|` + numberComponent + `(?:\.` + numberComponent + `)+` +
+			`|\d+[A-Za-z]?)` +
 			`\.?[\t ]+(.+)$`)
 	// Annex letters run past Z into AA, AB, ... (TS 23.228 reaches Annex AI).
 	// Capturing only the first letter made every such annex collapse onto the
 	// single-letter number, so "Annex AA" overwrote "Annex A" in the database.
 	annexRE             = regexp.MustCompile(`(?is)^Annex[\s\xa0]+([A-Z]{1,2})[\s\xa0]*(?:\((?:normative|informative)\))?[\s\xa0]*[:\s\xa0]*(.*)$`)
 	headingNumRE        = regexp.MustCompile(`(?i)^[Hh]eading\s+(\d+)`)
-	annexSubRE          = regexp.MustCompile(`^[A-Z][A-Za-z]*\.`)
+	annexSubRE          = regexp.MustCompile(`^[A-Z]{1,2}\.`)
 	unnumberedHeadingRE = regexp.MustCompile(`^\p{Pd}[\t ]+(.+)$`)
 
 	// 3GPP ASN.1 extraction markers on their own paragraph:
