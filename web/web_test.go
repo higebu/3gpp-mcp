@@ -169,6 +169,18 @@ func TestRenderMarkdown_LatexFence(t *testing.T) {
 		}
 	})
 
+	t.Run("legacy entity lookalikes are not resolved", func(t *testing.T) {
+		// A fence body is raw LaTeX, so unescaping it before escaping would
+		// resolve semicolon-less legacy entities and corrupt the formula:
+		// html.UnescapeString turns "\&not" into "\¬" and "&times" into "×".
+		content := "```latex\na \\&not b \\text{1 &times 2}\n```\n"
+		got := renderMarkdown(content, renderOpts{specID: "TS 38.901"})
+		want := `<span class="math-display">a \&amp;not b \text{1 &amp;times 2}</span>`
+		if !strings.Contains(got, want) {
+			t.Errorf("fence body was entity-decoded, got:\n%s", got)
+		}
+	})
+
 	t.Run("empty fence renders nothing", func(t *testing.T) {
 		content := "```latex\n```\n"
 		got := renderMarkdown(content, renderOpts{specID: "TS 38.901"})

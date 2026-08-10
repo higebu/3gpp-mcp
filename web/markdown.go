@@ -325,7 +325,11 @@ func protectLatexFence(seg, token string, spans *[]mathSpan) string {
 	if latex == "" {
 		return "\n\n"
 	}
-	latex = htmlpkg.EscapeString(htmlpkg.UnescapeString(latex))
+	// Escaped once, never unescaped first: a fence body is raw LaTeX straight
+	// from the converter, so the round trip protectMath needs for pre-escaped
+	// table-cell math would only corrupt it here — html.UnescapeString
+	// resolves semicolon-less legacy entities, turning "\&not" into "\¬".
+	latex = htmlpkg.EscapeString(latex)
 	i := len(*spans)
 	*spans = append(*spans, mathSpan{
 		html:  fmt.Sprintf(`<span class="math-display">%s</span>`, latex),

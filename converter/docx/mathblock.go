@@ -5,11 +5,25 @@ import (
 	"strings"
 )
 
-// eqNumberRE matches a 3GPP equation number as it appears at the end of an
-// equation paragraph: "(7.3-1)", "(7.3-3a)", "(A.4-2)", "(4.1)". The leading
-// character is required to be alphanumeric so that a parenthesised aside —
-// "(see below)" — is not mistaken for one.
+// eqNumberRE matches the shape of a 3GPP equation number as it appears at the
+// end of an equation paragraph: "(7.3-1)", "(7.3-3a)", "(A.4-2)", "(5.2.3-4)".
+// A single unspaced alphanumeric token; eqNumberLike adds the two content
+// requirements that tell a number from an ordinary parenthesised trailer.
 var eqNumberRE = regexp.MustCompile(`^\(\s*[0-9A-Za-z][0-9A-Za-z.\-]*\s*\)$`)
+
+// eqNumberLike reports whether a parenthesised trailer is an equation number
+// rather than something a sentence might end with. Equation numbers are
+// derived from the clause number, so one always carries a "." or "-"
+// separator and at least one digit — which a unit "(dB)", an aside
+// "(optional)", a list marker "(i)" and an abbreviation "(i.e)" never do
+// together. The separator is not required to sit between two alphanumerics:
+// specifications do misprint their own numbers, and TR 38.901 clause 7.6.9
+// carries a "(7.6.-43)" that is an equation number all the same.
+func eqNumberLike(s string) bool {
+	return eqNumberRE.MatchString(s) &&
+		strings.ContainsAny(s, "0123456789") &&
+		strings.ContainsAny(s, ".-")
+}
 
 // eqTrailingPunct is the punctuation an equation paragraph may carry between
 // the formula and its number, as in "… , (7.3-1)".
@@ -116,7 +130,7 @@ func splitEquationTail(tail string) (punct, number string, ok bool) {
 	if rest == "" {
 		return punct, "", true
 	}
-	if !eqNumberRE.MatchString(rest) {
+	if !eqNumberLike(rest) {
 		return "", "", false
 	}
 	return punct, strings.TrimSpace(rest[1 : len(rest)-1]), true

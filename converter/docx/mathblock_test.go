@@ -98,7 +98,38 @@ func TestMathFenceBody(t *testing.T) {
 		{
 			name:    "parenthesised aside is not an equation number",
 			info:    mathPara("", `x=y`, false, nil, []string{"\t(see below)"}),
-			comment: "the number must be alphanumeric",
+			comment: "an equation number is a single token",
+		},
+		{
+			name:    "trailing unit is not an equation number",
+			info:    mathPara("", `x=y`, false, nil, []string{"\t(dB)"}),
+			comment: "an equation number carries a . or - separator",
+		},
+		{
+			name:    "list marker is not an equation number",
+			info:    mathPara("", `x=y`, false, nil, []string{"\t(i)"}),
+			comment: "an equation number carries a . or - separator",
+		},
+		{
+			name:    "abbreviation is not an equation number",
+			info:    mathPara("", `x=y`, false, nil, []string{"\t(i.e)"}),
+			comment: "an equation number contains a digit",
+		},
+		{
+			name:   "multi-level clause equation number",
+			info:   mathPara("EQ", `x=y`, false, nil, []string{"\t(5.2.3-4)"}),
+			style:  "EQ",
+			want:   `x=y \tag{5.2.3-4}`,
+			wantOK: true,
+		},
+		{
+			// TR 38.901 clause 7.6.9 misprints this one; it is an equation
+			// number all the same.
+			name:   "misprinted equation number",
+			info:   mathPara("EQ", `x=y`, false, nil, []string{"\t(7.6.-43)"}),
+			style:  "EQ",
+			want:   `x=y \tag{7.6.-43}`,
+			wantOK: true,
 		},
 		{
 			name:  "list item",
