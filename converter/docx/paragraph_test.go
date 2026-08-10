@@ -119,8 +119,16 @@ func TestParseParagraph_InlineMath(t *testing.T) {
 	if info.Runs[0].Text != "value " {
 		t.Errorf("run[0].Text = %q, want %q", info.Runs[0].Text, "value ")
 	}
-	if info.Runs[1].Text != "${n}_{78}$" {
-		t.Errorf("run[1].Text = %q, want %q", info.Runs[1].Text, "${n}_{78}$")
+	// Runs carry the bare LaTeX; the delimiters come from markdownText.
+	if info.Runs[1].Text != "{n}_{78}" {
+		t.Errorf("run[1].Text = %q, want %q", info.Runs[1].Text, "{n}_{78}")
+	}
+	if !info.Runs[1].Math || info.Runs[1].MathDisplay {
+		t.Errorf("run[1] Math = %v, MathDisplay = %v, want true/false",
+			info.Runs[1].Math, info.Runs[1].MathDisplay)
+	}
+	if info.Text != "value ${n}_{78}$" {
+		t.Errorf("Text = %q, want %q", info.Text, "value ${n}_{78}$")
 	}
 	// The math m:t must not leak as its own plain run.
 	for _, r := range info.Runs {
@@ -141,8 +149,44 @@ func TestParseParagraph_DisplayMath(t *testing.T) {
 	if len(info.Runs) != 1 {
 		t.Fatalf("Runs = %d, want 1 (%+v)", len(info.Runs), info.Runs)
 	}
-	if info.Runs[0].Text != "$$\\frac{1}{2}$$" {
-		t.Errorf("run[0].Text = %q, want %q", info.Runs[0].Text, "$$\\frac{1}{2}$$")
+	if info.Runs[0].Text != "\\frac{1}{2}" {
+		t.Errorf("run[0].Text = %q, want %q", info.Runs[0].Text, "\\frac{1}{2}")
+	}
+	if !info.Runs[0].Math || !info.Runs[0].MathDisplay {
+		t.Errorf("run[0] Math = %v, MathDisplay = %v, want true/true",
+			info.Runs[0].Math, info.Runs[0].MathDisplay)
+	}
+	if info.Text != "$$\\frac{1}{2}$$" {
+		t.Errorf("Text = %q, want %q", info.Text, "$$\\frac{1}{2}$$")
+	}
+}
+
+// A math run must never merge into a neighbouring text run: Text holds bare
+// LaTeX, so concatenating the two would drop the delimiters silently and the
+// formula would render as prose.
+func TestMergeAdjacentRuns_MathNeverMerges(t *testing.T) {
+	runs := []runInfo{
+		{Text: "value "},
+		{Text: "{n}_{78}", Math: true},
+		{Text: " units"},
+	}
+	merged := mergeAdjacentRuns(runs)
+	if len(merged) != 3 {
+		t.Fatalf("merged = %d runs, want 3 (%+v)", len(merged), merged)
+	}
+	if got := runsToMarkdown(runs); got != "value ${n}_{78}$ units" {
+		t.Errorf("runsToMarkdown = %q, want %q", got, "value ${n}_{78}$ units")
+	}
+}
+
+// Emphasis must stay outside a formula: a "*" or "<sub>" inside the
+// delimiters is not LaTeX and would reach KaTeX as markup.
+func TestRunsToMarkdown_MathIgnoresFormatting(t *testing.T) {
+	runs := []runInfo{
+		{Text: "\\alpha", Math: true, Bold: true, Italic: true, VertAlign: "subscript"},
+	}
+	if got := runsToMarkdown(runs); got != "$\\alpha$" {
+		t.Errorf("runsToMarkdown = %q, want %q", got, "$\\alpha$")
 	}
 }
 

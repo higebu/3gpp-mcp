@@ -50,13 +50,23 @@ make web                  # HTTP server with web viewer at :8080
   keeps conversion-pair extension changes (`.emf`/`.wmf`/`.pcz`/`.png`) from
   counting as content changes in diffs.
 - **Tagged code fences** (` ```asn1 `, ` ```diameter `, ` ```xml `, ` ```sip `,
-  ` ```sdp `): Diameter, XML, SIP and SDP blocks carry no code style in the
-  source documents and are detected by content
+  ` ```sdp `, ` ```latex `): Diameter, XML, SIP and SDP blocks carry no code
+  style in the source documents and are detected by content
   (`converter/docx/xmlblock.go`, `converter/docx/sipblock.go`); paragraphs
   already fenced via style/font keep bare ` ``` ` fences and never enter
-  content detection. Changing fence or notation output requires a database
-  rebuild (`make build-db`) and a bump of `versionstore.cacheSchemaVersion`,
-  which wipes old version caches on open.
+  content detection. ` ```latex ` is structural, not content-detected:
+  `mathFenceBody` (`converter/docx/mathblock.go`) promotes a paragraph whose
+  only content is one formula. Changing fence or notation output requires a
+  database rebuild (`make build-db`) and a bump of
+  `versionstore.cacheSchemaVersion`, which wipes old version caches on open.
+- **Math is format-independent, like image references**: ` ```latex ` for a
+  standalone equation, `$$...$$` for display math where a fence cannot go (a
+  table cell, a list item), `$...$` inline. `runInfo.Text` holds *bare* LaTeX
+  and `runInfo.markdownText()` is the only place the delimiters are added — so
+  `mergeAdjacentRuns` must never merge a math run, or they vanish silently.
+  `ommlToLaTeX` guarantees the LaTeX carries no `<`/`>` (`escapeMathAngles`),
+  which is why `converter/docx/table.go` can write cell math unescaped and
+  keep `&` as a matrix column separator.
 - **HTTP transport runs stateless** (`StreamableHTTPOptions{Stateless: true}`)
   — required to serve MCP protocol 2026-07-28; older protocol versions get
   per-request sessions.

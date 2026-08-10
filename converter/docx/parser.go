@@ -780,10 +780,21 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 						continue
 					}
 				}
+				// A standalone equation becomes its own ```latex block. This
+				// is decided last, so a formula inside an ASN.1 or XML
+				// listing still belongs to that listing.
+				mathBody, isMathFence := "", false
+				if currentSection != nil && !isCodePara {
+					mathBody, isMathFence = mathFenceBody(info, styleName)
+				}
 				switch {
 				case isCodePara && currentSection != nil:
 					// Append to the pending code block, preserving whitespace.
 					codeBuffer = append(codeBuffer, codeLineText(info))
+				case isMathFence:
+					flushCodeBlock()
+					currentSection.Content = append(currentSection.Content,
+						"```latex\n"+mathBody+"\n```")
 				case info.Text == "" && len(info.Images) == 0 && len(codeBuffer) > 0:
 					// Preserve blank lines inside a pending code block.
 					codeBuffer = append(codeBuffer, "")
@@ -821,7 +832,7 @@ func codeLineText(info paragraphInfo) string {
 	if len(info.Runs) > 0 {
 		var sb strings.Builder
 		for _, r := range info.Runs {
-			sb.WriteString(r.Text)
+			sb.WriteString(r.markdownText())
 		}
 		return sb.String()
 	}

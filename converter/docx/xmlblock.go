@@ -80,11 +80,13 @@ func matchXMLCandidateStart(info paragraphInfo) bool {
 // matchXMLLine reports whether the paragraph looks like XML on its own: a
 // tag/comment/declaration line, or the completion of a construct the previous
 // line left unterminated. Used to decide whether a held opener candidate gets
-// its required second XML line. Math paragraphs (OMML converted to $…$) never
-// count, even when a tag is left unterminated.
+// its required second XML line. Math paragraphs never count, even when a tag
+// is left unterminated: hasMath recognizes a converted formula structurally,
+// and the "$" prefix additionally covers a paragraph whose literal text
+// merely starts with a dollar sign.
 func matchXMLLine(info paragraphInfo, tr *xmlLineTracker) bool {
 	t := xmlTrimmedText(info)
-	if t == "" || strings.HasPrefix(t, "$") {
+	if t == "" || strings.HasPrefix(t, "$") || hasMath(info) {
 		return false
 	}
 	return tr.open || xmlLooseLineRE.MatchString(t)
@@ -102,7 +104,7 @@ func matchXMLLine(info paragraphInfo, tr *xmlLineTracker) bool {
 // run as long as it likes without a missing close tag turning prose into code.
 func matchXMLContinuation(info paragraphInfo, tr *xmlLineTracker) bool {
 	t := xmlTrimmedText(info)
-	if t == "" || strings.HasPrefix(t, "$") {
+	if t == "" || strings.HasPrefix(t, "$") || hasMath(info) {
 		return false
 	}
 	return tr.open || tr.depth > 0 || xmlLooseLineRE.MatchString(t)

@@ -784,6 +784,29 @@ func TestParseSections_XMLNotSwallowingMathOrImages(t *testing.T) {
 	}
 }
 
+// The guard above works on a paragraph whose literal text starts with "$".
+// A real converted formula is recognized structurally instead, so an equation
+// that renders to LaTeX not starting with "$" — the common case, since the
+// delimiters are added by markdownText — still ends an open block rather than
+// being swallowed into the fence.
+func TestParseSections_XMLNotSwallowingConvertedMath(t *testing.T) {
+	elements := []bodyElement{
+		xmlTestHeading("1\tFirst"),
+		xmlTestPara(`<?xml version="1.0"?>`),
+		xmlTestPara(`<body>`),
+		{Tag: "p", Paragraph: mathPara("", `x=y`, false, []string{"where "}, nil)},
+		xmlTestPara("Trailing prose."),
+	}
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	joined := strings.Join(sections[0].Content, "\n")
+	if strings.Contains(joined, "```xml\n<?xml version=\"1.0\"?>\n<body>\nwhere $x=y$") {
+		t.Errorf("converted math swallowed into the fence: %v", sections[0].Content)
+	}
+	if !strings.Contains(joined, "where $x=y$") {
+		t.Errorf("expected the math paragraph preserved outside the fence, got %v", sections[0].Content)
+	}
+}
+
 // An XML-looking but code-styled paragraph neither confirms a held opener
 // candidate nor continues an open block: code-styled XML keeps its bare
 // fence in both positions.
