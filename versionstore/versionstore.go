@@ -70,8 +70,10 @@ const DefaultFileName = "versions.db"
 // before an inline image in the same run, generation 9 stops unbalanced XML
 // blocks and VML text boxes from absorbing surrounding paragraphs and clamps
 // headings to ATX level 6 (alongside the concurrent EMF naming, OMML and
-// link conversion changes, which this one bump covers as well).
-const cacheSchemaVersion = 9
+// link conversion changes, which this one bump covers as well), generation 10
+// changes the math notation: standalone equations become ```latex fences and
+// table-cell formulas are no longer HTML-escaped.
+const cacheSchemaVersion = 10
 
 // schema mirrors the spec, section and image tables of the main database,
 // without the full-text index: cached versions must never appear in search

@@ -160,6 +160,10 @@ func renderMarkdown(content string, o renderOpts) string {
 	sb.Grow(len(content))
 	for _, seg := range segs {
 		if seg.code {
+			if seg.lang == "latex" {
+				sb.WriteString(protectLatexFence(seg.text, token, &mathSpans))
+				continue
+			}
 			sb.WriteString(seg.text)
 			continue
 		}
@@ -307,10 +311,69 @@ func parseMathPlaceholder(s, token string) (idx, n int) {
 	return idx, len(token) + end + 1
 }
 
+// protectLatexFence turns a ```latex block — the converter's notation for a
+// standalone equation — into a display-math placeholder. It runs instead of
+// passing the segment through as code because Chroma ships a "latex" lexer,
+// so goldmark would otherwise syntax-highlight the equation into a <pre>
+// instead of letting KaTeX typeset it.
+//
+// The placeholder is surrounded by blank lines so goldmark gives the equation
+// its own paragraph rather than joining it to adjacent prose. A fence with an
+// empty body yields nothing at all.
+func protectLatexFence(seg, token string, spans *[]mathSpan) string {
+	latex := strings.TrimSpace(stripFenceLines(seg))
+	if latex == "" {
+		return "\n\n"
+	}
+	// Escaped once, never unescaped first: a fence body is raw LaTeX straight
+	// from the converter, so the round trip protectMath needs for pre-escaped
+	// table-cell math would only corrupt it here — html.UnescapeString
+	// resolves semicolon-less legacy entities, turning "\&not" into "\¬".
+	latex = htmlpkg.EscapeString(latex)
+	i := len(*spans)
+	*spans = append(*spans, mathSpan{
+		html:  fmt.Sprintf(`<span class="math-display">%s</span>`, latex),
+		plain: "$$" + latex + "$$",
+	})
+	return "\n\n" + mathPlaceholder(token, i) + "\n\n"
+}
+
+// stripFenceLines drops a fenced block's opening line and, when present, its
+// closing fence line, returning the body. splitCodeSegments hands over the
+// whole block including both fences, and an unterminated fence with none.
+func stripFenceLines(seg string) string {
+	body := seg
+	if i := strings.IndexByte(body, '\n'); i >= 0 {
+		body = body[i+1:]
+	} else {
+		return "" // opening fence only, no body
+	}
+	// The closer is the last line; fenceInfo confirms it really is one so a
+	// body line is never mistaken for it.
+	trimmed := strings.TrimRight(body, "\n")
+	if i := strings.LastIndexByte(trimmed, '\n'); i >= 0 {
+		if c, _, info := fenceInfo(trimmed[i+1:]); c != 0 && strings.TrimSpace(info) == "" {
+			return trimmed[:i]
+		}
+		return body
+	}
+	if c, _, info := fenceInfo(trimmed); c != 0 && strings.TrimSpace(info) == "" {
+		return ""
+	}
+	return body
+}
+
 // protectMath extracts LaTeX math spans from text, replacing each with a
 // placeholder built from token, and appends the formula to spans for
 // re-injection after conversion. A $...$ span isInlineMath rejects is left
 // alone, so its dollar signs stay visible text.
+//
+// The formula is escaped once and never unescaped first. The converter emits
+// LaTeX raw everywhere — including inside table cells, which is the whole
+// point of the unescaped math branch in writeParagraphInline — so there is
+// nothing to normalize, and a round trip would actively corrupt: the
+// converter writes a literal ampersand as "\&", and html.UnescapeString
+// resolves semicolon-less legacy entities, turning "\&not" into "\¬".
 func protectMath(text, token string, spans *[]mathSpan) string {
 	locs := mathRE.FindAllStringSubmatchIndex(text, -1)
 	if locs == nil {
@@ -331,7 +394,7 @@ func protectMath(text, token string, spans *[]mathSpan) string {
 				continue // prose, not math: leave the dollars as text
 			}
 		}
-		latex = htmlpkg.EscapeString(htmlpkg.UnescapeString(latex))
+		latex = htmlpkg.EscapeString(latex)
 		i := len(*spans)
 		*spans = append(*spans, mathSpan{
 			html:  fmt.Sprintf(`<span class="%s">%s</span>`, class, latex),

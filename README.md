@@ -115,7 +115,7 @@ Browse specifications in your browser by adding `--web` to the HTTP transport:
 # Web viewer:   http://localhost:8080/
 ```
 
-Features: spec list with filtering, section viewer with TOC sidebar, full-text search with pagination, past-version browsing (versions are listed per spec and downloaded on demand, like the MCP tools), version comparison (structural summary and per-section diffs), embedded images, cross-reference links, OpenAPI definitions with syntax highlighting, LaTeX math rendering, dark mode, responsive design.
+Features: spec list with filtering, section viewer with TOC sidebar, full-text search with pagination, past-version browsing (versions are listed per spec and downloaded on demand, like the MCP tools), version comparison (structural summary and per-section diffs), embedded images, cross-reference links, OpenAPI definitions with syntax highlighting, KaTeX rendering of the [LaTeX formulas](#formulas) the converter emits, dark mode, responsive design.
 
 Code blocks are syntax-highlighted per notation — ASN.1, Diameter, SIP/RTSP,
 SDP and XML (see [Code blocks](#code-blocks)). The color theme — Catppuccin
@@ -342,11 +342,29 @@ tell the notations apart:
 | ` ```xml ` | XML schemas, XML body examples and DTDs |
 | ` ```sip ` | SIP/RTSP message examples |
 | ` ```sdp ` | Standalone SDP session descriptions |
+| ` ```latex ` | Standalone equations converted from Word OMML |
 | ` ``` ` | Anything else the source document styles as code |
 
 Diameter, XML, SIP and SDP blocks carry no code style in the source `.docx`, so
 they are recognized by content during conversion. The web viewer highlights all
-of them.
+of them. The `latex` fence is not content-detected: the converter emits it for
+paragraphs whose only content is a formula.
+
+### Formulas
+
+Word formulas (OMML) are converted to LaTeX in three notations, so a formula is
+readable whether it stands alone or sits in a sentence:
+
+| Notation | Where |
+|----------|-------|
+| ` ```latex ` fence | A paragraph whose only content is an equation. Its equation number is kept as `\tag{7.3-1}`, which renders as a right-aligned `(7.3-1)`. |
+| `$$...$$` | Display equations that cannot be a fenced block — inside a table cell or a list item. |
+| `$...$` | A formula inside a sentence. |
+
+The LaTeX is stored as-is, so MCP clients and the CLI see the same text the web
+viewer renders with [KaTeX](https://katex.org/). It never contains `<` or `>`
+(they become `\lt`, `\gt`, `\langle`, `\rangle`), which is what lets table cells
+carry a formula unescaped and keep `&` as a matrix column separator.
 
 Tagged fences and the unified image notation are produced when a spec is
 converted, so a database built with an older version of this tool keeps its

@@ -95,17 +95,98 @@ func TestRenderMarkdown_MathProtected(t *testing.T) {
 		}
 	})
 
-	t.Run("pre-escaped table-cell math normalizes ampersand", func(t *testing.T) {
-		// Table HTML from the docx converter has already HTML-escaped & → &amp;.
-		content := `<table><tbody><tr><td>$1 &amp; 2$</td></tr></tbody></table>`
+	t.Run("table-cell math keeps a raw ampersand", func(t *testing.T) {
+		// The converter writes cell math unescaped, so the matrix column
+		// separator arrives as a literal "&".
+		content := `<table><tbody><tr><td>$1 & 2$</td></tr></tbody></table>`
 		got := renderMarkdown(content, renderOpts{specID: "TS 38.211"})
-		// The span's inner HTML must be single-escaped so textContent is "1 & 2".
 		want := `<span class="math-inline">1 &amp; 2</span>`
 		if !strings.Contains(got, want) {
-			t.Errorf("table-cell math not normalized, got:\n%s", got)
+			t.Errorf("table-cell math not protected, got:\n%s", got)
 		}
-		if strings.Contains(got, "&amp;amp;") {
-			t.Errorf("table-cell math double-escaped, got:\n%s", got)
+	})
+
+	t.Run("legacy entity lookalikes are not resolved", func(t *testing.T) {
+		// The converter writes a literal ampersand as "\&", so unescaping
+		// before escaping would resolve semicolon-less legacy entities and
+		// silently rewrite the formula: "\&not" would become "\¬".
+		for _, content := range []string{
+			`value $a \&not b$ here`,
+			`<table><tbody><tr><td><p>$a \&not b$</p></td></tr></tbody></table>`,
+		} {
+			got := renderMarkdown(content, renderOpts{specID: "TS 38.211"})
+			if !strings.Contains(got, `<span class="math-inline">a \&amp;not b</span>`) {
+				t.Errorf("math was entity-decoded in %q, got:\n%s", content, got)
+			}
+		}
+	})
+}
+
+// TestRenderMarkdown_LatexFence verifies that the converter's ```latex block
+// reaches KaTeX as display math instead of being syntax-highlighted: Chroma
+// ships a "latex" lexer, so without the diversion an equation would render as
+// a <pre> code listing.
+func TestRenderMarkdown_LatexFence(t *testing.T) {
+	t.Run("renders as display math, not a code block", func(t *testing.T) {
+		content := "```latex\nPL=32.4 \\tag{7.3-1}\n```\n"
+		got := renderMarkdown(content, renderOpts{specID: "TS 38.901"})
+		want := `<span class="math-display">PL=32.4 \tag{7.3-1}</span>`
+		if !strings.Contains(got, want) {
+			t.Errorf("latex fence not rendered as display math, got:\n%s", got)
+		}
+		if strings.Contains(got, `class="chroma"`) || strings.Contains(got, "<pre") {
+			t.Errorf("latex fence must not be syntax-highlighted, got:\n%s", got)
+		}
+	})
+
+	t.Run("matrix separators and row breaks survive", func(t *testing.T) {
+		content := "```latex\n\\begin{matrix} 1 & j \\\\ -1 & j \\end{matrix}\n```\n"
+		got := renderMarkdown(content, renderOpts{specID: "TS 38.211"})
+		want := `<span class="math-display">\begin{matrix} 1 &amp; j \\ -1 &amp; j \end{matrix}</span>`
+		if !strings.Contains(got, want) {
+			t.Errorf("latex fence body mangled, got:\n%s", got)
+		}
+	})
+
+	t.Run("gets its own paragraph between prose", func(t *testing.T) {
+		content := "Before.\n\n```latex\nx=y\n```\n\nAfter."
+		got := renderMarkdown(content, renderOpts{specID: "TS 38.901"})
+		if !strings.Contains(got, "<p>Before.</p>") || !strings.Contains(got, "<p>After.</p>") {
+			t.Errorf("surrounding prose must stay its own paragraphs, got:\n%s", got)
+		}
+		if !strings.Contains(got, `<span class="math-display">x=y</span>`) {
+			t.Errorf("equation missing, got:\n%s", got)
+		}
+	})
+
+	t.Run("other fences are still highlighted", func(t *testing.T) {
+		content := "```xml\n<a>b</a>\n```\n"
+		got := renderMarkdown(content, renderOpts{specID: "TS 24.423"})
+		if !strings.Contains(got, `class="chroma"`) {
+			t.Errorf("xml fence must keep Chroma highlighting, got:\n%s", got)
+		}
+		if strings.Contains(got, "math-display") {
+			t.Errorf("xml fence must not become math, got:\n%s", got)
+		}
+	})
+
+	t.Run("legacy entity lookalikes are not resolved", func(t *testing.T) {
+		// A fence body is raw LaTeX, so unescaping it before escaping would
+		// resolve semicolon-less legacy entities and corrupt the formula:
+		// html.UnescapeString turns "\&not" into "\¬" and "&times" into "×".
+		content := "```latex\na \\&not b \\text{1 &times 2}\n```\n"
+		got := renderMarkdown(content, renderOpts{specID: "TS 38.901"})
+		want := `<span class="math-display">a \&amp;not b \text{1 &amp;times 2}</span>`
+		if !strings.Contains(got, want) {
+			t.Errorf("fence body was entity-decoded, got:\n%s", got)
+		}
+	})
+
+	t.Run("empty fence renders nothing", func(t *testing.T) {
+		content := "```latex\n```\n"
+		got := renderMarkdown(content, renderOpts{specID: "TS 38.901"})
+		if strings.Contains(got, "math-display") {
+			t.Errorf("an empty fence must not produce a math span, got:\n%s", got)
 		}
 	})
 }
