@@ -367,6 +367,13 @@ func stripFenceLines(seg string) string {
 // placeholder built from token, and appends the formula to spans for
 // re-injection after conversion. A $...$ span isInlineMath rejects is left
 // alone, so its dollar signs stay visible text.
+//
+// The formula is escaped once and never unescaped first. The converter emits
+// LaTeX raw everywhere — including inside table cells, which is the whole
+// point of the unescaped math branch in writeParagraphInline — so there is
+// nothing to normalize, and a round trip would actively corrupt: the
+// converter writes a literal ampersand as "\&", and html.UnescapeString
+// resolves semicolon-less legacy entities, turning "\&not" into "\¬".
 func protectMath(text, token string, spans *[]mathSpan) string {
 	locs := mathRE.FindAllStringSubmatchIndex(text, -1)
 	if locs == nil {
@@ -387,7 +394,7 @@ func protectMath(text, token string, spans *[]mathSpan) string {
 				continue // prose, not math: leave the dollars as text
 			}
 		}
-		latex = htmlpkg.EscapeString(htmlpkg.UnescapeString(latex))
+		latex = htmlpkg.EscapeString(latex)
 		i := len(*spans)
 		*spans = append(*spans, mathSpan{
 			html:  fmt.Sprintf(`<span class="%s">%s</span>`, class, latex),

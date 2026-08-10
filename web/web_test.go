@@ -106,17 +106,18 @@ func TestRenderMarkdown_MathProtected(t *testing.T) {
 		}
 	})
 
-	t.Run("pre-escaped table-cell math normalizes ampersand", func(t *testing.T) {
-		// Table HTML from the docx converter has already HTML-escaped & → &amp;.
-		content := `<table><tbody><tr><td>$1 &amp; 2$</td></tr></tbody></table>`
-		got := renderMarkdown(content, renderOpts{specID: "TS 38.211"})
-		// The span's inner HTML must be single-escaped so textContent is "1 & 2".
-		want := `<span class="math-inline">1 &amp; 2</span>`
-		if !strings.Contains(got, want) {
-			t.Errorf("table-cell math not normalized, got:\n%s", got)
-		}
-		if strings.Contains(got, "&amp;amp;") {
-			t.Errorf("table-cell math double-escaped, got:\n%s", got)
+	t.Run("legacy entity lookalikes are not resolved", func(t *testing.T) {
+		// The converter writes a literal ampersand as "\&", so unescaping
+		// before escaping would resolve semicolon-less legacy entities and
+		// silently rewrite the formula: "\&not" would become "\¬".
+		for _, content := range []string{
+			`value $a \&not b$ here`,
+			`<table><tbody><tr><td><p>$a \&not b$</p></td></tr></tbody></table>`,
+		} {
+			got := renderMarkdown(content, renderOpts{specID: "TS 38.211"})
+			if !strings.Contains(got, `<span class="math-inline">a \&amp;not b</span>`) {
+				t.Errorf("math was entity-decoded in %q, got:\n%s", content, got)
+			}
 		}
 	})
 }
