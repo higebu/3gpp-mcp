@@ -7,7 +7,9 @@
 #
 # _RELEASE defaults to "latest", baking in the latest version of every spec
 # across all releases. Set it to a release number (e.g. _RELEASE=19) to restrict
-# the database to a single release.
+# the database to a single release, or leave it at "latest" and set
+# _MAX_RELEASE=19 to cap the newest release while keeping specs that have no
+# version in it.
 #
 # Manual run (latest of every spec):
 #   gcloud builds submit --no-source --config cloudbuild.yaml \
@@ -16,6 +18,16 @@
 # Manual run (single release):
 #   gcloud builds submit --no-source --config cloudbuild.yaml \
 #     --substitutions=_REF=main,_RELEASE=19,_REGION=asia-northeast1,_REPO=3gpp-mcp,_SERVICE=3gpp-mcp
+#
+# Manual run (capped at a release):
+#   gcloud builds submit --no-source --config cloudbuild.yaml \
+#     --substitutions=_REF=main,_MAX_RELEASE=19,_REGION=asia-northeast1,_REPO=3gpp-mcp,_SERVICE=3gpp-mcp
+#
+# The image tag is rel${_RELEASE}${_MAX_RELEASE}, so the three configurations
+# above tag "rellatest", "rel19" and "rellatest19" respectively. Keeping the cap
+# in the tag matters because the scheduled build runs with the defaults: with a
+# shared tag it would overwrite a capped image with an uncapped database and
+# deploy it.
 #
 # Scheduled run: start it from Cloud Scheduler via the Cloud Build API.
 #
@@ -29,6 +41,9 @@ substitutions:
   # "latest" = latest version of every spec across all releases; or a release
   # number such as "19" to restrict the database to a single release.
   _RELEASE: "latest"
+  # Optional cap: a release number such as "19" takes every spec at its newest
+  # version at or below it. Cannot be combined with a numeric _RELEASE.
+  _MAX_RELEASE: ""
   _REGION: "asia-northeast1"
   _REPO: "3gpp-mcp"
   _SERVICE: "3gpp-mcp"
@@ -60,15 +75,16 @@ steps:
     args:
       - build
       - --build-arg=RELEASE=${_RELEASE}
+      - --build-arg=MAX_RELEASE=${_MAX_RELEASE}
       - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}${_MAX_RELEASE}
       - .
 
   - id: push
     name: gcr.io/cloud-builders/docker@sha256:617f98016081e2978c0b44184d7b09446027b909f1078b8fdc23efc4c74c5f20
     args:
       - push
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}${_MAX_RELEASE}
 
   # Deploy via a service spec so we can configure the startup/liveness probes
   # (gcloud run deploy has no flags for probes). add-iam-policy-binding replaces
@@ -83,7 +99,7 @@ steps:
         set -euo pipefail
         sed \
           -e "s|__SERVICE__|${_SERVICE}|g" \
-          -e "s|__IMAGE__|${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}|g" \
+          -e "s|__IMAGE__|${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}${_MAX_RELEASE}|g" \
           service.yaml > /workspace/service.rendered.yaml
         gcloud run services replace /workspace/service.rendered.yaml --region=${_REGION}
         gcloud run services add-iam-policy-binding ${_SERVICE} \

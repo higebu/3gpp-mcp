@@ -10,11 +10,14 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 # 2) Build the database. By default the latest version of every spec across all
 #    releases is baked in; pass --build-arg RELEASE=19 to restrict to a single
-#    release. LibreOffice is required for --convert-doc / --convert-image but
-#    lives only in this stage, so it never bloats the final image. Temp files are
-#    deleted as each spec is processed, keeping disk usage low.
+#    release, or --build-arg MAX_RELEASE=19 to cap the newest release while
+#    keeping specs that have no version in it. LibreOffice is required for
+#    --convert-doc / --convert-image but lives only in this stage, so it never
+#    bloats the final image. Temp files are deleted as each spec is processed,
+#    keeping disk usage low.
 FROM golang:1.26-bookworm@sha256:6c5605ab3a9a9fb3c4eafe5b3d63cdbf3881caf113262b67862547b54a9db599 AS db-builder
 ARG RELEASE=latest
+ARG MAX_RELEASE=
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libreoffice ca-certificates sqlite3 \
     && rm -rf /var/lib/apt/lists/*
@@ -28,6 +31,7 @@ RUN if [ "${RELEASE}" = "latest" ] || [ -z "${RELEASE}" ]; then \
     else \
         set -- --release "${RELEASE}"; \
     fi \
+    && if [ -n "${MAX_RELEASE}" ]; then set -- "$@" --max-release "${MAX_RELEASE}"; fi \
     && /3gpp-mcp build "$@" \
     --db /3gpp.db \
     --convert-doc \
