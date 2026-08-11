@@ -811,6 +811,69 @@ func TestCmdUpdate_MaxReleaseMovesDown(t *testing.T) {
 	}
 }
 
+// TestCmdUpdate_MaxReleaseRemovesAboveCap covers a spec the cap excludes
+// outright: the archive has no version at or below it, so leaving the stored
+// rows would keep the database above --max-release no matter how often it is
+// updated. A spec missing from the listing altogether must survive, since that
+// is indistinguishable from a listing that failed to fetch.
+func TestCmdUpdate_MaxReleaseRemovesAboveCap(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "update.db")
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := d.InitSchema(); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	// Introduced in Rel-20, so nothing at or below the cap exists.
+	if err := d.InsertSpecWithSections(db.Spec{
+		ID: "TS 23.999", Title: "Brand new", Version: "20.0.0", VersionToken: "k00", Release: "20", Series: "23",
+	}, []db.Section{
+		{SpecID: "TS 23.999", Version: "20.0.0", Number: "1", Title: "Scope", Level: 1, Content: "# 1 Scope\nBrand new spec."},
+	}); err != nil {
+		t.Fatalf("insert spec: %v", err)
+	}
+	// Absent from the spec list below, so the cap must leave it alone.
+	if err := d.UpsertSpec(db.Spec{
+		ID: "TS 34.108", Title: "Common test environments", Version: "18.4.0", VersionToken: "i40", Release: "18", Series: "34",
+	}); err != nil {
+		t.Fatalf("upsert spec: %v", err)
+	}
+	d.Close()
+
+	listPath := filepath.Join(t.TempDir(), "list.txt")
+	if err := os.WriteFile(listPath, []byte("23_series/23.999/23999-k00.zip\n"), 0o644); err != nil {
+		t.Fatalf("write list: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		cmdUpdate([]string{"-db", dbPath, "-max-release", "19", "-spec-list", listPath, "-no-cache"})
+	})
+	if !strings.Contains(out, "TS 23.999: 20.0.0 -> removed") {
+		t.Errorf("output = %q, want TS 23.999 reported as removed", out)
+	}
+
+	d, err = db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	result, err := d.ListSpecs(context.Background(), "", "", -1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Specs) != 1 || result.Specs[0].ID != "TS 34.108" {
+		t.Fatalf("specs after update = %+v, want only TS 34.108", result.Specs)
+	}
+	sections, err := d.AllSections(context.Background(), "TS 23.999", "20.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sections) != 0 {
+		t.Errorf("sections of the removed spec survived: %d", len(sections))
+	}
+}
+
 // partialArchive serves a mock archive where 23.501 lists one zip and 23.502
 // fails, so a full scrape assembles a partial spec list.
 func partialArchive(t *testing.T, healthyZip string) *httptest.Server {

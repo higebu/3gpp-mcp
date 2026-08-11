@@ -563,7 +563,10 @@ The cap is not stored in the database, so a database built with
 `--max-release 19` needs the same flag here — otherwise the update lifts every
 spec to the newest release on the archive. With a cap the update moves a spec
 in either direction, so it also brings an already-built uncapped database down
-to the cap.
+to the cap; a spec whose every version is above the cap is removed, since no
+version of it belongs in a capped database. A spec missing from the archive
+listing is left untouched, as a failed listing looks the same as a withdrawn
+spec.
 
 ### Query commands
 

@@ -891,6 +891,31 @@ func cmdUpdate(args []string) {
 		dbVersions[normalizeID(s.ID)] = s.Version
 	}
 
+	// Specs the cap excludes entirely: the archive has the spec, but every
+	// version of it is above the cap. Leaving them would keep the database
+	// above --max-release however often it is updated, so they go. Only specs
+	// the listing actually carried are considered — one missing from a partial
+	// listing is skipped, like everywhere else in this command, rather than
+	// deleted on the strength of a failed fetch.
+	var removals []string
+	if *maxRelease > 0 {
+		inArchive := make(map[string]bool, len(allSpecs))
+		for _, sv := range allSpecs {
+			inArchive[normalizeID(sv.SpecID)] = true
+		}
+		underCap := make(map[string]bool, len(latestSpecs))
+		for _, sv := range latestSpecs {
+			underCap[normalizeID(sv.SpecID)] = true
+		}
+		for _, s := range currentResult.Specs {
+			normID := normalizeID(s.ID)
+			if inArchive[normID] && !underCap[normID] {
+				fmt.Printf("  %s: %s -> removed (no version at or below release %d)\n", s.ID, s.Version, *maxRelease)
+				removals = append(removals, s.ID)
+			}
+		}
+	}
+
 	var updates []*pipeline.SpecVersion
 	for _, sv := range latestSpecs {
 		normID := normalizeID(sv.SpecID)
@@ -918,13 +943,17 @@ func cmdUpdate(args []string) {
 		}
 	}
 
-	if len(updates) == 0 {
+	if len(updates) == 0 && len(removals) == 0 {
 		fmt.Println("All specs are up to date.")
 		discardWorkingCopy(newPath)
 		return
 	}
 
-	fmt.Printf("\n%d specs to update\n", len(updates))
+	fmt.Printf("\n%d specs to update", len(updates))
+	if len(removals) > 0 {
+		fmt.Printf(", %d to remove", len(removals))
+	}
+	fmt.Println()
 
 	d, err := db.OpenReadWrite(newPath)
 	if err != nil {
@@ -939,19 +968,29 @@ func cmdUpdate(args []string) {
 		log.Fatalf("Failed to initialize working copy schema: %v", err)
 	}
 
-	p := &pipeline.Pipeline{
-		DB:           d,
-		Client:       client,
-		Workers:      *workers,
-		ConvertDoc:   *convertDoc,
-		ConvertImage: *convertImage,
-		Timeout:      *timeout,
+	for _, id := range removals {
+		if err := d.DeleteSpec(id); err != nil {
+			_ = d.Close()
+			discardWorkingCopy(newPath)
+			log.Fatalf("Update failed: %v", err)
+		}
 	}
 
-	if err := p.Run(ctx, updates); err != nil {
-		_ = d.Close()
-		discardWorkingCopy(newPath)
-		log.Fatalf("Update failed: %v", err)
+	if len(updates) > 0 {
+		p := &pipeline.Pipeline{
+			DB:           d,
+			Client:       client,
+			Workers:      *workers,
+			ConvertDoc:   *convertDoc,
+			ConvertImage: *convertImage,
+			Timeout:      *timeout,
+		}
+
+		if err := p.Run(ctx, updates); err != nil {
+			_ = d.Close()
+			discardWorkingCopy(newPath)
+			log.Fatalf("Update failed: %v", err)
+		}
 	}
 
 	// Checkpoint WAL into the main file so the renamed DB is self-contained.
