@@ -187,6 +187,9 @@ docker build -t 3gpp-mcp:latest .
 # ...or restrict the database to a single release
 docker build --build-arg RELEASE=19 -t 3gpp-mcp:rel19 .
 
+# ...or cap the newest release, keeping specs that have no version in it
+docker build --build-arg MAX_RELEASE=19 -t 3gpp-mcp:max-rel19 .
+
 # stdio transport (Claude Code / IDE integration)
 docker run --rm -i 3gpp-mcp:latest
 
@@ -196,7 +199,9 @@ docker run --rm -p 8080:8080 3gpp-mcp:latest serve --db /3gpp.db --transport htt
 
 `RELEASE` defaults to `latest`, which bakes in the latest version of every spec
 across all releases. Set `--build-arg RELEASE=<n>` (e.g. `19`) to restrict the
-database to a single release.
+database to a single release, or `--build-arg MAX_RELEASE=<n>` to cap the newest
+release without dropping specs that have no version in it. The two cannot be
+combined.
 
 ### Cloud Run
 
@@ -382,6 +387,21 @@ For spot comparisons across releases, `compare_versions` and the `version` param
 3gpp-mcp build --release 19 --db data/3gpp-rel19.db --convert-doc --convert-image
 ```
 
+`--release` keeps only specs that have a version in that exact release, so a
+spec frozen in an earlier release (TS 34.108, for example) is missing from the
+database entirely. To pin a release without losing those specs, cap the
+selection instead — every spec is taken at its newest version at or below the
+cap:
+
+```bash
+# Everything as of Release 19: specs with no Rel-19 version fall back to their
+# newest older version rather than dropping out.
+3gpp-mcp build --max-release 19 --db data/3gpp-rel19.db --convert-doc --convert-image
+
+# Keep the cap when refreshing the database later.
+3gpp-mcp update --max-release 19 --db data/3gpp-rel19.db --convert-doc
+```
+
 Register them as separate MCP servers:
 
 ```bash
@@ -453,6 +473,7 @@ Download and import specifications into the database (recommended for initial se
 |------|-------------|---------|
 | `--db` | Output SQLite database path | `3gpp.db` |
 | `--release` | Process specs for a specific release (e.g. `19`) | |
+| `--max-release` | Cap the selection at a release (e.g. `19`): take each spec at its newest version at or below it | |
 | `--latest` | Select every spec at its latest version (use when no other selector is given) | `false` |
 | `--spec` | Process a specific spec (e.g. `23.501`) | |
 | `--series` | Filter by series, comma-separated (e.g. `23,29`) | |
@@ -464,8 +485,13 @@ Download and import specifications into the database (recommended for initial se
 | `--scrape-workers` | Concurrency for scraping spec listings (`0` = auto) | `0` |
 | `--timeout` | HTTP timeout | `30s` |
 
-One of `--release`, `--latest`, `--series` or `--spec` must be given, `--spec-list`
-included: the file supplies the candidate entries and the selector filters them.
+One of `--release`, `--max-release`, `--latest`, `--series` or `--spec` must be
+given, `--spec-list` included: the file supplies the candidate entries and the
+selector filters them.
+
+`--release` and `--max-release` differ in what happens to a spec that has no
+version in the named release: `--release 19` drops it, `--max-release 19` keeps
+it at its newest version below the cap. They cannot be combined.
 
 ### `download`
 
@@ -474,6 +500,7 @@ Download specifications without conversion.
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--release` | Download specs for a specific release | |
+| `--max-release` | Cap the selection at a release (e.g. `19`): take each spec at its newest version at or below it | |
 | `--latest` | Select every spec at its latest version (use when no other selector is given) | `false` |
 | `--spec` | Download a specific spec (e.g. `23.501`) | |
 | `--series` | Filter by series, comma-separated | |
@@ -485,8 +512,8 @@ Download specifications without conversion.
 | `--scrape-workers` | Concurrency for scraping spec listings (`0` = auto) | `0` |
 | `--timeout` | HTTP timeout | `30s` |
 
-Like `build`, this command requires one of `--release`, `--latest`, `--series` or
-`--spec`, even with `--spec-list`.
+Like `build`, this command requires one of `--release`, `--max-release`,
+`--latest`, `--series` or `--spec`, even with `--spec-list`.
 
 ### `import`
 
@@ -523,6 +550,7 @@ Update specifications in the database to latest versions.
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--db` | SQLite database path | `3gpp.db` |
+| `--max-release` | Cap updates at a release (e.g. `19`): update each spec to its newest version at or below it | |
 | `--workers` | Number of parallel workers | NumCPU |
 | `--convert-doc` | Convert `.doc` to `.docx` using LibreOffice | `false` |
 | `--convert-image` | Convert EMF/WMF images to PNG using LibreOffice | `false` |
@@ -530,6 +558,15 @@ Update specifications in the database to latest versions.
 | `--no-cache` | Disable the spec list cache | `false` |
 | `--scrape-workers` | Concurrency for scraping spec listings (`0` = auto) | `0` |
 | `--timeout` | HTTP timeout | `30s` |
+
+The cap is not stored in the database, so a database built with
+`--max-release 19` needs the same flag here — otherwise the update lifts every
+spec to the newest release on the archive. With a cap the update moves a spec
+in either direction, so it also brings an already-built uncapped database down
+to the cap; a spec whose every version is above the cap is removed, since no
+version of it belongs in a capped database. A spec missing from the archive
+listing is left untouched, as a failed listing looks the same as a withdrawn
+spec.
 
 ### Query commands
 

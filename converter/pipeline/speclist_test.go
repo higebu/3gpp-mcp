@@ -97,28 +97,28 @@ func TestFilterSpecs(t *testing.T) {
 	}
 
 	t.Run("filter by release", func(t *testing.T) {
-		got := FilterSpecs(specs, 19, nil, "", false)
+		got := FilterSpecs(specs, SpecFilter{Release: 19})
 		if len(got) != 2 {
 			t.Fatalf("expected 2, got %d", len(got))
 		}
 	})
 
 	t.Run("filter by series", func(t *testing.T) {
-		got := FilterSpecs(specs, 0, []string{"29"}, "", false)
+		got := FilterSpecs(specs, SpecFilter{Series: []string{"29"}})
 		if len(got) != 2 {
 			t.Fatalf("expected 2, got %d", len(got))
 		}
 	})
 
 	t.Run("filter by spec ID", func(t *testing.T) {
-		got := FilterSpecs(specs, 0, nil, "23.501", false)
+		got := FilterSpecs(specs, SpecFilter{SpecID: "23.501"})
 		if len(got) != 2 {
 			t.Fatalf("expected 2, got %d", len(got))
 		}
 	})
 
 	t.Run("latest only", func(t *testing.T) {
-		got := FilterSpecs(specs, 0, nil, "", true)
+		got := FilterSpecs(specs, SpecFilter{LatestOnly: true})
 		if len(got) != 2 {
 			t.Fatalf("expected 2 (one per spec), got %d", len(got))
 		}
@@ -129,15 +129,74 @@ func TestFilterSpecs(t *testing.T) {
 		}
 	})
 
+	t.Run("max release caps the latest version", func(t *testing.T) {
+		got := FilterSpecs(specs, SpecFilter{MaxRelease: 19, LatestOnly: true})
+		if len(got) != 2 {
+			t.Fatalf("expected 2 (one per spec), got %d", len(got))
+		}
+		for _, s := range got {
+			if s.Release != 19 {
+				t.Errorf("expected release 19 for %s, got %d", s.SpecID, s.Release)
+			}
+		}
+	})
+
+	// The difference from Release: a spec with no version in the capped
+	// release stays in the selection at its newest older version, instead of
+	// dropping out of the build entirely.
+	t.Run("max release keeps specs older than the cap", func(t *testing.T) {
+		withOldSpec := append([]*SpecVersion{
+			{Series: "34", SpecID: "34.108", Release: 18, VersionMinor: 40, VersionLetter: "i"},
+		}, specs...)
+
+		got := FilterSpecs(withOldSpec, SpecFilter{MaxRelease: 19, LatestOnly: true})
+		if len(got) != 3 {
+			t.Fatalf("expected 3 (one per spec), got %d", len(got))
+		}
+		var found *SpecVersion
+		for _, s := range got {
+			if s.SpecID == "34.108" {
+				found = s
+			}
+		}
+		if found == nil {
+			t.Fatal("34.108 dropped by the cap; expected its release 18 version")
+		}
+		if found.Release != 18 {
+			t.Errorf("expected release 18 for 34.108, got %d", found.Release)
+		}
+
+		// Same input, exact-release filter: 34.108 has no release 19 version.
+		exact := FilterSpecs(withOldSpec, SpecFilter{Release: 19, LatestOnly: true})
+		if len(exact) != 2 {
+			t.Fatalf("expected 2 with Release: 19, got %d", len(exact))
+		}
+	})
+
+	t.Run("max release below every version", func(t *testing.T) {
+		got := FilterSpecs(specs, SpecFilter{MaxRelease: 18, LatestOnly: true})
+		if len(got) != 0 {
+			t.Fatalf("expected 0, got %d", len(got))
+		}
+	})
+
+	// The CLI rejects the combination, but as a filter the two are ANDed.
+	t.Run("release and max release combined", func(t *testing.T) {
+		got := FilterSpecs(specs, SpecFilter{Release: 20, MaxRelease: 19})
+		if len(got) != 0 {
+			t.Fatalf("expected 0, got %d", len(got))
+		}
+	})
+
 	t.Run("no match", func(t *testing.T) {
-		got := FilterSpecs(specs, 99, nil, "", false)
+		got := FilterSpecs(specs, SpecFilter{Release: 99})
 		if len(got) != 0 {
 			t.Fatalf("expected 0, got %d", len(got))
 		}
 	})
 
 	t.Run("nil input", func(t *testing.T) {
-		got := FilterSpecs(nil, 0, nil, "", false)
+		got := FilterSpecs(nil, SpecFilter{})
 		if len(got) != 0 {
 			t.Fatalf("expected 0, got %d", len(got))
 		}

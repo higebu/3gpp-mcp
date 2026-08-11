@@ -393,6 +393,32 @@ func (d *DB) UpsertSpec(spec Spec) error {
 	return err
 }
 
+// DeleteSpec removes a specification and everything keyed to it: its sections
+// (the FTS index follows through the sections triggers), images, OpenAPI
+// definitions and outgoing references. References that merely *target* the spec
+// are left alone — they are part of the referencing spec's text, not of this
+// one.
+func (d *DB) DeleteSpec(id string) error {
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() // no-op after Commit per database/sql docs
+
+	for _, q := range []string{
+		"DELETE FROM sections WHERE spec_id = ?",
+		"DELETE FROM images WHERE spec_id = ?",
+		"DELETE FROM openapi_specs WHERE spec_id = ?",
+		"DELETE FROM spec_references WHERE source_spec_id = ?",
+		"DELETE FROM specs WHERE id = ?",
+	} {
+		if _, err = tx.Exec(q, id); err != nil {
+			return fmt.Errorf("delete spec %s: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
 // UpsertSection deletes then re-inserts a section to trigger FTS update.
 func (d *DB) UpsertSection(section Section) error {
 	tx, err := d.conn.Begin()
