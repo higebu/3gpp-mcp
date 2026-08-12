@@ -15,12 +15,16 @@ the retrieval differs. Three conditions:
 | BM25 fixed-k | one full-text search over the same database, top-5 sections prepended, no tools |
 | 3gpp-mcp | all 11 MCP tools bridged in, up to 20 tool rounds, the model drives its own search |
 
-Two more conditions exist for the 5G SBI tasks, whose answers live in OpenAPI
-documents outside the full-text index: a BM25 search over an index built for
-those documents, and an **oracle** handed the exact chunk the question names.
-An oracle is not a system anyone can build — it is the ceiling a retriever
-could reach if its query were always perfect. A gap that survives it is not a
-gap in query quality.
+Two more conditions exist for the 5G SBI tasks. Their answers live in OpenAPI
+documents, which this server stores but does not put in its FTS5 index — a
+choice in 3gpp-mcp, not a fact about search — so the clause-text fixed-k
+baseline cannot reach them, and its score on those tasks says nothing about
+what a retrieval pipeline can do. The two conditions exist to remove that
+artifact: **BM25 over OpenAPI** queries an index built for exactly these
+documents, and **oracle lookup** is handed the chunk the question names. An
+oracle is not a system anyone can build — it is the ceiling a retriever could
+reach if its query were always perfect. On the SBI tasks those two, not
+fixed-k, are what 3gpp-mcp is measured against.
 
 ## TeleQnA
 
@@ -212,9 +216,10 @@ difference retrieval depth makes.
 - **The gain over one query comes from opening a section.** Where the model
   stopped at the search result it scored what fixed-k scored; every point it
   gained came from the questions it followed further — and those are the
-  questions it could not answer unaided. On the specification-grounded tasks
-  a quarter to a third of all calls are `get_openapi`, which no full-text
-  query reaches at all.
+  questions it could not answer unaided. On the specification-grounded tasks a
+  quarter to a third of all calls are `get_openapi`; a BM25 index built over
+  those same documents reaches them too, and still answers-and-cites 6-95%
+  where 3gpp-mcp reaches 93-100%.
 - **What the tool adds beyond a pipeline is depth, and depth is what the
   documents demand.** A TeleQnA question is usually one hop from the first
   retrieved passage, so one query reaches it. Protocol structure is two or more
