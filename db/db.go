@@ -301,6 +301,61 @@ CREATE TABLE IF NOT EXISTS spec_references (
 
 CREATE INDEX IF NOT EXISTS idx_ref_source ON spec_references(source_spec_id, source_version, source_section);
 CREATE INDEX IF NOT EXISTS idx_ref_target ON spec_references(target_spec);
+` + OpenAPIIndexSchema
+
+// OpenAPIIndexSchema defines the OpenAPI search index: one row per schema and
+// per operation, derived from openapi_specs by internal/openapiindex and
+// rebuilt wholesale, never written by the importer.
+//
+// It is a second FTS index, separate from sections_fts on purpose. The rows
+// are YAML fragments rather than prose, and search must not have to rank the
+// two kinds of text against each other.
+//
+// The tokenizer is plain unicode61, without porter: these rows are identifiers
+// (NFProfile, supportedFeatures), not English, and stemming only mangles them.
+// Leaving '-', '.' and '_' as separators is what makes a partial name work —
+// Nnrf_NFManagement indexes as "nnrf" and "nfmanagement", /nf-instances as
+// "nf" and "instances".
+const OpenAPIIndexSchema = `
+CREATE TABLE IF NOT EXISTS openapi_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    spec_id TEXT NOT NULL,
+    api_name TEXT NOT NULL,
+    filename TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    body TEXT NOT NULL,
+    UNIQUE(spec_id, api_name, kind, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_openapi_chunks_spec ON openapi_chunks(spec_id, api_name);
+CREATE INDEX IF NOT EXISTS idx_openapi_chunks_name ON openapi_chunks(name);
+
+-- kind is not an FTS column: it is a two-value filter applied to the backing
+-- table, and indexing it would let the words "schema" and "operation" score.
+CREATE VIRTUAL TABLE IF NOT EXISTS openapi_chunks_fts USING fts5(
+    api_name, name, body,
+    content=openapi_chunks,
+    content_rowid=id,
+    tokenize="unicode61"
+);
+
+CREATE TRIGGER IF NOT EXISTS openapi_chunks_ai AFTER INSERT ON openapi_chunks BEGIN
+    INSERT INTO openapi_chunks_fts(rowid, api_name, name, body)
+    VALUES (new.id, new.api_name, new.name, new.body);
+END;
+
+CREATE TRIGGER IF NOT EXISTS openapi_chunks_ad AFTER DELETE ON openapi_chunks BEGIN
+    INSERT INTO openapi_chunks_fts(openapi_chunks_fts, rowid, api_name, name, body)
+    VALUES ('delete', old.id, old.api_name, old.name, old.body);
+END;
+
+CREATE TRIGGER IF NOT EXISTS openapi_chunks_au AFTER UPDATE ON openapi_chunks BEGIN
+    INSERT INTO openapi_chunks_fts(openapi_chunks_fts, rowid, api_name, name, body)
+    VALUES ('delete', old.id, old.api_name, old.name, old.body);
+    INSERT INTO openapi_chunks_fts(rowid, api_name, name, body)
+    VALUES (new.id, new.api_name, new.name, new.body);
+END;
 `
 
 // InitSchema creates the database tables and indexes.
@@ -1022,6 +1077,14 @@ var fts5Columns = map[string]bool{
 	"spec_id": true, "number": true, "title": true, "content": true,
 }
 
+// openapiFTS5Columns is the same set for the openapi_chunks_fts table. The two
+// indexes have no column in common, so the sanitizer has to be told which one
+// a query is headed for: "name:NFProfile" is a column filter against one and a
+// literal term against the other.
+var openapiFTS5Columns = map[string]bool{
+	"api_name": true, "name": true, "body": true,
+}
+
 // fts5Operators are FTS5 keywords that must not be quoted.
 var fts5Operators = map[string]bool{
 	"AND": true, "OR": true, "NOT": true,
@@ -1065,16 +1128,16 @@ func quoteFTS5Term(s string) string {
 
 // classifyToken quotes a bareword or "col:val" column-filter token if it
 // contains a character FTS5 cannot parse in an unquoted bareword. Only a
-// prefix naming a real column of sections_fts is treated as a column filter
-// (FTS5 matches column names case-insensitively, so the lookup does too);
-// anything else before the colon is ordinary query text and is quoted along
-// with the rest of the token, because FTS5 answers an unknown column with a
-// hard "no such column" error that fails the entire search.
-func classifyToken(token string) string {
+// prefix naming a real column of the target index is treated as a column
+// filter (FTS5 matches column names case-insensitively, so the lookup does
+// too); anything else before the colon is ordinary query text and is quoted
+// along with the rest of the token, because FTS5 answers an unknown column
+// with a hard "no such column" error that fails the entire search.
+func classifyToken(token string, cols map[string]bool) string {
 	if colIdx := strings.IndexByte(token, ':'); colIdx > 0 {
 		col := token[:colIdx]
 		val := token[colIdx+1:]
-		if fts5Columns[strings.ToLower(col)] {
+		if cols[strings.ToLower(col)] {
 			if val == "" {
 				// "content:" with no value is a syntax error; treat the
 				// whole token as a literal search term instead.
@@ -1199,6 +1262,13 @@ func sanitizeNEARGroup(run string) string {
 // means something other than exclusion), so passing the hyphen through
 // unchanged never actually excludes anything.
 func sanitizeFTS5Query(query string) string {
+	return sanitizeFTS5QueryCols(query, fts5Columns)
+}
+
+// sanitizeFTS5QueryCols is sanitizeFTS5Query against an index whose columns
+// are cols, so a "col:val" token is only kept as a column filter when col is
+// one of that index's own columns.
+func sanitizeFTS5QueryCols(query string, cols map[string]bool) string {
 	var result []string
 	i := 0
 	n := len(query)
@@ -1316,14 +1386,14 @@ func sanitizeFTS5Query(query string) string {
 			// even without any other special character in the token).
 			canNegate := len(result) > 0 && !fts5Operators[result[len(result)-1]]
 			if canNegate {
-				result = append(result, "NOT", classifyToken(token[1:]))
+				result = append(result, "NOT", classifyToken(token[1:], cols))
 			} else {
 				result = append(result, quoteFTS5String(token))
 			}
 			continue
 		}
 
-		result = append(result, classifyToken(token))
+		result = append(result, classifyToken(token, cols))
 	}
 
 	// An operator keyword at the end of the query has no right operand, which
