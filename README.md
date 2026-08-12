@@ -115,13 +115,7 @@ Browse specifications in your browser by adding `--web` to the HTTP transport:
 # Web viewer:   http://localhost:8080/
 ```
 
-Features: spec list with filtering, section viewer with TOC sidebar, full-text search with pagination, past-version browsing (versions are listed per spec and downloaded on demand, like the MCP tools), version comparison (structural summary and per-section diffs), embedded images, cross-reference links, OpenAPI definitions with syntax highlighting, KaTeX rendering of the [LaTeX formulas](#formulas) the converter emits, dark mode, responsive design.
-
-Code blocks are syntax-highlighted per notation — ASN.1, Diameter, SIP/RTSP,
-SDP and XML (see [Code blocks](#code-blocks)). The color theme — Catppuccin
-(default), GitHub, Monokai or Xcode/Dracula — is selectable from the settings
-popover in the navbar; each has a light and a dark variant, picked by the
-site's light/dark mode.
+Features: spec list with filtering, section viewer with TOC sidebar, full-text search with pagination, past-version browsing (versions are listed per spec and downloaded on demand, like the MCP tools), version comparison (structural summary and per-section diffs), embedded images, cross-reference links, OpenAPI definitions with syntax highlighting, KaTeX rendering of the [LaTeX formulas](#formulas) the converter emits, dark mode, responsive design. Code blocks are syntax-highlighted per notation — ASN.1, Diameter, SIP/RTSP, SDP and XML (see [Code blocks](#code-blocks)).
 
 ## Deployment
 
@@ -159,17 +153,7 @@ Then configure your client to connect via HTTP:
 }
 ```
 
-When using `--web`, the MCP endpoint moves to `/mcp/`:
-
-```json
-{
-  "mcpServers": {
-    "3gpp": {
-      "url": "http://your-server:8080/mcp/"
-    }
-  }
-}
-```
+When using `--web`, the MCP endpoint moves to `/mcp/`.
 
 See [`examples/systemd/`](examples/systemd/) for production deployment with systemd.
 
@@ -193,10 +177,6 @@ docker run --rm -i 3gpp-mcp:latest
 # HTTP transport
 docker run --rm -p 8080:8080 3gpp-mcp:latest serve --db /3gpp.db --transport http --addr :8080
 ```
-
-`RELEASE` defaults to `latest`, which bakes in the latest version of every spec
-across all releases. Set `--build-arg RELEASE=<n>` (e.g. `19`) to restrict the
-database to a single release.
 
 ### Cloud Run
 
@@ -225,32 +205,13 @@ version it came from, on every page of a paginated response.
 ### Past versions
 
 The database holds one version per specification. To read another version, pass
-`version` to `get_section` or `get_toc`:
-
-```
-list_versions  spec_id="TS 24.301"
-get_section    spec_id="TS 24.301" section_number="5.5.1" version="15.8.0"
-```
-
-`version` accepts the dotted form (`15.8.0`), the archive token (`f80`), a
-release selector (`Rel-15` or `15`, picking the newest version in that release),
-or `latest`. Release selectors and `latest` are resolved against the 3GPP
-archive, so they require on-demand fetching (they do not work under
-`--no-fetch`).
-
-To see what changed between two versions, use `compare_versions`. Without
-`section_number` it summarizes which sections were added, removed, renumbered,
-retitled or changed; with `section_number` it returns a line-level unified diff
-of that section's text:
-
-```
-compare_versions  spec_id="TS 23.501" old_version="Rel-17"
-compare_versions  spec_id="TS 23.501" old_version="17.9.0" section_number="5.15.2"
-```
-
-`old_version` and `new_version` accept the same forms as `version` above;
-`new_version` defaults to the version in the database. Comparing two archived
-versions downloads both on first use.
+`version` to `get_section` or `get_toc`. `version` accepts the dotted form
+(`15.8.0`), the archive token (`f80`), a release selector (`Rel-15` or `15`,
+picking the newest version in that release), or `latest`. Release selectors and
+`latest` are resolved against the 3GPP archive, so they require on-demand
+fetching (they do not work under `--no-fetch`). `old_version` and `new_version`
+of `compare_versions` accept the same forms; `new_version` defaults to the
+version in the database.
 
 A version that is not in the database is downloaded from the 3GPP archive and
 converted on first use. This takes up to a few minutes for a large
@@ -288,20 +249,11 @@ The `search` tool supports [SQLite FTS5](https://www.sqlite.org/fts5.html) query
 Terms containing hyphens or dots (`IMS-AKA`, `38.101`) are quoted automatically,
 so they need no manual escaping.
 
-Results come as `{results, total_count, limit, offset}`; use `limit` (default
-10, max 200) and `offset` to page through everything beyond the first page.
-Section-title matches rank above body matches, and the snippet is taken from
-whichever column matched best. The index uses porter stemming, so inflected
-English forms match each other (`handover` finds `handovers`).
-
 ### Cross-references
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `get_references` | Get cross-references between specs and RFCs | `spec_id` (required), `section_number` (required for `"outgoing"`), `direction` (`"outgoing"` or `"incoming"`), `include_subsections`, `offset` |
-
-Responses are capped at 500 references per page; the total count is reported
-and `offset` pages past the cap.
 
 ### OpenAPI definitions
 
@@ -317,12 +269,7 @@ and `offset` pages past the cap.
 | `list_images` | List embedded images in a spec | `spec_id` (required), `version` (optional) |
 | `get_image` | Get an embedded image as base64 data viewable by LLMs | `spec_id`, `name` (required): image filename, `version` (optional) |
 
-The `build` command extracts images from DOCX files and stores them in the database. PNG/JPEG/GIF/WebP images are directly viewable by LLMs. EMF/WMF images (most 3GPP figures use this format) are stored as raw data by default; use `--convert-image` to convert them to PNG via LibreOffice at build time. For archived versions read via `version`, images are fetched into the on-demand cache the first time one is requested, and EMF/WMF figures are converted to PNG when LibreOffice is available at runtime.
-
-```bash
-# Convert EMF/WMF to PNG for LLM viewing (requires LibreOffice)
-3gpp-mcp build --latest --db data/3gpp.db --convert-image
-```
+PNG/JPEG/GIF/WebP images are directly viewable by LLMs. EMF/WMF images (most 3GPP figures use this format) are stored as raw data by default; use `--convert-image` to convert them to PNG via LibreOffice at build time.
 
 Figures are referenced from the section text in a single notation, whatever the
 image format: `![Figure](image://NAME?w=&h=)` in body text and
@@ -345,11 +292,6 @@ tell the notations apart:
 | ` ```latex ` | Standalone equations converted from Word OMML |
 | ` ``` ` | Anything else the source document styles as code |
 
-Diameter, XML, SIP and SDP blocks carry no code style in the source `.docx`, so
-they are recognized by content during conversion. The web viewer highlights all
-of them. The `latex` fence is not content-detected: the converter emits it for
-paragraphs whose only content is a formula.
-
 ### Formulas
 
 Word formulas (OMML) are converted to LaTeX in three notations, so a formula is
@@ -360,15 +302,6 @@ readable whether it stands alone or sits in a sentence:
 | ` ```latex ` fence | A paragraph whose only content is an equation. Its equation number is kept as `\tag{7.3-1}`, which renders as a right-aligned `(7.3-1)`. |
 | `$$...$$` | Display equations that cannot be a fenced block — inside a table cell or a list item. |
 | `$...$` | A formula inside a sentence. |
-
-The LaTeX is stored as-is, so MCP clients and the CLI see the same text the web
-viewer renders with [KaTeX](https://katex.org/). It never contains `<` or `>`
-(they become `\lt`, `\gt`, `\langle`, `\rangle`), which is what lets table cells
-carry a formula unescaped and keep `&` as a matrix column separator.
-
-Tagged fences and the unified image notation are produced when a spec is
-converted, so a database built with an older version of this tool keeps its
-old output until rebuilt with `3gpp-mcp build` (or `make build-db`).
 
 ## Tips
 
@@ -387,23 +320,6 @@ Register them as separate MCP servers:
 ```bash
 claude mcp add --scope user 3gpp-rel18 -- 3gpp-mcp serve --db /path/to/data/3gpp-rel18.db
 claude mcp add --scope user 3gpp-rel19 -- 3gpp-mcp serve --db /path/to/data/3gpp-rel19.db
-```
-
-Or in a JSON configuration:
-
-```json
-{
-  "mcpServers": {
-    "3gpp-rel18": {
-      "command": "3gpp-mcp",
-      "args": ["serve", "--db", "/path/to/data/3gpp-rel18.db"]
-    },
-    "3gpp-rel19": {
-      "command": "3gpp-mcp",
-      "args": ["serve", "--db", "/path/to/data/3gpp-rel19.db"]
-    }
-  }
-}
 ```
 
 ### Keeping specs up to date
@@ -439,11 +355,7 @@ container image — the server logs a warning and runs with on-demand fetching
 disabled; everything else keeps working. Cached versions are evicted
 least-recently-used once the size limit is exceeded.
 
-When `--web` is enabled with HTTP transport, the MCP endpoint is served at `/mcp/` and the web viewer at `/`.
-
 HTTP transport also exposes `GET /health`, which returns `200 OK` without authentication. Use this path for platform health checks (Cloud Run, Sakura AppRun, Kubernetes liveness/readiness probes, etc.).
-
-For container platforms like Cloud Run or Heroku that inject a `PORT` environment variable, the server automatically switches to HTTP transport and binds to `:$PORT`. Explicit flags or `THREEGPP_MCP_TRANSPORT` / `THREEGPP_MCP_ADDR` always take precedence.
 
 ### `build`
 
@@ -467,74 +379,20 @@ Download and import specifications into the database (recommended for initial se
 One of `--release`, `--latest`, `--series` or `--spec` must be given, `--spec-list`
 included: the file supplies the candidate entries and the selector filters them.
 
-### `download`
+### Other commands
 
-Download specifications without conversion.
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--release` | Download specs for a specific release | |
-| `--latest` | Select every spec at its latest version (use when no other selector is given) | `false` |
-| `--spec` | Download a specific spec (e.g. `23.501`) | |
-| `--series` | Filter by series, comma-separated | |
-| `--output-dir` | Output directory | `specs` |
-| `--parallel` | Number of parallel downloads | NumCPU |
-| `--convert-doc` | Convert `.doc` to `.docx` using LibreOffice | `false` |
-| `--spec-list` | Read the spec list from a file instead of scraping the archive (a selector is still required) | |
-| `--no-cache` | Disable the spec list cache | `false` |
-| `--scrape-workers` | Concurrency for scraping spec listings (`0` = auto) | `0` |
-| `--timeout` | HTTP timeout | `30s` |
-
-Like `build`, this command requires one of `--release`, `--latest`, `--series` or
-`--spec`, even with `--spec-list`.
-
-### `import`
-
-Import a single `.docx` file into the database. Alias: `convert`.
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--db` | Output SQLite database path | `3gpp.db` |
-| `--convert-image` | Convert EMF/WMF images to PNG using LibreOffice | `false` |
-
-Usage: `3gpp-mcp import --db data/3gpp.db path/to/spec.docx`
-
-Flags must come before the file path; anything after it is treated as a positional argument, not an option.
-
-### `import-dir`
-
-Import all `.docx` files in a directory into the database. Alias: `convert-dir`.
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--db` | Output SQLite database path | `3gpp.db` |
-| `--parse-workers` | Number of parallel parse workers | NumCPU |
-| `--convert-doc` | Convert `.doc` to `.docx` using LibreOffice | `false` |
-| `--convert-image` | Convert EMF/WMF images to PNG using LibreOffice | `false` |
-
-Usage: `3gpp-mcp import-dir --db data/3gpp.db ./specs`
-
-Flags must come before the directory path; anything after it is treated as a positional argument, not an option.
-
-### `update`
-
-Update specifications in the database to latest versions.
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--db` | SQLite database path | `3gpp.db` |
-| `--workers` | Number of parallel workers | NumCPU |
-| `--convert-doc` | Convert `.doc` to `.docx` using LibreOffice | `false` |
-| `--convert-image` | Convert EMF/WMF images to PNG using LibreOffice | `false` |
-| `--spec-list` | Use a spec list file instead of scraping the archive | |
-| `--no-cache` | Disable the spec list cache | `false` |
-| `--scrape-workers` | Concurrency for scraping spec listings (`0` = auto) | `0` |
-| `--timeout` | HTTP timeout | `30s` |
+- `download` — Download specifications without conversion (`--output-dir`, default `specs`). Requires one of `--release`, `--latest`, `--series` or `--spec`, like `build`.
+- `import` — Import a single `.docx` file into the database. Alias: `convert`. Usage: `3gpp-mcp import --db data/3gpp.db path/to/spec.docx`
+- `import-dir` — Import all `.docx` files in a directory into the database. Alias: `convert-dir`. Usage: `3gpp-mcp import-dir --db data/3gpp.db ./specs`
+- `update` — Update specifications in the database to latest versions.
+- `completion` — Print a shell completion script: `3gpp-mcp completion bash` (or `zsh`, `fish`)
 
 ### Query commands
 
-The query commands mirror the MCP read tools 1:1, so the database can be
-inspected and scripted from a shell without an MCP client:
+The query commands (`list-specs`, `list-versions`, `get-toc`, `get-section`,
+`compare-versions`, `search`, `list-openapi`, `get-openapi`, `get-references`,
+`list-images`, `get-image`) mirror the MCP read tools 1:1, so the database can
+be inspected and scripted from a shell without an MCP client:
 
 ```bash
 3gpp-mcp search --db data/3gpp.db --limit 3 "AMF AND authentication" | jq '.results[].section_number'
@@ -555,136 +413,6 @@ Conventions shared by all of them:
   no version never create the version cache (`list-versions` reads an existing
   cache to report `cached` availability, but will not create one).
 - Every command takes `--db` (default `3gpp.db`).
-
-### `list-specs`
-
-List specifications in the database as JSON.
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--series` | Filter by series number (e.g. `23`) | |
-| `--query` | Filter specs whose ID starts with this text (e.g. `38.21`) | |
-| `--limit` | Maximum number of results | `20` |
-| `--offset` | Number of results to skip | `0` |
-
-### `list-versions`
-
-List the versions of a specification as JSON, newest first, with each
-version's availability (`database`, `cached` or `archive`). An unreachable
-archive is reported as a warning on stderr and the listing continues with the
-cache and the database.
-
-Usage: `3gpp-mcp list-versions [flags] <spec-id>`
-
-### `get-toc`
-
-Print a specification's table of contents as Markdown.
-
-Usage: `3gpp-mcp get-toc [--version <v>] [fetch flags] <spec-id>`
-
-### `get-section`
-
-Print a section's Markdown content, prefixed with the same provenance header
-as the MCP tool, without pagination.
-
-Usage: `3gpp-mcp get-section [flags] <spec-id> <section-number>`
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--version` | Specification version to read | the database version |
-| `--subsections` | Include all subsections | `false` |
-
-### `compare-versions`
-
-Compare two versions of a specification: a structural summary, or a unified
-diff of one section with `--section`.
-
-Usage: `3gpp-mcp compare-versions [flags] --old <version> <spec-id>`
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--old` | Older version to compare from (required) | |
-| `--new` | Newer version to compare to | the database version |
-| `--section` | Compare only this section's text as a unified diff | |
-| `--subsections` | With `--section`: include subsections in the diff | `false` |
-| `--context` | Unchanged lines shown around each change in a section diff (`0` shows none) | `3` |
-
-### `search`
-
-Full-text search; results print as JSON. The query supports the same FTS5
-syntax as the MCP tool, and everything after the flags is joined into one
-query, so multi-term queries need no quoting: `3gpp-mcp search AMF AND authentication`.
-
-Usage: `3gpp-mcp search [flags] <query>`
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--specs` | Limit search to specific specs, comma-separated (e.g. `"TS 23.501,TS 23.502"`) | |
-| `--limit` | Maximum number of results per page (max 200) | `10` |
-| `--offset` | Number of results to skip | `0` |
-
-### `list-openapi`
-
-List OpenAPI definitions as JSON.
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--spec` | Filter by specification ID (e.g. `TS 29.510`) | |
-
-### `get-openapi`
-
-Print an OpenAPI definition as YAML, without pagination.
-
-Usage: `3gpp-mcp get-openapi [flags] <spec-id> <api-name>`
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--path` | Filter by API path (e.g. `/nf-instances`) | |
-| `--schema` | Filter by schema name (e.g. `NFProfile`) | |
-
-### `get-references`
-
-Print cross-references as JSON. Unlike the MCP tool, the full result is
-printed with no 500-row cap — that cap protects an LLM context window, which
-a shell pipeline does not have.
-
-Usage: `3gpp-mcp get-references [flags] <spec-id> [section-number]`
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--direction` | `outgoing`: references FROM a section (section number required); `incoming`: references TO this spec | `outgoing` |
-| `--subsections` | Include subsections when collecting outgoing references | `false` |
-
-### `list-images`
-
-List a specification's embedded images as JSON (`{images, count}`).
-
-Usage: `3gpp-mcp list-images [--version <v>] [fetch flags] <spec-id>`
-
-### `get-image`
-
-Write an embedded image's raw bytes to a file or stdout. Name, MIME type and
-size go to stderr. Unlike the MCP tool, an EMF/WMF image is still written —
-a shell user can open it — with a conversion note on stderr.
-
-Usage: `3gpp-mcp get-image [flags] <spec-id> <image-name>`
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--version` | Specification version to read | the database version |
-| `-o` | Write the image to this file | stdout |
-
-```bash
-3gpp-mcp get-image --db data/3gpp.db -o figure1.png "TS 23.501" image1.png
-```
-
-### `completion`
-
-Print a shell completion script.
-
-```bash
-3gpp-mcp completion bash    # or zsh, fish
-```
 
 ## Environment Variables
 
