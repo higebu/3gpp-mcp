@@ -1,23 +1,29 @@
 # Benchmark
 
 How much does 3gpp-mcp improve LLM accuracy on 3GPP questions, and how much of
-that a plain search baseline already reaches. Measured with
+that a plain search baseline — or the same agent stopped one round in — already
+reaches. Measured with
 [teleqna-eval](https://github.com/higebu/teleqna-eval) on two task sets:
 [TeleQnA](https://github.com/netop-team/TeleQnA), and tasks generated from the
 specification documents themselves.
 
 Every condition sends the model **the identical prompt, byte for byte**; only
-the retrieval differs. Three conditions:
+the retrieval differs:
 
 | Condition | What the model gets |
 |---|---|
 | no tools | the question, nothing else |
 | BM25 fixed-k | one full-text search over the same database, top-5 sections prepended, no tools |
-| 3gpp-mcp | all 11 MCP tools bridged in, up to 20 tool rounds, the model drives its own search |
+| one round | the same tools and prompt, the loop stopped after the first round |
+| 3gpp-mcp | every MCP tool bridged in, up to 20 tool rounds, the model drives its own search |
+
+The one-round condition exists to measure retrieval depth directly rather than
+infer it, and ran only on the later task types where depth is the question.
 
 Two more conditions exist for the 5G SBI tasks. Their answers live in OpenAPI
-documents, which this server stores but does not put in its FTS5 index — a
-choice in 3gpp-mcp, not a fact about search — so the clause-text fixed-k
+documents, which the server those runs used stored without putting them in its
+FTS5 index — a choice in 3gpp-mcp at the time, not a fact about search — so the
+clause-text fixed-k
 baseline cannot reach them, and its score on those tasks says nothing about
 what a retrieval pipeline can do. The two conditions exist to remove that
 artifact: **BM25 over OpenAPI** queries an index built for exactly these
@@ -214,6 +220,76 @@ because none of them can answer these from memory; the policy problem that
 flattened the TeleQnA agency column does not arise, and what is left is the
 difference retrieval depth makes.
 
+**Part of the SBI citation column above was free.** Each of those four types
+opens by naming its schema *and* the API document that holds it, so the clause
+to cite is written in the question. Three later types ask about one shared pool
+of 21 schemas and differ only in what they give away, and their no-tools
+baselines price that: told the name and the document, a model with no tools at
+all cites correctly on **57%** of tasks, by copying the question back; told only
+the name, **0%**; given only the words the document itself uses to say what the
+schema is for, **14%**. Withholding the document is also what costs the model
+the answer — at one round, 86% against 48%, 9 tasks lost to 1 gained, p=0.027 —
+while withholding the *name* on top of that costs a further 5 points and nothing
+that survives a test (3/4, p=1). The four types are not easy because they name
+their schemas. They are easy because they say where to look.
+
+### Measuring the depth directly, instead of inferring it
+
+The TeleQnA split above reads the depth story out of subsets the model chose for
+itself. The one-round condition measures it: the same tools, the same prompt,
+the loop stopped after the first round. It is not the fixed-k baseline in
+another form — the model writes its own query, picks its own tool, and may call
+several — but it cannot act on what those calls returned.
+
+Two task types were built to need more than one hop. NGAP (`TS 38.413`) and
+S1AP (`TS 36.413`) give each information element its own clause and put the
+ASN.1 for the entire protocol in **one** clause of 270 kB and 92 kB, against the
+16 kB a tool result is truncated to, so retrieving the right clause is not the
+same as holding the answer. *answer correct / answer correct **and** correctly
+cited*, 50 tasks each, DeepSeek V4 Flash:
+
+| Task type | no tools | BM25 fixed-k | one round | 3gpp-mcp (20 rounds) |
+|---|---|---|---|---|
+| NGAP/S1AP mandatory IEs | 14% / 0% | 32% / 22% | 14% / 14% | **100% / 100%** |
+| NGAP/S1AP ASN.1 constraint | 56% / 4% | 60% / 20% | 72% / 50% | **100% / 98%** |
+
+Against **itself, one round earlier**, the agent is **+86pt** and **+28pt**
+(43/0, p<10⁻⁹; 14/0, p=0.0005). Every task in both tool conditions called at
+least one tool, so none of this is diluted by a model that declined to search.
+The mandatory-IE type shows the mechanism in its purest form: after one round
+the model cites the right clause on **49 of 50** tasks and answers **7**. It has
+found the table and cannot read it. Which clause to open is what the search
+result tells you, so opening it is always the *second* round — `get_section` is
+called 0.01 times per task at one round and 1.29 times at twenty.
+
+One round also scores *below* fixed-k on that type, 14% against 32%: a search
+hit is a snippet, and the pipeline's one query hands over whole clauses. One
+round of an agent is not one query of a pipeline, and on this evidence it is
+worth less.
+
+**Depth is not free value, and the same condition finds where it is worth
+nothing.** A third type asks which specifications a whole clause tree depends
+on — 50 kB to 537 kB of text per task, a median of 57 clauses — which
+`get_references` aggregates in a single call:
+
+| | no tools | BM25 fixed-k | one round | 3gpp-mcp (20 rounds) |
+|---|---|---|---|---|
+| Clause-tree references | 2% | 0% | 82% | **86%** |
+
++86pt over the strongest baseline, and rounds 2 through 20 are worth **+4pt, 9
+wins to 7 losses, p=0.803** — nothing, bought with 13 more tool calls per task
+and 30 times the prompt tokens. Where one call already *is* the aggregation, the
+reading the extra rounds buy is reading the model did not need.
+
+**`search_openapi` is a cost, not an accuracy.** Repeating the three
+designation types with the FTS index over the OpenAPI store dropped — the server
+as it was before that index existed — changes nothing measurable: 100% answer on
+all three types, 95-100% once the citation has to check out, including where the
+question gives neither a name nor a document. Twenty rounds is enough to route
+around a missing index. What the index buys is the work: 2.2× the tool calls and
+2.8× the prompt tokens on the described type, and 4× the calls when the question
+names a schema without saying where it lives.
+
 ## Takeaways
 
 - **Ask for retrieval and you get the whole effect.** Sonnet skipped searching
@@ -234,6 +310,13 @@ difference retrieval depth makes.
   quarter to a third of all calls are `get_openapi`; a BM25 index built over
   those same documents reaches them too, and still answers-and-cites 6-95%
   where 3gpp-mcp reaches 93-100%.
+- **Stopping the same agent after one round says the same thing, without an
+  observational split.** On NGAP/S1AP tasks, where the answer sits in a clause
+  larger than a tool result, rounds 2 through 20 are worth **+86pt** — after the
+  first round the model cites the right clause on 49 of 50 tasks and answers 7.
+  On clause-tree references, where one `get_references` call already spans the
+  answer, the same nineteen rounds are worth **+4pt (p=0.803)** for 30× the
+  prompt tokens. Depth is worth what the document's shape makes it worth.
 - **What the tool adds beyond a pipeline is depth, and depth is what the
   documents demand.** A TeleQnA question is usually one hop from the first
   retrieved passage, so one query reaches it. Protocol structure is two or more
@@ -244,7 +327,13 @@ difference retrieval depth makes.
   capabilities.** The oracle condition is *handed* the chunk that contains the
   answer and answers 94-100% correctly — yet on Sonnet it can attribute that
   answer to the right clause only 14-79% of the time, against 100% when the
-  model fetched the document itself.
+  model fetched the document itself. The reverse also holds, and inflates the
+  other end: a question that names both the schema and the document it lives in
+  is cited correctly 57% of the time by a model with **no tools at all**, which
+  is copying the question back.
+- **`search_openapi` buys work, not accuracy.** Dropping the OpenAPI index
+  entirely leaves the 20-round scores where they were; it costs 2.2-4× the tool
+  calls and 2.8× the prompt tokens to get there.
 - **Without retrieval, citations are often fabricated.** Over the 250
   clause-text tasks, a model with no tools names a clause that does not exist
   42-143 times depending on the model; with 3gpp-mcp, 2-4.
@@ -274,6 +363,9 @@ difference retrieval depth makes.
 - **One deviation between models**: DeepSeek sent `temperature 0`; Sonnet and
   Luna reject a non-default sampling parameter, so their requests carry none
   and the provider default applies.
+- Same corpus throughout. The TeleQnA and first-nine task-type runs were served
+  by 3gpp-mcp `09330a0` (11 tools); the depth and designation tracks by
+  `51b1f0e`, which adds `search_openapi` as a twelfth.
 - The database is pinned by manifest and SHA-256, and every run records the
   harness commit, the flags, the prompt hash, the MCP server identity and the
   database identifier.
@@ -287,7 +379,13 @@ difference retrieval depth makes.
   tasks are short-answer with a required citation. Neither is a working
   engineer's question.
 - n=50 per task type, one pass per condition on that set — enough for the
-  +24 to +88pt differences, not for the small ones.
+  +24 to +88pt differences, not for the small ones. The three designation types
+  are n=21: they share one pool of schemas, and 22 of the corpus's 5,664
+  described schemas survive a test that no *other* schema fits the same
+  description.
+- The depth and designation tracks ran on DeepSeek only. Their 20-round columns
+  sit at 95-100%, where a second model can only tie; the column with room is one
+  round, and that is what they were priced to measure.
 - The specification-grounded tasks are generated from the same database the
   tools read. They test whether the model can find and cite what is there, not
   whether the corpus is right.
