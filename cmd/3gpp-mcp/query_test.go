@@ -426,6 +426,16 @@ func TestRebuildOpenAPIIndexKeepsIndexOnFailure(t *testing.T) {
 	}
 }
 
+// TestCmdBuildOpenAPIIndex drives the command through its flag parsing, the
+// way a shell invocation would.
+func TestCmdBuildOpenAPIIndex(t *testing.T) {
+	path := seedDBPath(t)
+	out := captureStdout(t, func() { cmdBuildOpenAPIIndex([]string{"-db", path}) })
+	if !strings.Contains(out, "OpenAPI index:") {
+		t.Errorf("unexpected output: %s", out)
+	}
+}
+
 func TestRunBuildOpenAPIIndex(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old.db")
 	d, err := db.OpenReadWrite(path)

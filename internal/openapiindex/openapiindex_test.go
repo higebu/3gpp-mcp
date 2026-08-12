@@ -210,6 +210,163 @@ func TestChunksRendersAliasSchema(t *testing.T) {
 	}
 }
 
+// degenerateDoc exercises the shapes a hand-written 3GPP YAML can take that
+// the renderer has to walk past rather than trip over.
+const degenerateDoc = `openapi: 3.0.0
+paths:
+  # A path item that is not a mapping, and a method that is not an operation.
+  /not-a-mapping: "nope"
+  /partial:
+    get: "also not a mapping"
+    post:
+      summary: Mixed scalars
+      parameters:
+        - "not a mapping"
+        - notAName: 1
+        - name: valid
+      requestBody:
+        $ref: '#/components/requestBodies/Shared'
+    put:
+      requestBody:
+        content:
+          text/plain: null
+          application/json:
+            schema:
+              type: object
+components:
+  schemas:
+    NotAMapping: "scalar schema"
+    Leaves:
+      type: object
+      deprecated: true
+      properties:
+        count:
+          type: integer
+          minimum: 1
+          multipleOf: 0.5
+          deprecated: false
+        notAMapping: "scalar property"
+        nested:
+          type: object
+          properties:
+            deeper:
+              type: string
+        offRef:
+          $ref: 'not a components pointer'
+        emptyList:
+          enum: []
+        listOfMappings:
+          oneOf:
+            - type: string
+    Composed:
+      allOf:
+        - "not a mapping"
+        - type: object
+          required:
+            - a
+          properties:
+            a:
+              type: string
+        - $ref: '#/components/schemas/NotAMapping'
+`
+
+// TestChunksHandlesDegenerateDocuments pins the renderer's behaviour on input
+// it cannot make sense of: it skips what it cannot read and keeps going,
+// rather than dropping the document or panicking.
+func TestChunksHandlesDegenerateDocuments(t *testing.T) {
+	store, parseErrs := NewStore([]db.OpenAPIDoc{{
+		SpecID: "TS 29.500", APIName: "Degenerate", Filename: "degenerate.yaml", Content: degenerateDoc,
+	}})
+	if len(parseErrs) != 0 {
+		t.Fatalf("parse errors = %v, want none", parseErrs)
+	}
+	chunks := Chunks(store)
+
+	var got []string
+	for _, c := range chunks {
+		got = append(got, c.Kind+" "+c.Name)
+	}
+	want := []string{
+		// NotAMapping is not a schema object and produces no chunk, and the
+		// operations come out in httpMethods order rather than document order.
+		"schema Composed",
+		"schema Leaves",
+		"operation PUT /partial",
+		"operation POST /partial",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("chunks = %v, want %v", got, want)
+	}
+
+	leaves := chunkByName(t, chunks, db.OpenAPIKindSchema, "Leaves").Body
+	for _, want := range []string{
+		"deprecated: false",              // bool leaf
+		"minimum: 1",                     // int leaf
+		"multipleOf: 0.5",                // float leaf
+		"$ref: not a components pointer", // an unrecognized ref stays as text
+	} {
+		if !strings.Contains(leaves, want) {
+			t.Errorf("Leaves body missing %q:\n%s", want, leaves)
+		}
+	}
+	// An empty list and a list of mappings are not leaf text.
+	if strings.Contains(leaves, "enum:") || strings.Contains(leaves, "map[") {
+		t.Errorf("a non-leaf list leaked into the body:\n%s", leaves)
+	}
+
+	composed := chunkByName(t, chunks, db.OpenAPIKindSchema, "Composed").Body
+	for _, want := range []string{"required: a", "property: a", "$ref: #/components/schemas/NotAMapping"} {
+		if !strings.Contains(composed, want) {
+			t.Errorf("Composed body missing %q:\n%s", want, composed)
+		}
+	}
+
+	post := chunkByName(t, chunks, db.OpenAPIKindOperation, "POST /partial").Body
+	if !strings.Contains(post, "parameter: valid") {
+		t.Errorf("POST body missing its one usable parameter:\n%s", post)
+	}
+	// A requestBody that is itself a $ref names a shared requestBody object,
+	// not a schema, so nothing is expanded for it.
+	if strings.Contains(post, "requestBody:") {
+		t.Errorf("a $ref requestBody should not be expanded:\n%s", post)
+	}
+	// An inline schema with no $ref has nothing to resolve either.
+	if put := chunkByName(t, chunks, db.OpenAPIKindOperation, "PUT /partial").Body; strings.Contains(put, "requestBody:") {
+		t.Errorf("an inline request schema should not be expanded:\n%s", put)
+	}
+}
+
+// TestResolveRejectsUnknownTargets covers the refs that lead out of the store.
+func TestResolveRejectsUnknownTargets(t *testing.T) {
+	store := mustStore(t)
+	doc := store.Docs[0]
+
+	tests := []struct {
+		name string
+		ref  string
+	}{
+		{"not a schema pointer", "#/components/parameters/Foo"},
+		{"empty", ""},
+		{"file not in the store", "TS29999_Missing.yaml#/components/schemas/Nowhere"},
+		{"schema not in the file", "#/components/schemas/Nowhere"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, _, _, ok := store.Resolve(doc, tt.ref); ok {
+				t.Errorf("Resolve(%q) resolved, want not found", tt.ref)
+			}
+		})
+	}
+}
+
+func TestStatsString(t *testing.T) {
+	got := Stats{Documents: 4, Chunks: 214, Schemas: 191, Operations: 23}.String()
+	want := "214 chunks (191 schemas, 23 operations) from 4 OpenAPI documents"
+	if got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
 func mustStore(t *testing.T) *Store {
 	t.Helper()
 	store, parseErrs := NewStore(crossFileDocs)

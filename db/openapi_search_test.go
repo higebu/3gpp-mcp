@@ -267,6 +267,81 @@ func TestSearchOpenAPIWithoutIndex(t *testing.T) {
 	}
 }
 
+func TestAllOpenAPIDocs(t *testing.T) {
+	d := setupTestDB(t)
+
+	docs, err := d.AllOpenAPIDocs(t.Context())
+	if err != nil {
+		t.Fatalf("AllOpenAPIDocs: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("got %d documents, want 1", len(docs))
+	}
+	// The builder needs the file name to resolve cross-file $refs, so it has
+	// to survive the round trip along with the content.
+	got := docs[0]
+	if got.SpecID != "TS 29.510" || got.APIName != "Nnrf_NFManagement" {
+		t.Errorf("document = %s %s, want TS 29.510 Nnrf_NFManagement", got.SpecID, got.APIName)
+	}
+	if got.Filename != "TS29510_Nnrf_NFManagement.yaml" {
+		t.Errorf("filename = %q", got.Filename)
+	}
+	if !strings.Contains(got.Content, "NFProfile") {
+		t.Errorf("content = %q, want the stored YAML", got.Content)
+	}
+}
+
+func TestSearchOpenAPIClampsLimitAndOffset(t *testing.T) {
+	d := setupOpenAPIIndexDB(t)
+
+	tests := []struct {
+		name       string
+		limit      int
+		offset     int
+		wantLimit  int
+		wantOffset int
+	}{
+		{"zero limit falls back to the default", 0, 0, DefaultSearchLimit, 0},
+		{"negative limit falls back to the default", -5, 0, DefaultSearchLimit, 0},
+		{"limit above the cap is clamped", MaxSearchLimit + 100, 0, MaxSearchLimit, 0},
+		{"negative offset starts at the beginning", 0, -3, DefaultSearchLimit, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := d.SearchOpenAPI(t.Context(), "type", nil, "", "", false, tt.limit, tt.offset)
+			if err != nil {
+				t.Fatalf("SearchOpenAPI: %v", err)
+			}
+			if got.Limit != tt.wantLimit || got.Offset != tt.wantOffset {
+				t.Errorf("limit, offset = %d, %d; want %d, %d", got.Limit, got.Offset, tt.wantLimit, tt.wantOffset)
+			}
+		})
+	}
+}
+
+// TestSearchOpenAPISanitizesQuery checks that the syntax FTS5 would reject
+// outright reaches it quoted instead of failing the search.
+func TestSearchOpenAPISanitizesQuery(t *testing.T) {
+	d := setupOpenAPIIndexDB(t)
+
+	for _, query := range []string{
+		"nf-instances",            // a bare hyphen is the column-filter operator
+		"29.510",                  // a bare period is a syntax error
+		`"unterminated`,           // an unterminated phrase
+		"AND",                     // an operator with no operands
+		"NFProfile -UeContext",    // a trailing exclusion
+		"NEAR(NFProfile type, 5)", // a NEAR group
+		"name:",                   // a column filter with no value
+		"*",                       // a bare prefix operator
+	} {
+		t.Run(query, func(t *testing.T) {
+			if _, err := d.SearchOpenAPI(t.Context(), query, nil, "", "", false, 0, 0); err != nil {
+				t.Errorf("SearchOpenAPI(%q): %v", query, err)
+			}
+		})
+	}
+}
+
 // TestDropOpenAPIIndex covers the recovery from a rebuild that failed partway:
 // the database has to end up visibly index-less rather than quietly serving
 // the previous corpus.
