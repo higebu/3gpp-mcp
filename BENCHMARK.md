@@ -100,25 +100,34 @@ retrieved and the agent did not.
 
 A prompt variant adds one sentence to the shared prompt — do not answer from
 memory, search first — and names no source and no search terms, so it can only
-remove the model's discretion over whether to look. On Luna, the model that
-skipped most often:
+remove the model's discretion over whether to look. It ran on the model that
+skipped most, and on the one that never skipped:
 
-| Run | Accuracy | Never searched |
+| Run | Luna | DeepSeek V4 Flash |
 |---|---|---|
-| baseline prompt, no tools | 73.2% | 100% |
-| baseline prompt, 3gpp-mcp | 79.1% | 60.6% |
-| **search prompt, no tools** | 71.8% | 100% |
-| **search prompt, 3gpp-mcp** | **83.8%** | **0.0%** |
+| baseline prompt, no tools | 73.2% | 75.5% |
+| baseline prompt, 3gpp-mcp | 79.1% (skipped 60.6%) | 85.9% (skipped 0.2%) |
+| search prompt, no tools | 71.8% | 73.9% |
+| **search prompt, 3gpp-mcp** | **83.8%** (skipped 0%) | **86.6%** (skipped 0%) |
 
-Retrieval goes from skipped on 60.6% of questions to none, and the tools
+Luna's retrieval goes from skipped on 60.6% of questions to none, and its tools
 condition gains **+12.0pt** over its own baseline (249/68, p<10⁻²³) instead of
-+5.9pt. The sentence itself is worth nothing — with no tools to call it moves
-the model −1.5pt (p=0.086) — so the gain is the retrieval, not the wording.
++5.9pt. DeepSeek, which already searched on 99.8%, moves +0.7pt [−0.5, +2.0],
+p=0.305 — the falsification test: had the sentence lifted a model with nothing
+left to force, it would be doing something other than forcing retrieval, and
+Luna's +12.0pt would not mean what it appears to.
 
-That lands the agentic condition on 83.8% against fixed-k's 82.8%: a difference
-of +0.9pt with a 95% interval of [−1.0, +2.9]. Reaching the same index by
-tool call is worth what reaching it through a pipeline is worth, to within
-three points on 1,509 questions — which is what should happen, since it is the
+The sentence itself is worth nothing either way. With no tools to call it moves
+Luna −1.5pt (p=0.086) and DeepSeek −1.6pt (p=0.102) — two models agreeing that
+being told not to answer from memory, with no way to look anything up, is
+slightly worse than not being told. What follows is the retrieval, not the
+wording: within the search prompt, attaching the tools is worth +12.0pt on Luna
+and +12.7pt on DeepSeek.
+
+Against fixed-k, that puts Luna at 83.8% versus 82.8% — +0.9pt, 95% interval
+[−1.0, +2.9] — and DeepSeek at 86.6% versus 83.3%, +3.3pt [+1.6, +5.0],
+p=0.0002. Reaching the same index by tool call is worth at least what reaching
+it through a pipeline is worth, which is what should happen, since it is the
 same index, the same sections and the same BM25. The fixed-k pipeline is one
 query; 3gpp-mcp is that query plus the ability to keep going.
 
@@ -207,8 +216,10 @@ difference retrieval depth makes.
 
 - **Ask for retrieval and you get the whole effect.** Sonnet skipped searching
   on 40% of TeleQnA questions and Luna on 60%, and a question where nothing was
-  retrieved measures the model, not the server. One sentence in the prompt
-  takes Luna's skip rate to zero and its gain from +5.9 to +12.0pt.
+  retrieved measures the model, not the server. One sentence in the prompt takes
+  Luna's skip rate to zero and its gain from +5.9 to +12.0pt; it moves DeepSeek,
+  which already searched on 99.8%, by +0.7pt (p=0.305). With retrieval forced,
+  the tools are worth +12.0pt on Luna and +12.7pt on DeepSeek.
 - **Reaching the index by tool call is worth what reaching it through a
   pipeline is worth** — the two land within three points of each other on
   1,509 questions, as they should: same database, same sections, same BM25.
@@ -266,9 +277,9 @@ difference retrieval depth makes.
 
 ## What this does not measure
 
-- The search variant ran on one model. Luna is the one that skipped retrieval
-  most, so it had the most to gain; whether one sentence recovers as much on a
-  model that already searches on 60% of questions is untested.
+- The search variant ran on the two ends — the model that skipped 60% of
+  questions and the one that skipped none. Sonnet sits between them at 40%, and
+  was not run.
 - One prompt format. TeleQnA is multiple choice; the specification-grounded
   tasks are short-answer with a required citation. Neither is a working
   engineer's question.
