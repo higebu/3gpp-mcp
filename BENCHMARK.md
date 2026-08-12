@@ -48,12 +48,58 @@ the text at all* from *the model driving its own search*:
 | GPT 5.6 Luna | +9.6pt (p<10⁻¹⁴) | **−3.7pt** (p=0.0009) |
 
 Most of the TeleQnA gain is access, and access is model-independent: the three
-figures land within 1.8pt of each other. What the model does with the tools
-afterwards is worth little here, and its sign is not even stable across models.
+figures land within 1.8pt of each other. The agency column looks like the
+opposite — worth little, and not even stable in sign.
 
-That is a fact about the questions, not about the tools. A TeleQnA question is
-usually answerable from one retrieved passage, so a single search reaches most
-of what there is to reach.
+### Both columns are diluted: two models often did not search at all
+
+The fixed-k baseline retrieves on **every** question. The agentic condition
+lets the model decide, and two of the three mostly decided not to:
+
+| Model | Searched at least once | Never searched |
+|---|---|---|
+| DeepSeek V4 Flash | 99.9% | 0.1% |
+| Claude Sonnet 5 | 59.6% | **40.4%** |
+| GPT 5.6 Luna | 40.0% | **60.0%** |
+
+On a question where nothing was retrieved, the tools condition *is* the
+baseline — same prompt, same absent context — so it measures the model, not
+3gpp-mcp. The data says exactly that:
+
+| Model | Where it searched | Where it never called a tool |
+|---|---|---|
+| DeepSeek V4 Flash | 74.3% → **86.3%** (+12.0pt), p<10⁻⁶⁹ | 100% → 100% (n=5) |
+| Claude Sonnet 5 | 66.6% → **81.5%** (+14.9pt), p<10⁻⁵⁰ | 87.8% → 87.8% (+0.1pt), p=1 |
+| GPT 5.6 Luna | 58.9% → **74.6%** (+15.7pt), p<10⁻²⁹ | 83.1% → 83.5% (+0.4pt), p=0.319 |
+
+Where the tool went unused the two conditions are indistinguishable, which is
+what a shared prompt requires and is a check on the protocol: merely attaching
+tools changes nothing by itself. **Where the tool was used, the three models
+agree to within 3.7pt.** The spread in the headline table — +6.5 to +12.0pt —
+is dilution, not a property of the models.
+
+Read the same split against the fixed-k baseline instead, and the agency column
+resolves too:
+
+| Model | Where it searched | Where it never called a tool |
+|---|---|---|
+| DeepSeek V4 Flash | +2.6pt, 109/70, p=0.005 | (n=3) |
+| Claude Sonnet 5 | +1.7pt, 84/68, p=0.224 | **−3.2pt**, 17/36, p=0.013 |
+| GPT 5.6 Luna | −1.3pt, 63/71, p=0.545 | **−5.3pt**, 46/94, p<10⁻⁴ |
+
+The same BM25 index over the same database performs the same whether it
+arrives as a tool result or as a prepended block. The whole apparent deficit is
+in the questions answered from memory — 86% of Luna's −3.7pt — where fixed-k
+retrieved and the agent did not. Those are questions the models were fairly
+confident about, and mostly right about (83-88% without any retrieval), but
+retrieval would still have gained 3-5 points: the decision to skip it is
+better than chance and worse than always searching.
+
+Two cautions on these subsets. They are chosen by the model, not sampled: it
+searches when unsure, so the searched subset starts 8-24 points lower and
++12 to +16pt is the effect **on the questions a model thinks it needs help
+with**, not on TeleQnA as a whole. And the headline table remains the honest
+summary of *offering* the tool, which is what a deployment actually does.
 
 ## Specification-grounded tasks
 
@@ -96,17 +142,29 @@ answer can be checked:
 
 Against the BM25 baseline the agentic condition wins by +26 to +88pt on every
 protocol-structure type, on every model, with essentially no losing pairs —
-ASN.1 is 42-45 wins against 0 losses on all three. **The effect TeleQnA showed
-as small and unstable in sign is large and consistent here.**
+ASN.1 is 42-45 wins against 0 losses on all three. Here every model searches,
+because none of them can answer these from memory; the policy problem that
+flattened the TeleQnA agency column does not arise, and what is left is the
+difference retrieval depth makes.
 
 ## Takeaways
 
-- **The value of a search tool depends on how far the answer sits from the
-  first retrieved chunk.** TeleQnA questions are mostly one hop away, so one
-  BM25 query captures most of the gain. Questions about protocol structure are
-  two or more hops away — a table entry names a type defined elsewhere, a
-  schema references another schema — and there the model has to follow the
-  reference itself. That is the whole difference between +2.6pt and +88pt.
+- **A tool that is not called measures nothing.** Sonnet skipped searching on
+  40% of TeleQnA questions and Luna on 60%, and on those the tools condition
+  scored the same as no tools at all (+0.1pt, +0.4pt). Where the tool was used,
+  the gain is +12.0 to +15.7pt on all three models — the headline spread of
+  +6.5 to +12.0pt is dilution. **Make retrieval unconditional**, in the prompt
+  or in how the tools are offered: the models skip it on questions where it
+  would still have been worth 3-5 points.
+- **Search through a tool is worth what the same search is worth in a
+  pipeline.** On the questions where the model searched, the agentic condition
+  matched or beat a fixed-k pipeline over the same index on all three models.
+- **What the tool adds beyond a pipeline is depth, and depth is what the
+  documents demand.** A TeleQnA question is usually one hop from the first
+  retrieved passage, so one query reaches it. Protocol structure is two or more
+  hops — a table entry names a type defined elsewhere, a schema references
+  another schema — and only the model can follow that itself. That is the
+  difference between +2.6pt and +88pt.
 - **Retrieving the answer and being able to cite it are different
   capabilities.** The oracle condition is *handed* the chunk that contains the
   answer and answers 94-100% correctly — yet on Sonnet it can attribute that
@@ -115,9 +173,10 @@ as small and unstable in sign is large and consistent here.**
 - **Without retrieval, citations are often fabricated.** Over the 250
   clause-text tasks, a model with no tools names a clause that does not exist
   42-143 times depending on the model; with 3gpp-mcp, 2-4.
-- **Equations are the one area where the tool does not help.** Sonnet reads
-  62% from a single BM25 query and 64% with tools (5 wins / 4 losses, p=1).
-  Formulas sit in the retrieved section already; there is nothing to follow.
+- **Equations are the one area where the tool genuinely adds nothing.** Sonnet
+  reads 62% from a single BM25 query and 64% with tools (5 wins / 4 losses,
+  p=1) — and here it did search, on every task. Formulas sit in the retrieved
+  section already; there is nothing to follow.
 - **38 of 1,509 TeleQnA questions were answered correctly by all three models
   with tools and by none of them without** — and 6 in the opposite direction.
 
