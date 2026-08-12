@@ -116,9 +116,36 @@ of +0.9pt with a 95% interval of [−1.0, +2.9]. Reaching the same index by
 tool call is worth what reaching it through a pipeline is worth, to within
 three points on 1,509 questions — which is what should happen, since it is the
 same index, the same sections and the same BM25. The fixed-k pipeline is one
-query; 3gpp-mcp is that query plus the ability to keep going, and TeleQnA is a
-question set where one query is usually enough. The next section is where the
-rest of it is worth something.
+query; 3gpp-mcp is that query plus the ability to keep going.
+
+### The gain over one query is entirely in the questions that went further
+
+Splitting the agentic condition by which tools it actually called separates
+"searched" from "searched and then opened a section":
+
+| Model | Stratum | n | no tools | fixed-k | 3gpp-mcp | vs fixed-k |
+|---|---|---|---|---|---|---|
+| DeepSeek V4 Flash | search only | 124 | 92.7% | 94.4% | 95.2% | +0.8pt, p=1 |
+| | + `get_section` | 1382 | 73.9% | 82.3% | 85.0% | **+2.7pt, p=0.005** |
+| Claude Sonnet 5 | search only | 408 | 77.2% | 90.4% | 88.5% | −2.0pt, p=0.302 |
+| | + `get_section` | 507 | 57.6% | 70.0% | 74.8% | **+4.7pt, p=0.026** |
+| GPT 5.6 Luna³ | search only | 93 | 80.6% | 89.2% | 94.6% | +5.4pt, p=0.131 |
+| | + `get_section` | 1416 | 72.7% | 82.4% | 83.1% | +0.6pt, p=0.584 |
+
+³ from the search-prompt run, the one where Luna retrieves on every question.
+Sonnet's remaining 594 questions called nothing at all and are the rows in the
+previous table.
+
+Where the model stopped at the search result, it did what the pipeline does,
+and scored what the pipeline scores — no model separates from fixed-k there.
+Every point it gains comes from the stratum where it opened a section.
+
+The strata also differ in difficulty exactly as that reading predicts: a
+question answered from the search snippet alone is one the model could mostly
+answer unaided (77-93% with no tools), and one that sent it into a section
+could not be (58-74%). The model is deciding, per question, whether one hop is
+enough — and it is on the questions where it is not that the next section's
++26 to +88pt live.
 
 Two cautions on these subsets. They are chosen by the model, not sampled: it
 searches when unsure, so the searched subset starts 8-24 points lower and
@@ -182,6 +209,12 @@ difference retrieval depth makes.
   pipeline is worth** — the two land within three points of each other on
   1,509 questions, as they should: same database, same sections, same BM25.
   A fixed-k pipeline is one query of what 3gpp-mcp can do.
+- **The gain over one query comes from opening a section.** Where the model
+  stopped at the search result it scored what fixed-k scored; every point it
+  gained came from the questions it followed further — and those are the
+  questions it could not answer unaided. On the specification-grounded tasks
+  a quarter to a third of all calls are `get_openapi`, which no full-text
+  query reaches at all.
 - **What the tool adds beyond a pipeline is depth, and depth is what the
   documents demand.** A TeleQnA question is usually one hop from the first
   retrieved passage, so one query reaches it. Protocol structure is two or more
