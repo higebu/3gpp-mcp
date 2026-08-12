@@ -351,31 +351,37 @@ func TestRunSearchOpenAPIWithoutIndex(t *testing.T) {
 	}
 }
 
-// TestRebuildOpenAPIIndexDropsStaleIndexOnFailure covers the guarantee update
-// relies on: a rebuild that cannot finish leaves no index at all, so
-// search_openapi reports it as missing instead of answering from the corpus as
-// it was before.
-func TestRebuildOpenAPIIndexDropsStaleIndexOnFailure(t *testing.T) {
+// cancelledContext is the most likely way a rebuild fails in practice: a
+// Ctrl-C partway through.
+func cancelledContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	return ctx
+}
+
+// TestRefreshOpenAPIIndexAfterImportDropsStaleIndex covers the guarantee update
+// relies on: after openapi_specs has been rewritten, a rebuild that cannot
+// finish leaves no index at all, so search_openapi reports it as missing
+// instead of answering from the corpus as it was before.
+func TestRefreshOpenAPIIndexAfterImportDropsStaleIndex(t *testing.T) {
 	path := seedDBPath(t)
 	d, err := db.OpenReadWrite(path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	// Break the FTS side while the chunk rows stay: the triggers now write to
-	// a table that is not there, so the rebuild fails partway.
-	if err := d.Exec("DROP TABLE openapi_chunks_fts"); err != nil {
-		t.Fatalf("break index: %v", err)
-	}
 
-	err = rebuildOpenAPIIndex(t.Context(), d)
+	err = refreshOpenAPIIndexAfterImport(cancelledContext(t), d)
 	if err == nil {
 		t.Fatal("expected the rebuild to fail")
 	}
 	if !strings.Contains(err.Error(), "build-openapi-index") {
 		t.Errorf("error should name the recovery: %v", err)
 	}
+	// The check has to run on a live context: update makes the same call, and
+	// reusing the cancelled one would report a failure of its own.
 	if ok, checkErr := d.HasOpenAPIIndex(t.Context()); checkErr != nil || ok {
-		t.Errorf("stale index survived a failed rebuild: %v, %v", ok, checkErr)
+		t.Errorf("stale index survived a failed refresh: %v, %v", ok, checkErr)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -389,6 +395,34 @@ func TestRebuildOpenAPIIndexDropsStaleIndexOnFailure(t *testing.T) {
 	})
 	if !strings.Contains(out, "OpenAPI index:") {
 		t.Errorf("unexpected output: %s", out)
+	}
+}
+
+// TestRebuildOpenAPIIndexKeepsIndexOnFailure is the other half: when nothing
+// has rewritten openapi_specs, a failed rebuild changes nothing and the index
+// still describes the corpus it was built from. Dropping it there would turn a
+// Ctrl-C on build-openapi-index into an outage for a running serve.
+func TestRebuildOpenAPIIndexKeepsIndexOnFailure(t *testing.T) {
+	path := seedDBPath(t)
+	d, err := db.OpenReadWrite(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+
+	if err := rebuildOpenAPIIndex(cancelledContext(t), d); err == nil {
+		t.Fatal("expected the rebuild to fail")
+	}
+
+	if ok, checkErr := d.HasOpenAPIIndex(t.Context()); checkErr != nil || !ok {
+		t.Fatalf("HasOpenAPIIndex = %v, %v; want true, nil", ok, checkErr)
+	}
+	got, err := d.SearchOpenAPI(t.Context(), "NFProfile", nil, "", "", false, 0, 0)
+	if err != nil {
+		t.Fatalf("SearchOpenAPI: %v", err)
+	}
+	if len(got.Results) == 0 {
+		t.Error("a failed rebuild emptied an index that was still correct")
 	}
 }
 

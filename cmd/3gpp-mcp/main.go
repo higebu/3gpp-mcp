@@ -658,7 +658,7 @@ func runPipeline(ctx context.Context, dbPath string, client *http.Client, specs 
 		return err
 	}
 
-	return rebuildOpenAPIIndex(ctx, d)
+	return refreshOpenAPIIndexAfterImport(ctx, d)
 }
 
 // rebuildOpenAPIIndex refreshes the search_openapi index and reports what it
@@ -667,22 +667,36 @@ func runPipeline(ctx context.Context, dbPath string, client *http.Client, specs 
 // until the whole table is in place, and importing one document can change the
 // chunks of documents imported long before it. Build names each unparsable
 // document as it goes.
+// A failure leaves any existing index in place. ReplaceOpenAPIChunks is a
+// single transaction, so a rebuild that does not finish changes nothing, and
+// on its own that leaves the index describing exactly the openapi_specs it was
+// built from — still correct. Callers that have just rewritten openapi_specs
+// need refreshOpenAPIIndexAfterImport instead.
 func rebuildOpenAPIIndex(ctx context.Context, d *db.DB) error {
 	stats, err := openapiindex.Build(ctx, d)
 	if err != nil {
-		// A half-done rebuild must not be left behind as a working index. The
-		// chunks still in the database describe the corpus as it was before
-		// this run, so search_openapi would answer with definitions that no
-		// longer exist — wrong in a way no caller can detect. Dropping the
-		// index puts the database in the state serve already handles: the tool
-		// reports it as missing and names build-openapi-index.
-		if dropErr := d.DropOpenAPIIndex(); dropErr != nil {
-			return fmt.Errorf("build openapi index: %w (dropping the stale index also failed: %v)", err, dropErr)
-		}
-		return fmt.Errorf("build openapi index: %w; the stale index was dropped, so run 'build-openapi-index' before serving search_openapi", err)
+		return fmt.Errorf("build openapi index: %w", err)
 	}
 	fmt.Printf("OpenAPI index: %s\n", stats)
 	return nil
+}
+
+// refreshOpenAPIIndexAfterImport is rebuildOpenAPIIndex for a caller that has
+// already written openapi_specs. That is what makes a failure different here:
+// the surviving index describes the corpus as it was before the import, so
+// leaving it would have search_openapi answer with definitions that no longer
+// exist — wrong in a way no caller can detect. Dropping it puts the database
+// in the state serve already handles, where the tool reports the index as
+// missing and names build-openapi-index.
+func refreshOpenAPIIndexAfterImport(ctx context.Context, d *db.DB) error {
+	err := rebuildOpenAPIIndex(ctx, d)
+	if err == nil {
+		return nil
+	}
+	if dropErr := d.DropOpenAPIIndex(); dropErr != nil {
+		return fmt.Errorf("%w (dropping the now-stale index also failed: %v)", err, dropErr)
+	}
+	return fmt.Errorf("%w; the now-stale index was dropped, so run 'build-openapi-index' before serving search_openapi", err)
 }
 
 func cmdBuildOpenAPIIndex(args []string) {
@@ -1070,12 +1084,17 @@ func cmdUpdate(args []string) {
 	// are derived data that build-openapi-index regenerates in seconds, while
 	// discarding the working copy costs the whole spec import that just ran —
 	// but the database must not go live carrying an index that disagrees with
-	// its openapi_specs. rebuildOpenAPIIndex drops the stale index on failure
-	// for exactly that reason, so the update is only kept once the database is
-	// honestly index-less; if the drop did not take, correctness wins over the
-	// import and the working copy goes.
-	if err := rebuildOpenAPIIndex(ctx, d); err != nil {
-		stale, checkErr := d.HasOpenAPIIndex(ctx)
+	// its openapi_specs. refreshOpenAPIIndexAfterImport drops the stale index
+	// on failure for exactly that reason, so the update is only kept once the
+	// database is honestly index-less; if the drop did not take, correctness
+	// wins over the import and the working copy goes.
+	//
+	// The check runs on a context stripped of cancellation: the most likely
+	// way to get here is a Ctrl-C during the rebuild, and reusing the
+	// cancelled ctx would fail the check for that same reason and discard an
+	// import that is otherwise complete and correct.
+	if err := refreshOpenAPIIndexAfterImport(ctx, d); err != nil {
+		stale, checkErr := d.HasOpenAPIIndex(context.WithoutCancel(ctx))
 		if checkErr != nil || stale {
 			_ = d.Close()
 			discardWorkingCopy(newPath)

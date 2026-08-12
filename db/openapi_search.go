@@ -134,17 +134,35 @@ func (d *DB) ReplaceOpenAPIChunks(chunks []OpenAPIChunk) error {
 // ErrNoOpenAPIIndex — visibly missing and rebuildable, rather than silently
 // wrong. InitSchema recreates the tables.
 func (d *DB) DropOpenAPIIndex() error {
+	// One transaction, because half a drop is worse than either end of it: the
+	// content table left without its FTS twin still answers HasOpenAPIIndex
+	// with "absent" (it counts both), so the database would pass for
+	// index-less while carrying rows that the next rebuild's DELETE would fire
+	// delete triggers for against an index that never held them — the "missing
+	// row" corruption ReplaceOpenAPIChunks exists to avoid. SQLite makes DDL
+	// transactional, so this is all or nothing.
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("drop openapi index: begin transaction: %w", err)
+	}
+	defer tx.Rollback() // no-op after Commit per database/sql docs
+
 	// Triggers first: they write to openapi_chunks_fts, so leaving one behind
 	// a dropped table would break the next write to openapi_chunks.
-	_, err := d.conn.Exec(`
-DROP TRIGGER IF EXISTS openapi_chunks_ai;
-DROP TRIGGER IF EXISTS openapi_chunks_ad;
-DROP TRIGGER IF EXISTS openapi_chunks_au;
-DROP TABLE IF EXISTS openapi_chunks_fts;
-DROP TABLE IF EXISTS openapi_chunks;
-`)
-	if err != nil {
-		return fmt.Errorf("drop openapi index: %w", err)
+	for _, stmt := range []string{
+		"DROP TRIGGER IF EXISTS openapi_chunks_ai",
+		"DROP TRIGGER IF EXISTS openapi_chunks_ad",
+		"DROP TRIGGER IF EXISTS openapi_chunks_au",
+		"DROP TABLE IF EXISTS openapi_chunks_fts",
+		"DROP TABLE IF EXISTS openapi_chunks",
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("drop openapi index (%s): %w", stmt, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("drop openapi index: commit: %w", err)
 	}
 	return nil
 }
