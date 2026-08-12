@@ -274,9 +274,12 @@ components:
 // it cannot make sense of: it skips what it cannot read and keeps going,
 // rather than dropping the document or panicking.
 func TestChunksHandlesDegenerateDocuments(t *testing.T) {
-	store, parseErrs := NewStore([]db.OpenAPIDoc{{
-		SpecID: "TS 29.500", APIName: "Degenerate", Filename: "degenerate.yaml", Content: degenerateDoc,
-	}})
+	store, parseErrs := NewStore([]db.OpenAPIDoc{
+		{SpecID: "TS 29.500", APIName: "Degenerate", Filename: "degenerate.yaml", Content: degenerateDoc},
+		// A document with neither components nor paths contributes nothing,
+		// and a missing file name keeps it out of the cross-file lookup.
+		{SpecID: "TS 29.501", APIName: "Empty", Content: "openapi: 3.0.0\n"},
+	})
 	if len(parseErrs) != 0 {
 		t.Fatalf("parse errors = %v, want none", parseErrs)
 	}
@@ -456,6 +459,38 @@ func TestBuild(t *testing.T) {
 	}
 	if len(got.Results) == 0 || got.Results[0].Name != "NFProfile" {
 		t.Errorf("search after build returned %+v", got.Results)
+	}
+}
+
+// TestBuildReportsUnparsableDocuments checks that one bad document costs its
+// own chunks and nothing else: the rest of the corpus is still indexed, and
+// the count comes back so the caller can report it.
+func TestBuildReportsUnparsableDocuments(t *testing.T) {
+	d := testutil.SetupTestDB(t)
+	if err := d.UpsertOpenAPI("TS 29.500", "Broken", "v1", "broken.yaml", "\topenapi: [unclosed\n"); err != nil {
+		t.Fatalf("seed broken document: %v", err)
+	}
+
+	stats, err := Build(t.Context(), d)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if stats.Unparsable != 1 {
+		t.Errorf("unparsable = %d, want 1", stats.Unparsable)
+	}
+	if stats.Documents != 1 || stats.Chunks == 0 {
+		t.Errorf("stats = %+v, want the good document still indexed", stats)
+	}
+}
+
+func TestBuildOnUnreachableDatabase(t *testing.T) {
+	d := testutil.SetupTestDB(t)
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if _, err := Build(t.Context(), d); err == nil {
+		t.Error("Build succeeded on a closed database")
 	}
 }
 

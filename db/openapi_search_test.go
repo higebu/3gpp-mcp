@@ -376,6 +376,77 @@ func TestDropOpenAPIIndex(t *testing.T) {
 	}
 }
 
+// TestReplaceOpenAPIChunksRejectsDuplicates covers the rollback: a chunk set
+// that violates the (spec, api, kind, name) key must leave the previous index
+// intact rather than half-written.
+func TestReplaceOpenAPIChunksRejectsDuplicates(t *testing.T) {
+	d := setupOpenAPIIndexDB(t)
+
+	dup := append(append([]OpenAPIChunk{}, testChunks...), testChunks[0])
+	err := d.ReplaceOpenAPIChunks(dup)
+	if err == nil {
+		t.Fatal("expected a duplicate chunk to be rejected")
+	}
+	if !strings.Contains(err.Error(), "NFProfile") {
+		t.Errorf("error should name the offending chunk: %v", err)
+	}
+
+	// The transaction rolled back, so the index is still the one it was.
+	got, searchErr := d.SearchOpenAPI(t.Context(), "name:NFProfile", nil, "", "", false, 0, 0)
+	if searchErr != nil {
+		t.Fatalf("SearchOpenAPI: %v", searchErr)
+	}
+	if len(got.Results) != 1 {
+		t.Errorf("results = %v, want the pre-existing index intact", names(got.Results))
+	}
+}
+
+// TestReplaceOpenAPIChunksNeedsTheFTSTable covers the half-dropped index: the
+// delete triggers write to openapi_chunks_fts, so a rebuild against a database
+// missing it has to fail rather than quietly desynchronize the two.
+func TestReplaceOpenAPIChunksNeedsTheFTSTable(t *testing.T) {
+	d := setupOpenAPIIndexDB(t)
+
+	if err := d.Exec("DROP TABLE openapi_chunks_fts"); err != nil {
+		t.Fatalf("drop fts table: %v", err)
+	}
+	if err := d.ReplaceOpenAPIChunks(testChunks); err == nil {
+		t.Fatal("expected the rebuild to fail without the FTS table")
+	}
+}
+
+// TestOpenAPIIndexOnClosedDatabase checks that every entry point reports a
+// database it cannot reach, rather than panicking or returning empty results
+// that read as "nothing indexed".
+func TestOpenAPIIndexOnClosedDatabase(t *testing.T) {
+	d := setupOpenAPIIndexDB(t)
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if _, err := d.AllOpenAPIDocs(t.Context()); err == nil {
+		t.Error("AllOpenAPIDocs succeeded on a closed database")
+	}
+	if err := d.ReplaceOpenAPIChunks(testChunks); err == nil {
+		t.Error("ReplaceOpenAPIChunks succeeded on a closed database")
+	}
+	if err := d.DropOpenAPIIndex(); err == nil {
+		t.Error("DropOpenAPIIndex succeeded on a closed database")
+	}
+	if _, err := d.HasOpenAPIIndex(t.Context()); err == nil {
+		t.Error("HasOpenAPIIndex succeeded on a closed database")
+	}
+	// The search must not mistake an unreachable database for one that simply
+	// has no index, or the tool would tell the caller to rebuild it.
+	_, err := d.SearchOpenAPI(t.Context(), "NFProfile", nil, "", "", false, 0, 0)
+	if err == nil {
+		t.Fatal("SearchOpenAPI succeeded on a closed database")
+	}
+	if errors.Is(err, ErrNoOpenAPIIndex) {
+		t.Errorf("an unreachable database reported as a missing index: %v", err)
+	}
+}
+
 func TestReplaceOpenAPIChunksClearsStaleRows(t *testing.T) {
 	d := setupOpenAPIIndexDB(t)
 

@@ -120,6 +120,23 @@ func TestHandleSearchOpenAPIErrors(t *testing.T) {
 		}
 	})
 
+	t.Run("negative offset starts at the beginning", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, SearchOpenAPIInput{Query: "NFProfile", Offset: -5})
+		if err != nil {
+			t.Fatalf("handler: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("unexpected tool error: %s", getTextContent(result))
+		}
+		var got db.OpenAPISearchResults
+		if err := json.Unmarshal([]byte(getTextContent(result)), &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if got.Offset != 0 {
+			t.Errorf("offset = %d, want 0", got.Offset)
+		}
+	})
+
 	t.Run("unknown kind", func(t *testing.T) {
 		result, _, err := handler(context.Background(), nil, SearchOpenAPIInput{Query: "NFProfile", Kind: "component"})
 		if err != nil {
