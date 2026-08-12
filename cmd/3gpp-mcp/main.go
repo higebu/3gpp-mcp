@@ -20,6 +20,7 @@ import (
 
 	"github.com/higebu/3gpp-mcp/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/openapiindex"
 	"github.com/higebu/3gpp-mcp/internal/specver"
 	"github.com/higebu/3gpp-mcp/tools"
 	"github.com/higebu/3gpp-mcp/versionstore"
@@ -109,6 +110,7 @@ func init() {
 		{name: "import", aliases: []string{"convert"}, desc: "Import a single DOCX file into database", run: cmdConvert},
 		{name: "import-dir", aliases: []string{"convert-dir"}, desc: "Import a directory of DOCX files into database", run: cmdConvertDir},
 		{name: "update", desc: "Update database to latest spec versions", run: cmdUpdate},
+		{name: "build-openapi-index", desc: "Rebuild the OpenAPI search index", run: cmdBuildOpenAPIIndex},
 		{name: "list-specs", desc: "List specifications in the database", run: cmdListSpecs},
 		{name: "list-versions", desc: "List versions of a specification", run: cmdListVersions},
 		{name: "get-toc", desc: "Print a specification's table of contents", run: cmdGetTOC},
@@ -117,6 +119,7 @@ func init() {
 		{name: "search", desc: "Full-text search across specifications", run: cmdSearch},
 		{name: "list-openapi", desc: "List OpenAPI definitions", run: cmdListOpenAPI},
 		{name: "get-openapi", desc: "Print an OpenAPI definition", run: cmdGetOpenAPI},
+		{name: "search-openapi", desc: "Full-text search across OpenAPI definitions", run: cmdSearchOpenAPI},
 		{name: "get-references", desc: "Print cross-references as JSON", run: cmdGetReferences},
 		{name: "list-images", desc: "List embedded images in a specification", run: cmdListImages},
 		{name: "get-image", desc: "Write an embedded image to a file or stdout", run: cmdGetImage},
@@ -195,7 +198,7 @@ func newMCPServer(d *db.DB, src *tools.Source) *mcp.Server {
 		Name:    "3gpp-mcp",
 		Version: version,
 	}, &mcp.ServerOptions{
-		Instructions: "3GPP specification server. Use list_specs to find specifications, get_toc to browse structure, get_section to read specification document text (architecture, procedures, requirements), and search to find relevant sections. Use get_references to explore cross-references between specifications (outgoing: what a section references; incoming: what references a spec). For 5G API details (HTTP methods, request/response bodies, paths, schemas, data models) from TS 29.xxx series, use list_openapi to discover APIs and get_openapi to read their OpenAPI definitions. Always prefer get_openapi over get_section when looking up API request/response formats or data type definitions.\n\n" +
+		Instructions: "3GPP specification server. Use list_specs to find specifications, get_toc to browse structure, get_section to read specification document text (architecture, procedures, requirements), and search to find relevant sections. Use get_references to explore cross-references between specifications (outgoing: what a section references; incoming: what references a spec). For 5G API details (HTTP methods, request/response bodies, paths, schemas, data models) from TS 29.xxx series, use list_openapi to discover APIs and get_openapi to read their OpenAPI definitions, and search_openapi when you know the data type or endpoint but not which API document defines it. Always prefer get_openapi over get_section when looking up API request/response formats or data type definitions.\n\n" +
 			"Notation: section text is Markdown. Figures are `![...](image://NAME)` links. Formulas are LaTeX — a standalone equation is a ```latex code block whose equation number is kept as `\\tag{7.3-1}`, and a formula inside a sentence or a table cell is delimited with `$...$` or `$$...$$`.\n\n" +
 			"Versions: the database holds one version per specification, and every get_section, get_toc and search result names the specification and version it came from. To compare a procedure across releases, call list_versions to see which versions exist, then use compare_versions: without section_number it summarizes which sections were added, removed or changed between two versions, and with section_number it returns a line-level diff of that section's text. A version that is not in the database is downloaded and converted on first use, which takes up to a few minutes for a large specification; when that happens the tool says so and you should call it again with the same arguments. Section numbers move between releases, so check get_toc for the older version before reading a section of it. get_image and list_images also accept a version: an archived version's images are downloaded on their own first use, again taking up to a few minutes before a retry succeeds. search and get_references only have data for the version in the database.",
 	})
@@ -208,6 +211,7 @@ func newMCPServer(d *db.DB, src *tools.Source) *mcp.Server {
 	mcp.AddTool(s, tools.SearchTool, tools.HandleSearch(d))
 	mcp.AddTool(s, tools.ListOpenAPITool, tools.HandleListOpenAPI(d))
 	mcp.AddTool(s, tools.GetOpenAPITool, tools.HandleGetOpenAPI(d))
+	mcp.AddTool(s, tools.SearchOpenAPITool, tools.HandleSearchOpenAPI(d))
 	mcp.AddTool(s, tools.GetReferencesTool, tools.HandleGetReferences(d))
 	mcp.AddTool(s, tools.ListImagesTool, tools.HandleListImages(src))
 	mcp.AddTool(s, tools.GetImageTool, tools.HandleGetImage(src))
@@ -404,6 +408,9 @@ func runConvert(ctx context.Context, dbPath, docxPath string, convertImage bool)
 	if err := pipeline.ConvertSingleFile(ctx, d, docxPath, convertImage); err != nil {
 		return err
 	}
+	if err := rebuildOpenAPIIndex(ctx, d); err != nil {
+		return err
+	}
 	fmt.Printf("Written to %s\n", dbPath)
 	return nil
 }
@@ -453,7 +460,7 @@ func runConvertDir(ctx context.Context, dbPath, dirPath string, workers int, con
 	if err := pipeline.ConvertDir(ctx, d, dirPath, workers, convertDoc, convertImage); err != nil {
 		return fmt.Errorf("import %s: %w", dirPath, err)
 	}
-	return nil
+	return rebuildOpenAPIIndex(ctx, d)
 }
 
 // exit is swapped in tests to cover fatal error paths without terminating
@@ -645,7 +652,60 @@ func runPipeline(ctx context.Context, dbPath string, client *http.Client, specs 
 	// Run's errors are self-describing ("all N specs failed", ctx.Err()), and
 	// cmdPipeline prefixes "Pipeline failed:" — wrapping here would only
 	// repeat that context.
-	return p.Run(ctx, specs)
+	if err := p.Run(ctx, specs); err != nil {
+		return err
+	}
+
+	return rebuildOpenAPIIndex(ctx, d)
+}
+
+// rebuildOpenAPIIndex refreshes the search_openapi index and reports what it
+// wrote. Every command that imports into a database ends with this: an
+// OpenAPI $ref usually points into another document, so a chunk cannot be
+// rendered until the whole table is in place, and importing one document can
+// change the chunks of documents imported long before it.
+func rebuildOpenAPIIndex(ctx context.Context, d *db.DB) error {
+	stats, err := openapiindex.Build(ctx, d)
+	if err != nil {
+		return fmt.Errorf("build openapi index: %w", err)
+	}
+	if stats.Unparsable > 0 {
+		log.Printf("warning: %d OpenAPI documents could not be parsed and are not searchable", stats.Unparsable)
+	}
+	fmt.Printf("OpenAPI index: %s\n", stats)
+	return nil
+}
+
+func cmdBuildOpenAPIIndex(args []string) {
+	fs := flag.NewFlagSet("build-openapi-index", flag.ExitOnError)
+	dbPath := fs.String("db", "3gpp.db", "SQLite database path")
+	_ = fs.Parse(args)
+	requireArgs(fs, 0, "3gpp-mcp build-openapi-index [options]")
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if err := runBuildOpenAPIIndex(ctx, *dbPath); err != nil {
+		log.Printf("Build openapi index failed: %v", err)
+		exit(1)
+	}
+}
+
+// runBuildOpenAPIIndex rebuilds the index in an existing database. It is the
+// way to add the index to a database built before search_openapi existed:
+// serve opens read-only and so cannot create the tables itself.
+func runBuildOpenAPIIndex(ctx context.Context, dbPath string) error {
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer d.Close()
+
+	if err := d.InitSchema(); err != nil {
+		return fmt.Errorf("init schema: %w", err)
+	}
+
+	return rebuildOpenAPIIndex(ctx, d)
 }
 
 func cmdCompletion(args []string) {
@@ -991,6 +1051,15 @@ func cmdUpdate(args []string) {
 			discardWorkingCopy(newPath)
 			log.Fatalf("Update failed: %v", err)
 		}
+	}
+
+	// The working copy carries the old index, and a removed or re-imported
+	// spec can invalidate chunks anywhere in it, so rebuild before the copy
+	// becomes the live database.
+	if err := rebuildOpenAPIIndex(ctx, d); err != nil {
+		_ = d.Close()
+		discardWorkingCopy(newPath)
+		log.Fatalf("Update failed: %v", err)
 	}
 
 	// Checkpoint WAL into the main file so the renamed DB is self-contained.

@@ -17,6 +17,7 @@ import (
 
 	"github.com/higebu/3gpp-mcp/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/openapiindex"
 	"github.com/higebu/3gpp-mcp/internal/testutil"
 	"github.com/higebu/3gpp-mcp/tools"
 	"github.com/higebu/3gpp-mcp/versionstore"
@@ -294,6 +295,105 @@ func TestRunListOpenAPI(t *testing.T) {
 	}
 	if strings.TrimSpace(out.String()) != "[]" {
 		t.Errorf("expected [] for a spec without OpenAPI, got:\n%s", out.String())
+	}
+}
+
+func TestRunSearchOpenAPI(t *testing.T) {
+	d := testutil.SetupTestDB(t)
+	if _, err := openapiindex.Build(t.Context(), d); err != nil {
+		t.Fatalf("build openapi index: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := runSearchOpenAPI(t.Context(), &out, d, "NFProfile", "", "", "", false, 0, 0); err != nil {
+		t.Fatalf("runSearchOpenAPI: %v", err)
+	}
+	var results db.OpenAPISearchResults
+	if err := json.Unmarshal(out.Bytes(), &results); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out.String())
+	}
+	if len(results.Results) == 0 || results.Results[0].Name != "NFProfile" {
+		t.Fatalf("unexpected results: %+v", results.Results)
+	}
+	if results.Results[0].Body != "" {
+		t.Errorf("body should be omitted without -body: %q", results.Results[0].Body)
+	}
+
+	out.Reset()
+	if err := runSearchOpenAPI(t.Context(), &out, d, "NFProfile", "TS 23.501, TS 29.510", "", "schema", true, 0, 0); err != nil {
+		t.Fatalf("runSearchOpenAPI filtered: %v", err)
+	}
+	if !strings.Contains(out.String(), "nfInstanceId") {
+		t.Errorf("-body should return the full chunk:\n%s", out.String())
+	}
+
+	out.Reset()
+	if err := runSearchOpenAPI(t.Context(), &out, d, "NFProfile", "TS 23.501", "", "", false, 0, 0); err != nil {
+		t.Fatalf("runSearchOpenAPI spec filter: %v", err)
+	}
+	if !strings.Contains(out.String(), `"total_count": 0`) {
+		t.Errorf("spec filter not applied:\n%s", out.String())
+	}
+}
+
+// TestRunSearchOpenAPIWithoutIndex covers a database built before
+// search_openapi existed: the CLI names the command that fixes it.
+func TestRunSearchOpenAPIWithoutIndex(t *testing.T) {
+	d := testutil.SetupTestDB(t)
+	if err := d.Exec("DROP TABLE openapi_chunks"); err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+
+	var out bytes.Buffer
+	err := runSearchOpenAPI(t.Context(), &out, d, "NFProfile", "", "", "", false, 0, 0)
+	if err == nil || !strings.Contains(err.Error(), "build-openapi-index") {
+		t.Fatalf("err = %v, want a build-openapi-index hint", err)
+	}
+}
+
+func TestRunBuildOpenAPIIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	d, err := db.OpenReadWrite(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// A database with the spec tables but no index, as an older build left it.
+	if err := d.ExecScript(db.SpecTablesSchema + db.ImagesTableSchema); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	if err := d.Exec(`CREATE TABLE openapi_specs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, spec_id TEXT NOT NULL, api_name TEXT NOT NULL,
+		version TEXT, filename TEXT, content TEXT NOT NULL, UNIQUE(spec_id, api_name))`); err != nil {
+		t.Fatalf("openapi_specs: %v", err)
+	}
+	if err := d.UpsertOpenAPI("TS 29.510", "Nnrf_NFManagement", "v1.3.0", "TS29510_Nnrf_NFManagement.yaml",
+		"components:\n  schemas:\n    NFProfile:\n      type: object\n"); err != nil {
+		t.Fatalf("seed openapi: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := runBuildOpenAPIIndex(t.Context(), path); err != nil {
+			t.Fatalf("runBuildOpenAPIIndex: %v", err)
+		}
+	})
+	if !strings.Contains(out, "OpenAPI index: 1 chunks") {
+		t.Errorf("unexpected output: %s", out)
+	}
+
+	reopened, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	results, err := reopened.SearchOpenAPI(t.Context(), "NFProfile", nil, "", "", false, 0, 0)
+	if err != nil {
+		t.Fatalf("SearchOpenAPI: %v", err)
+	}
+	if len(results.Results) != 1 {
+		t.Errorf("index not usable after rebuild: %+v", results)
 	}
 }
 
@@ -575,6 +675,11 @@ func seedDBPath(t *testing.T) string {
 	if err := d.ExecScript(testutil.SeedData); err != nil {
 		t.Fatalf("seed data: %v", err)
 	}
+	// A real database gets its OpenAPI index built at the end of every import,
+	// so the seed does too.
+	if _, err := openapiindex.Build(t.Context(), d); err != nil {
+		t.Fatalf("build openapi index: %v", err)
+	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("close seed db: %v", err)
 	}
@@ -604,6 +709,8 @@ func TestCmdQueryCommands(t *testing.T) {
 		{"get-references", func() { cmdGetReferences([]string{"-db", path, "TS 24.229", "5.1"}) }, []string{"TS 23.228"}},
 		{"list-openapi", func() { cmdListOpenAPI([]string{"-db", path}) }, []string{"Nnrf_NFManagement"}},
 		{"get-openapi", func() { cmdGetOpenAPI([]string{"-db", path, "-schema", "NFProfile", "TS 29.510", "Nnrf_NFManagement"}) }, []string{"NFProfile"}},
+		{"search-openapi", func() { cmdSearchOpenAPI([]string{"-db", path, "-limit", "2", "NFProfile"}) }, []string{"NFProfile", "total_count"}},
+		{"search-openapi multi-arg", func() { cmdSearchOpenAPI([]string{"-db", path, "-kind", "operation", "nf-instances"}) }, []string{`"operation"`}},
 		{"list-images", func() { cmdListImages([]string{"-db", path, "TS 23.501"}) }, []string{`"count"`}},
 	}
 	for _, tt := range tests {
