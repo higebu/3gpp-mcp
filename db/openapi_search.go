@@ -125,6 +125,30 @@ func (d *DB) ReplaceOpenAPIChunks(chunks []OpenAPIChunk) error {
 	return nil
 }
 
+// DropOpenAPIIndex removes the index tables and their triggers.
+//
+// It is the recovery for a rebuild that failed partway: the chunks still in
+// the database describe the corpus as it was before, and a stale index answers
+// with definitions that no longer exist. Dropping it leaves the database in the
+// state a pre-index build produces, which SearchOpenAPI already reports as
+// ErrNoOpenAPIIndex — visibly missing and rebuildable, rather than silently
+// wrong. InitSchema recreates the tables.
+func (d *DB) DropOpenAPIIndex() error {
+	// Triggers first: they write to openapi_chunks_fts, so leaving one behind
+	// a dropped table would break the next write to openapi_chunks.
+	_, err := d.conn.Exec(`
+DROP TRIGGER IF EXISTS openapi_chunks_ai;
+DROP TRIGGER IF EXISTS openapi_chunks_ad;
+DROP TRIGGER IF EXISTS openapi_chunks_au;
+DROP TABLE IF EXISTS openapi_chunks_fts;
+DROP TABLE IF EXISTS openapi_chunks;
+`)
+	if err != nil {
+		return fmt.Errorf("drop openapi index: %w", err)
+	}
+	return nil
+}
+
 // HasOpenAPIIndex reports whether this database carries the OpenAPI search
 // index tables at all.
 func (d *DB) HasOpenAPIIndex(ctx context.Context) (bool, error) {

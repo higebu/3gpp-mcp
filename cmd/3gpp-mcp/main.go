@@ -670,7 +670,16 @@ func runPipeline(ctx context.Context, dbPath string, client *http.Client, specs 
 func rebuildOpenAPIIndex(ctx context.Context, d *db.DB) error {
 	stats, err := openapiindex.Build(ctx, d)
 	if err != nil {
-		return fmt.Errorf("build openapi index: %w", err)
+		// A half-done rebuild must not be left behind as a working index. The
+		// chunks still in the database describe the corpus as it was before
+		// this run, so search_openapi would answer with definitions that no
+		// longer exist — wrong in a way no caller can detect. Dropping the
+		// index puts the database in the state serve already handles: the tool
+		// reports it as missing and names build-openapi-index.
+		if dropErr := d.DropOpenAPIIndex(); dropErr != nil {
+			return fmt.Errorf("build openapi index: %w (dropping the stale index also failed: %v)", err, dropErr)
+		}
+		return fmt.Errorf("build openapi index: %w; the stale index was dropped, so run 'build-openapi-index' before serving search_openapi", err)
 	}
 	fmt.Printf("OpenAPI index: %s\n", stats)
 	return nil
@@ -1057,13 +1066,22 @@ func cmdUpdate(args []string) {
 	// spec can invalidate chunks anywhere in it, so rebuild before the copy
 	// becomes the live database.
 	//
-	// A failure here is not worth throwing the update away over: the chunks
-	// are derived data, ReplaceOpenAPIChunks is transactional so the previous
-	// index survives intact, and build-openapi-index regenerates it in
-	// seconds. Discarding the working copy would instead cost the whole spec
-	// import that just ran, which takes hours to redo.
+	// A failure here is not worth throwing the update away over — the chunks
+	// are derived data that build-openapi-index regenerates in seconds, while
+	// discarding the working copy costs the whole spec import that just ran —
+	// but the database must not go live carrying an index that disagrees with
+	// its openapi_specs. rebuildOpenAPIIndex drops the stale index on failure
+	// for exactly that reason, so the update is only kept once the database is
+	// honestly index-less; if the drop did not take, correctness wins over the
+	// import and the working copy goes.
 	if err := rebuildOpenAPIIndex(ctx, d); err != nil {
-		log.Printf("warning: %v; the database keeps its previous OpenAPI index — run '3gpp-mcp build-openapi-index --db %s' to refresh it", err, *dbPath)
+		stale, checkErr := d.HasOpenAPIIndex(ctx)
+		if checkErr != nil || stale {
+			_ = d.Close()
+			discardWorkingCopy(newPath)
+			log.Fatalf("Update failed: %v", err)
+		}
+		log.Printf("warning: %v; run '3gpp-mcp build-openapi-index --db %s'", err, *dbPath)
 	}
 
 	// Checkpoint WAL into the main file so the renamed DB is self-contained.

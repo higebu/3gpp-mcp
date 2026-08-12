@@ -267,6 +267,40 @@ func TestSearchOpenAPIWithoutIndex(t *testing.T) {
 	}
 }
 
+// TestDropOpenAPIIndex covers the recovery from a rebuild that failed partway:
+// the database has to end up visibly index-less rather than quietly serving
+// the previous corpus.
+func TestDropOpenAPIIndex(t *testing.T) {
+	d := setupOpenAPIIndexDB(t)
+
+	if err := d.DropOpenAPIIndex(); err != nil {
+		t.Fatalf("DropOpenAPIIndex: %v", err)
+	}
+
+	if ok, err := d.HasOpenAPIIndex(t.Context()); err != nil || ok {
+		t.Fatalf("HasOpenAPIIndex = %v, %v; want false, nil", ok, err)
+	}
+	if _, err := d.SearchOpenAPI(t.Context(), "NFProfile", nil, "", "", false, 0, 0); !errors.Is(err, ErrNoOpenAPIIndex) {
+		t.Fatalf("err = %v, want ErrNoOpenAPIIndex", err)
+	}
+
+	// Dropping is recoverable: the schema recreates the tables, triggers and
+	// all, and the index works again.
+	if err := d.ExecScript(OpenAPIIndexSchema); err != nil {
+		t.Fatalf("recreate schema: %v", err)
+	}
+	if err := d.ReplaceOpenAPIChunks(testChunks); err != nil {
+		t.Fatalf("ReplaceOpenAPIChunks: %v", err)
+	}
+	got, err := d.SearchOpenAPI(t.Context(), "NFProfile", nil, "", "", false, 0, 0)
+	if err != nil {
+		t.Fatalf("SearchOpenAPI after rebuild: %v", err)
+	}
+	if len(got.Results) == 0 {
+		t.Error("index did not come back after being dropped and rebuilt")
+	}
+}
+
 func TestReplaceOpenAPIChunksClearsStaleRows(t *testing.T) {
 	d := setupOpenAPIIndexDB(t)
 

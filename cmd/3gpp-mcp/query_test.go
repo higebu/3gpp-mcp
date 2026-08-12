@@ -351,6 +351,47 @@ func TestRunSearchOpenAPIWithoutIndex(t *testing.T) {
 	}
 }
 
+// TestRebuildOpenAPIIndexDropsStaleIndexOnFailure covers the guarantee update
+// relies on: a rebuild that cannot finish leaves no index at all, so
+// search_openapi reports it as missing instead of answering from the corpus as
+// it was before.
+func TestRebuildOpenAPIIndexDropsStaleIndexOnFailure(t *testing.T) {
+	path := seedDBPath(t)
+	d, err := db.OpenReadWrite(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// Break the FTS side while the chunk rows stay: the triggers now write to
+	// a table that is not there, so the rebuild fails partway.
+	if err := d.Exec("DROP TABLE openapi_chunks_fts"); err != nil {
+		t.Fatalf("break index: %v", err)
+	}
+
+	err = rebuildOpenAPIIndex(t.Context(), d)
+	if err == nil {
+		t.Fatal("expected the rebuild to fail")
+	}
+	if !strings.Contains(err.Error(), "build-openapi-index") {
+		t.Errorf("error should name the recovery: %v", err)
+	}
+	if ok, checkErr := d.HasOpenAPIIndex(t.Context()); checkErr != nil || ok {
+		t.Errorf("stale index survived a failed rebuild: %v, %v", ok, checkErr)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// And the database is recoverable exactly the way the error says.
+	out := captureStdout(t, func() {
+		if err := runBuildOpenAPIIndex(t.Context(), path); err != nil {
+			t.Fatalf("runBuildOpenAPIIndex: %v", err)
+		}
+	})
+	if !strings.Contains(out, "OpenAPI index:") {
+		t.Errorf("unexpected output: %s", out)
+	}
+}
+
 func TestRunBuildOpenAPIIndex(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old.db")
 	d, err := db.OpenReadWrite(path)

@@ -61,7 +61,12 @@ make web                  # HTTP server with web viewer at :8080
   and absent from `versionstore`. Databases built before this existed have no
   index at all — `serve` opens read-only and cannot create it, so
   `SearchOpenAPI` returns `db.ErrNoOpenAPIIndex` and the tool points at
-  `build-openapi-index`.
+  `build-openapi-index`. **The index is never allowed to be stale**: a rebuild
+  that fails drops it (`DropOpenAPIIndex`) rather than leaving chunks that
+  describe the previous corpus, so the honest "missing" state is the only
+  failure mode. `update` keeps its working copy on such a failure — the spec
+  import costs hours, the index seconds — but only after confirming the drop
+  took.
 - **Image references are format-independent**: `image://NAME?w=&h=` in body
   text, `<img src="image://...">` in table cells. `structdiff.NormalizeImageRefs`
   keeps conversion-pair extension changes (`.emf`/`.wmf`/`.pcz`/`.png`) from
