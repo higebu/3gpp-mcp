@@ -45,6 +45,28 @@ make web                  # HTTP server with web viewer at :8080
   entries are evicted LRU, and a version's text and images evict as one unit.
   Images are fetched lazily on the first `get_image`/`list_images` call.
   OpenAPI YAML and cross-references are prebuilt-only.
+- **OpenAPI search is a second FTS index.** `openapi_chunks` / `openapi_chunks_fts`
+  (`db.OpenAPIIndexSchema`) hold one row per schema and per operation, derived
+  from `openapi_specs` by `internal/openapiindex` and **rebuilt wholesale** —
+  never incrementally, because most `$ref`s cross into another file, so
+  importing one document changes the chunks of documents imported before it.
+  `build` and `update` end in `rebuildOpenAPIIndex`; `import` and `import-dir`
+  deliberately do not, because the YAML arrives in the archive zip and a
+  `.docx` import cannot touch `openapi_specs`. The tokenizer is
+  plain `unicode61`, no porter: these rows are identifiers, not prose, and
+  `-`/`.`/`_` split so a partial name matches. A schema chunk expands `$ref`
+  one level, through `items` and `additionalProperties` as well as directly —
+  that is how the 5G SBI definitions state most of their relationships. Like
+  the rest of the OpenAPI features it is prebuilt-only
+  and absent from `versionstore`. Databases built before this existed have no
+  index at all — `serve` opens read-only and cannot create it, so
+  `SearchOpenAPI` returns `db.ErrNoOpenAPIIndex` and the tool points at
+  `build-openapi-index`. **The index is never allowed to be stale**: a rebuild
+  that fails drops it (`DropOpenAPIIndex`) rather than leaving chunks that
+  describe the previous corpus, so the honest "missing" state is the only
+  failure mode. `update` keeps its working copy on such a failure — the spec
+  import costs hours, the index seconds — but only after confirming the drop
+  took.
 - **Image references are format-independent**: `image://NAME?w=&h=` in body
   text, `<img src="image://...">` in table cells. `structdiff.NormalizeImageRefs`
   keeps conversion-pair extension changes (`.emf`/`.wmf`/`.pcz`/`.png`) from

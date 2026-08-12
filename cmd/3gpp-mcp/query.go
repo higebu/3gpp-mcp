@@ -594,6 +594,58 @@ func runGetOpenAPI(ctx context.Context, out io.Writer, d *db.DB, specID, apiName
 	return err
 }
 
+// search-openapi
+
+func cmdSearchOpenAPI(args []string) {
+	fs := flag.NewFlagSet("search-openapi", flag.ExitOnError)
+	qf := addQueryFlags(fs, false)
+	specs := fs.String("specs", "", "Limit search to specific specs, comma-separated (e.g. \"TS 29.510,TS 29.518\")")
+	api := fs.String("api", "", "Limit search to a single API document (e.g. Nnrf_NFManagement)")
+	kind := fs.String("kind", "", "Limit search to one kind of definition: schema or operation")
+	body := fs.Bool("body", false, "Include the full text of each matching definition")
+	limit := fs.Int("limit", 0, "Maximum number of results per page (default: 10, max: 200)")
+	offset := fs.Int("offset", 0, "Number of results to skip")
+	_ = fs.Parse(args)
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: 3gpp-mcp search-openapi [options] <query>")
+		fmt.Fprintln(os.Stderr, "Options must come before the query.")
+		os.Exit(1)
+	}
+
+	runQuery("search-openapi", func(ctx context.Context) error {
+		src, cleanup, err := qf.openSource(false)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		// Joining the remaining arguments lets multi-term FTS queries go
+		// unquoted, as in search.
+		return runSearchOpenAPI(ctx, os.Stdout, src.DB, strings.Join(fs.Args(), " "), *specs, *api, *kind, *body, *limit, *offset)
+	})
+}
+
+func runSearchOpenAPI(ctx context.Context, out io.Writer, d *db.DB, query, specs, api, kind string, includeBody bool, limit, offset int) error {
+	var specIDs []string
+	if specs != "" {
+		for _, s := range strings.Split(specs, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				specIDs = append(specIDs, s)
+			}
+		}
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	results, err := d.SearchOpenAPI(ctx, query, specIDs, api, kind, includeBody, limit, offset)
+	if err != nil {
+		if errors.Is(err, db.ErrNoOpenAPIIndex) {
+			return fmt.Errorf("%w; run '3gpp-mcp build-openapi-index' to add it", err)
+		}
+		return err
+	}
+	return printJSON(out, results)
+}
+
 // get-references
 
 func cmdGetReferences(args []string) {

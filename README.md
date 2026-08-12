@@ -270,6 +270,32 @@ so they need no manual escaping.
 |------|-------------|----------------|
 | `list_openapi` | List available OpenAPI definitions | `spec_id` (optional): filter by spec, e.g. `"TS 29.510"` |
 | `get_openapi` | Get OpenAPI definition (paginated) | `spec_id`, `api_name` (required), `path`, `schema`, `offset`, `max_lines` |
+| `search_openapi` | Full-text search across OpenAPI definitions | `query` (required), `spec_ids`, `api_name`, `kind` (`"schema"` or `"operation"`), `include_body`, `limit`, `offset` |
+
+`search_openapi` uses its own FTS5 index, separate from the one `search` uses:
+`search` covers specification clause text and never returns OpenAPI content,
+`search_openapi` covers OpenAPI content only. One hit is one definition rather
+than one document — a schema from `components.schemas`, or one HTTP method of
+one path (named like `PUT /nf-instances/{nfInstanceID}`) — so you can find a
+data type or an endpoint without knowing which API document defines it, then
+read it in full with `get_openapi`. A query that is a single bare term ranks a
+definition of exactly that name first, so `NFProfile` returns the `NFProfile`
+schema ahead of the schemas that only reference it.
+
+A schema's indexed text carries one level of `$ref` expansion — through `items`
+and `additionalProperties` as well as directly, which is how the 5G SBI
+definitions state most of their relationships — so the fields of a referenced
+type are searchable from the schema that uses it; a type two hops away is not
+in that text. Unlike `search`, this index applies no stemming
+— identifiers are matched as written — and `-`, `.` and `_` split tokens, so
+`Nnrf_NFManagement` is also found by `NFManagement` and `/nf-instances` by
+`instances`. camelCase is not split.
+
+The index is built at the end of `build` and `update`. `import` and `import-dir`
+leave it alone: the YAML files ship in the archive zip, so importing a `.docx`
+cannot change what there is to index. A database built before this tool existed
+has no index; add it in place with
+[`build-openapi-index`](#other-commands).
 
 ### Embedded images
 
@@ -415,6 +441,7 @@ it at its newest version below the cap. They cannot be combined.
 - `import` — Import a single `.docx` file into the database. Alias: `convert`. Usage: `3gpp-mcp import --db data/3gpp.db path/to/spec.docx`
 - `import-dir` — Import all `.docx` files in a directory into the database. Alias: `convert-dir`. Usage: `3gpp-mcp import-dir --db data/3gpp.db ./specs`
 - `update` — Update specifications in the database to latest versions, or to a cap with `--max-release`.
+- `build-openapi-index` — Rebuild the [OpenAPI search index](#openapi-definitions) of an existing database. `build` and `update` do this themselves, so it is for adding the index to a database built before `search_openapi` existed: `serve` opens the database read-only and cannot create it on the fly.
 - `completion` — Print a shell completion script: `3gpp-mcp completion bash` (or `zsh`, `fish`)
 
 The cap is not stored in the database, so a database built with
@@ -429,9 +456,9 @@ spec.
 ### Query commands
 
 The query commands (`list-specs`, `list-versions`, `get-toc`, `get-section`,
-`compare-versions`, `search`, `list-openapi`, `get-openapi`, `get-references`,
-`list-images`, `get-image`) mirror the MCP read tools 1:1, so the database can
-be inspected and scripted from a shell without an MCP client:
+`compare-versions`, `search`, `list-openapi`, `get-openapi`, `search-openapi`,
+`get-references`, `list-images`, `get-image`) mirror the MCP read tools 1:1, so
+the database can be inspected and scripted from a shell without an MCP client:
 
 ```bash
 3gpp-mcp search --db data/3gpp.db --limit 3 "AMF AND authentication" | jq '.results[].section_number'

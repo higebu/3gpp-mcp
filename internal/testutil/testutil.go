@@ -59,16 +59,30 @@ paths:
   /nf-instances:
     get:
       summary: List NF Instances
+      parameters:
+        - name: target-nf-type
+          in: query
   /nf-instances/{nfInstanceID}:
     put:
       summary: Register NF Instance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: ''#/components/schemas/NFProfile''
 components:
   schemas:
     NFProfile:
       type: object
+      description: Information of an NF Instance registered in the NRF
       properties:
         nfInstanceId:
-          type: string');
+          type: string
+        nfType:
+          $ref: ''#/components/schemas/NFType''
+    NFType:
+      type: string
+      description: NF types known to the NRF');
 `
 
 // SetupTestDB creates a temporary SQLite database with the standard schema and seed data.
