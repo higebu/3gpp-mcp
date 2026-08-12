@@ -149,9 +149,11 @@ Splitting the agentic condition by which tools it actually called separates
 Sonnet's remaining 594 questions called nothing at all and are the rows in the
 previous table.
 
-Where the model stopped at the search result, it did what the pipeline does,
-and scored what the pipeline scores — no model separates from fixed-k there.
-Every point it gains comes from the stratum where it opened a section.
+Where the model stopped at the search result, it did what the pipeline does, and
+no model separates from fixed-k there at any usable confidence: the three
+measured differences are +0.8, −2.0 and +5.4pt, none significant, and they do
+not agree on a sign. Both differences that do reach significance are in the
+stratum where the model opened a section, and both favour the tool.
 
 The strata also differ in difficulty exactly as that reading predicts: a
 question answered from the search snippet alone is one the model could mostly
@@ -225,9 +227,10 @@ difference retrieval depth makes.
   1,509 questions, as they should: same database, same sections, same BM25.
   A fixed-k pipeline is one query of what 3gpp-mcp can do.
 - **The gain over one query comes from opening a section.** Where the model
-  stopped at the search result it scored what fixed-k scored; every point it
-  gained came from the questions it followed further — and those are the
-  questions it could not answer unaided. On the specification-grounded tasks a
+  stopped at the search result nothing separates it from fixed-k; the only two
+  significant gains are in the stratum where it followed the reference further —
+  and those are the questions it could not answer unaided. On the
+  specification-grounded tasks a
   quarter to a third of all calls are `get_openapi`; a BM25 index built over
   those same documents reaches them too, and still answers-and-cites 6-95%
   where 3gpp-mcp reaches 93-100%.
@@ -291,6 +294,20 @@ difference retrieval depth makes.
 - Absolute numbers are not comparable to Telco-RAG / TelcoAI / GSMA leaderboard
   figures (different models, prompt formats and subsets); the paired same-model
   delta is the measurement.
+
+## Why the per-question data is not here
+
+Only the aggregate is published. A results file carries the question text, the
+options and the gold answer of every item it scored, and the generated tasks
+are the benchmark itself — publishing either puts it into the next crawl and
+into the next model's training data, after which no number measured on it means
+anything. TeleQnA is distributed as a password-protected archive for exactly
+that reason, and the tasks generated from the specifications are withheld for
+the same one.
+
+What that costs: these numbers cannot be audited item by item from outside. What
+is published instead is the protocol, the pinned database identifier, and the
+harness that regenerates every figure from a dataset you obtain yourself.
 
 Harness, full methodology and reproduction scripts:
 [higebu/teleqna-eval](https://github.com/higebu/teleqna-eval).
