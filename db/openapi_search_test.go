@@ -92,6 +92,14 @@ func TestSearchOpenAPI(t *testing.T) {
 			want:    []string{"UeContext"},
 		},
 		{
+			// An API name is copied out of prose as often as out of
+			// list_openapi, so the filter ignores case.
+			name:    "api filter ignores case",
+			query:   "type",
+			apiName: "namf_communication",
+			want:    []string{"UeContext"},
+		},
+		{
 			name:  "column filter",
 			query: "name:NFProfile",
 			want:  []string{"NFProfile"},

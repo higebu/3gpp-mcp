@@ -220,7 +220,10 @@ func (d *DB) SearchOpenAPI(ctx context.Context, query string, specIDs []string, 
 		fromWhere += " AND (" + strings.Join(conds, " OR ") + ")"
 	}
 	if apiName != "" {
-		fromWhere += " AND c.api_name = ?"
+		// Case-insensitive, because an API name is copied out of prose as
+		// often as out of list_openapi and "nnrf_nfmanagement" would
+		// otherwise return an empty result indistinguishable from no matches.
+		fromWhere += " AND LOWER(c.api_name) = LOWER(?)"
 		filterArgs = append(filterArgs, apiName)
 	}
 	if kind != "" {
