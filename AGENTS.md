@@ -50,10 +50,14 @@ make web                  # HTTP server with web viewer at :8080
   from `openapi_specs` by `internal/openapiindex` and **rebuilt wholesale** —
   never incrementally, because most `$ref`s cross into another file, so
   importing one document changes the chunks of documents imported before it.
-  Every importing CLI command ends in `rebuildOpenAPIIndex`. The tokenizer is
+  `build` and `update` end in `rebuildOpenAPIIndex`; `import` and `import-dir`
+  deliberately do not, because the YAML arrives in the archive zip and a
+  `.docx` import cannot touch `openapi_specs`. The tokenizer is
   plain `unicode61`, no porter: these rows are identifiers, not prose, and
   `-`/`.`/`_` split so a partial name matches. A schema chunk expands `$ref`
-  exactly one level. Like the rest of the OpenAPI features it is prebuilt-only
+  one level, through `items` and `additionalProperties` as well as directly —
+  that is how the 5G SBI definitions state most of their relationships. Like
+  the rest of the OpenAPI features it is prebuilt-only
   and absent from `versionstore`. Databases built before this existed have no
   index at all — `serve` opens read-only and cannot create it, so
   `SearchOpenAPI` returns `db.ErrNoOpenAPIIndex` and the tool points at

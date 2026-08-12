@@ -326,15 +326,19 @@ read it in full with `get_openapi`. A query that is a single bare term ranks a
 definition of exactly that name first, so `NFProfile` returns the `NFProfile`
 schema ahead of the schemas that only reference it.
 
-A schema's indexed text carries one level of `$ref` expansion, which makes the
-fields of a referenced type searchable from the schema that uses it; a type two
-hops away is not in that text. Unlike `search`, this index applies no stemming
+A schema's indexed text carries one level of `$ref` expansion — through `items`
+and `additionalProperties` as well as directly, which is how the 5G SBI
+definitions state most of their relationships — so the fields of a referenced
+type are searchable from the schema that uses it; a type two hops away is not
+in that text. Unlike `search`, this index applies no stemming
 — identifiers are matched as written — and `-`, `.` and `_` split tokens, so
 `Nnrf_NFManagement` is also found by `NFManagement` and `/nf-instances` by
 `instances`. camelCase is not split.
 
-The index is built at the end of `build`, `import`, `import-dir` and `update`.
-A database built before this tool existed has no index; add it in place with
+The index is built at the end of `build` and `update`. `import` and `import-dir`
+leave it alone: the YAML files ship in the archive zip, so importing a `.docx`
+cannot change what there is to index. A database built before this tool existed
+has no index; add it in place with
 [`build-openapi-index`](#build-openapi-index).
 
 ### Embedded images
@@ -720,10 +724,10 @@ Usage: `3gpp-mcp search-openapi [flags] <query>`
 
 ### `build-openapi-index`
 
-Rebuild the OpenAPI search index of an existing database. `build`, `import`,
-`import-dir` and `update` all do this themselves, so this command is for
-adding the index to a database built before `search_openapi` existed — the
-server opens the database read-only and cannot create it on the fly.
+Rebuild the OpenAPI search index of an existing database. `build` and `update`
+do this themselves, so this command is for adding the index to a database built
+before `search_openapi` existed — the server opens the database read-only and
+cannot create it on the fly.
 
 | Flag | Description | Default |
 |------|-------------|---------|
