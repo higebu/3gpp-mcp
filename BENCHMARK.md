@@ -16,15 +16,21 @@ the retrieval differs. Three conditions:
 | 3gpp-mcp | all 11 MCP tools bridged in, up to 20 tool rounds, the model drives its own search |
 
 Two more conditions exist for the 5G SBI tasks. Their answers live in OpenAPI
-documents, which this server stores but does not put in its FTS5 index — a
-choice in 3gpp-mcp, not a fact about search — so the clause-text fixed-k
-baseline cannot reach them, and its score on those tasks says nothing about
-what a retrieval pipeline can do. The two conditions exist to remove that
-artifact: **BM25 over OpenAPI** queries an index built for exactly these
-documents, and **oracle lookup** is handed the chunk the question names. An
-oracle is not a system anyone can build — it is the ceiling a retriever could
-reach if its query were always perfect. On the SBI tasks those two, not
-fixed-k, are what 3gpp-mcp is measured against.
+documents, which this server stored but did not put in an FTS5 index when this
+was measured — a choice in 3gpp-mcp, not a fact about search — so the
+clause-text fixed-k baseline cannot reach them, and its score on those tasks
+says nothing about what a retrieval pipeline can do. The two conditions exist
+to remove that artifact: **BM25 over OpenAPI** queries an index built for
+exactly these documents, and **oracle lookup** is handed the chunk the question
+names. An oracle is not a system anyone can build — it is the ceiling a
+retriever could reach if its query were always perfect. On the SBI tasks those
+two, not fixed-k, are what 3gpp-mcp is measured against.
+
+That choice has since been reversed. `search_openapi` puts the OpenAPI store
+behind its own FTS5 index, which makes twelve tools rather than eleven, and it
+was measured as a sixth condition on the SBI tasks — see [Searching the OpenAPI
+store](#searching-the-openapi-store-instead-of-navigating-it) below. Every other
+number on this page was measured with the eleven-tool set.
 
 ## TeleQnA
 
@@ -214,6 +220,54 @@ because none of them can answer these from memory; the policy problem that
 flattened the TeleQnA agency column does not arise, and what is left is the
 difference retrieval depth makes.
 
+### Searching the OpenAPI store instead of navigating it
+
+The two extra conditions above put a purpose-built search over the OpenAPI
+store against an agent that navigates it. `search_openapi` makes that a
+comparison between two searches over one store: the server's own FTS5 index,
+one chunk per schema and per operation with `$ref` expanded one level.
+
+Measured on DeepSeek as a sixth condition — same 187 tasks, same pinned
+database, same prompt, one more tool attached. **Answer correct and correctly
+cited**:
+
+| Task type | n | 3gpp-mcp | + `search_openapi` | paired |
+|---|---|---|---|---|
+| SBI request body | 50 | 94% | **100%** | 3/0, p=0.248 |
+| SBI object property | 50 | **98%** | 86% | 0/6, p=0.041 |
+| SBI allOf composition | 44 | 98% | **100%** | 1/0, p=1 |
+| SBI oneOf alternatives | 43 | 98% | **100%** | 1/0, p=1 |
+| all four | 187 | 96.8% | 96.3% | 5 won / 6 lost |
+
+Nothing moved. The one cell that reaches p<0.05 moved down, and five of those
+six answers are still correct and lost only the citation — the model writing
+`MonitoringEvent API — FailureCause schema` where the gold is the bare document
+name — with three of the six never calling the new tool at all. Four types
+tested without correction, so one cell at p=0.041 is what noise looks like.
+
+The score had nowhere to go. Request bodies are the type where a real gain was
+available — answering *which schema an operation's body uses* is a walk through
+`paths → post → requestBody → content → schema → $ref` that text similarity
+cannot do, and the BM25 baseline collapses to 26% on it — and navigation was
+already at 94%.
+
+What did change is the path taken. Calls per task, over the whole track:
+
+| Tool | 3gpp-mcp | + `search_openapi` |
+|---|---|---|
+| `get_openapi` | 2.18 | 1.75 |
+| `list_openapi` | 0.96 | 0.66 |
+| `search_openapi` | — | 0.94 |
+| `search` | 0.28 | 0.07 |
+| `get_section` | 0.29 | 0.13 |
+| all tools | 3.81 | 3.60 |
+
+74% of tasks call it, and every other tool goes down: it **displaces navigation
+rather than adding to it**, and the total falls from 3.81 calls to 3.60. The
+model that used to list the API documents and open one to find where a schema
+lives now asks for it by name. That is the tool working as designed; it is not
+something a benchmark whose navigation condition already answers 97% can score.
+
 ## Takeaways
 
 - **Ask for retrieval and you get the whole effect.** Sonnet skipped searching
@@ -254,6 +308,11 @@ difference retrieval depth makes.
   section already; there is nothing to follow.
 - **38 of 1,509 TeleQnA questions were answered correctly by all three models
   with tools and by none of them without** — and 6 in the opposite direction.
+- **`search_openapi` replaces navigation without changing the answer.** On the
+  SBI tasks it is called on 74% of them and cuts every other tool's usage, but
+  the score is 96.8% against 96.3% — the questions were already being answered
+  by opening the documents. Its value is in the calls it saves a client that
+  knows a data type and not its document, which these tasks do not price.
 
 ## Method
 
@@ -287,7 +346,12 @@ difference retrieval depth makes.
   tasks are short-answer with a required citation. Neither is a working
   engineer's question.
 - n=50 per task type, one pass per condition on that set — enough for the
-  +24 to +88pt differences, not for the small ones.
+  +24 to +88pt differences, not for the small ones. The `search_openapi`
+  comparison is entirely made of small ones, and is reported as a null result
+  rather than as four separate cells.
+- What retrieval *costs* is not measured anywhere here, only what it scores. A
+  tool that reaches an answer in one call instead of two looks identical in
+  every table above.
 - The specification-grounded tasks are generated from the same database the
   tools read. They test whether the model can find and cite what is there, not
   whether the corpus is right.
