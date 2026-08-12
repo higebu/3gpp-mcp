@@ -314,6 +314,28 @@ and `offset` pages past the cap.
 |------|-------------|----------------|
 | `list_openapi` | List available OpenAPI definitions | `spec_id` (optional): filter by spec, e.g. `"TS 29.510"` |
 | `get_openapi` | Get OpenAPI definition (paginated) | `spec_id`, `api_name` (required), `path`, `schema`, `offset`, `max_lines` |
+| `search_openapi` | Full-text search across OpenAPI definitions | `query` (required), `spec_ids`, `api_name`, `kind` (`"schema"` or `"operation"`), `include_body`, `limit`, `offset` |
+
+`search_openapi` uses its own FTS5 index, separate from the one `search` uses:
+`search` covers specification clause text and never returns OpenAPI content,
+`search_openapi` covers OpenAPI content only. One hit is one definition rather
+than one document — a schema from `components.schemas`, or one HTTP method of
+one path (named like `PUT /nf-instances/{nfInstanceID}`) — so you can find a
+data type or an endpoint without knowing which API document defines it, then
+read it in full with `get_openapi`. A query that is a single bare term ranks a
+definition of exactly that name first, so `NFProfile` returns the `NFProfile`
+schema ahead of the schemas that only reference it.
+
+A schema's indexed text carries one level of `$ref` expansion, which makes the
+fields of a referenced type searchable from the schema that uses it; a type two
+hops away is not in that text. Unlike `search`, this index applies no stemming
+— identifiers are matched as written — and `-`, `.` and `_` split tokens, so
+`Nnrf_NFManagement` is also found by `NFManagement` and `/nf-instances` by
+`instances`. camelCase is not split.
+
+The index is built at the end of `build`, `import`, `import-dir` and `update`.
+A database built before this tool existed has no index; add it in place with
+[`build-openapi-index`](#build-openapi-index).
 
 ### Embedded images
 
@@ -678,6 +700,34 @@ Usage: `3gpp-mcp get-openapi [flags] <spec-id> <api-name>`
 |------|-------------|---------|
 | `--path` | Filter by API path (e.g. `/nf-instances`) | |
 | `--schema` | Filter by schema name (e.g. `NFProfile`) | |
+
+### `search-openapi`
+
+Full-text search across OpenAPI definitions; results print as JSON. One hit is
+one schema or one operation. As with `search`, everything after the flags is
+joined into one query: `3gpp-mcp search-openapi NFProfile AND heartbeat`.
+
+Usage: `3gpp-mcp search-openapi [flags] <query>`
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--specs` | Limit search to specific specs, comma-separated (e.g. `"TS 29.510,TS 29.518"`) | |
+| `--api` | Limit search to a single API document (e.g. `Nnrf_NFManagement`) | |
+| `--kind` | Limit search to `schema` or `operation` | both |
+| `--body` | Include the full text of each matching definition | `false` |
+| `--limit` | Maximum number of results per page (max 200) | `10` |
+| `--offset` | Number of results to skip | `0` |
+
+### `build-openapi-index`
+
+Rebuild the OpenAPI search index of an existing database. `build`, `import`,
+`import-dir` and `update` all do this themselves, so this command is for
+adding the index to a database built before `search_openapi` existed — the
+server opens the database read-only and cannot create it on the fly.
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--db` | SQLite database path | `3gpp.db` |
 
 ### `get-references`
 

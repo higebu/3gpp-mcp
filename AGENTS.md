@@ -45,6 +45,19 @@ make web                  # HTTP server with web viewer at :8080
   entries are evicted LRU, and a version's text and images evict as one unit.
   Images are fetched lazily on the first `get_image`/`list_images` call.
   OpenAPI YAML and cross-references are prebuilt-only.
+- **OpenAPI search is a second FTS index.** `openapi_chunks` / `openapi_chunks_fts`
+  (`db.OpenAPIIndexSchema`) hold one row per schema and per operation, derived
+  from `openapi_specs` by `internal/openapiindex` and **rebuilt wholesale** —
+  never incrementally, because most `$ref`s cross into another file, so
+  importing one document changes the chunks of documents imported before it.
+  Every importing CLI command ends in `rebuildOpenAPIIndex`. The tokenizer is
+  plain `unicode61`, no porter: these rows are identifiers, not prose, and
+  `-`/`.`/`_` split so a partial name matches. A schema chunk expands `$ref`
+  exactly one level. Like the rest of the OpenAPI features it is prebuilt-only
+  and absent from `versionstore`. Databases built before this existed have no
+  index at all — `serve` opens read-only and cannot create it, so
+  `SearchOpenAPI` returns `db.ErrNoOpenAPIIndex` and the tool points at
+  `build-openapi-index`.
 - **Image references are format-independent**: `image://NAME?w=&h=` in body
   text, `<img src="image://...">` in table cells. `structdiff.NormalizeImageRefs`
   keeps conversion-pair extension changes (`.emf`/`.wmf`/`.pcz`/`.png`) from
