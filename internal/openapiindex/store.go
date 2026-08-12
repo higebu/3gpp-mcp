@@ -14,6 +14,7 @@
 package openapiindex
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 
@@ -40,16 +41,20 @@ type Store struct {
 // followed by a pointer into components.schemas.
 var refRE = regexp.MustCompile(`^([^#]*)#/components/schemas/([\w.-]+)$`)
 
-// NewStore parses docs, skipping any that are not a YAML mapping. Documents
-// that fail to parse are reported by count so a build can surface them without
-// failing over one bad file.
-func NewStore(docs []db.OpenAPIDoc) (*Store, int) {
+// NewStore parses docs, skipping any that are not a YAML mapping. A bad file
+// is returned as an error naming it rather than failing the whole build, so
+// one unparsable document costs its own chunks and nothing else.
+func NewStore(docs []db.OpenAPIDoc) (*Store, []error) {
 	s := &Store{byFile: make(map[string]*Doc, len(docs))}
-	skipped := 0
+	var errs []error
 	for _, d := range docs {
 		var root map[string]any
-		if err := yaml.Unmarshal([]byte(d.Content), &root); err != nil || root == nil {
-			skipped++
+		if err := yaml.Unmarshal([]byte(d.Content), &root); err != nil {
+			errs = append(errs, fmt.Errorf("parse %s (%s %s): %w", d.Filename, d.SpecID, d.APIName, err))
+			continue
+		}
+		if root == nil {
+			errs = append(errs, fmt.Errorf("parse %s (%s %s): not a YAML mapping", d.Filename, d.SpecID, d.APIName))
 			continue
 		}
 		doc := &Doc{SpecID: d.SpecID, APIName: d.APIName, Filename: d.Filename, Root: root}
@@ -61,7 +66,7 @@ func NewStore(docs []db.OpenAPIDoc) (*Store, int) {
 			s.byFile[d.Filename] = doc
 		}
 	}
-	return s, skipped
+	return s, errs
 }
 
 // Schemas returns doc's components.schemas mapping, or nil.

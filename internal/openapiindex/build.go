@@ -3,6 +3,7 @@ package openapiindex
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/higebu/3gpp-mcp/db"
@@ -90,14 +91,19 @@ func Build(ctx context.Context, d *db.DB) (Stats, error) {
 		return Stats{}, fmt.Errorf("read openapi documents: %w", err)
 	}
 
-	store, unparsable := NewStore(docs)
+	store, parseErrs := NewStore(docs)
+	// Named one by one: a document missing from search is only actionable if
+	// the operator can see which one it was and why.
+	for _, err := range parseErrs {
+		log.Printf("warning: openapi index: %v", err)
+	}
 	chunks := Chunks(store)
 
 	if err := d.ReplaceOpenAPIChunks(chunks); err != nil {
 		return Stats{}, fmt.Errorf("write openapi index: %w", err)
 	}
 
-	stats := Stats{Documents: len(store.Docs), Unparsable: unparsable, Chunks: len(chunks)}
+	stats := Stats{Documents: len(store.Docs), Unparsable: len(parseErrs), Chunks: len(chunks)}
 	for _, c := range chunks {
 		if c.Kind == db.OpenAPIKindSchema {
 			stats.Schemas++
