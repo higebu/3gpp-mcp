@@ -228,6 +228,9 @@ difference retrieval depth makes.
 
 ## What this does not measure
 
+- The search variant ran on one model. Luna is the one that skipped retrieval
+  most, so it had the most to gain; whether one sentence recovers as much on a
+  model that already searches on 60% of questions is untested.
 - One prompt format. TeleQnA is multiple choice; the specification-grounded
   tasks are short-answer with a required citation. Neither is a working
   engineer's question.
