@@ -405,10 +405,10 @@ func runConvert(ctx context.Context, dbPath, docxPath string, convertImage bool)
 	// ConvertSingleFile's errors already name the stage and the file
 	// ("parse %s: ..."), and cmdConvert prefixes "Convert failed:" — wrapping
 	// here again would only repeat that context.
+	// No OpenAPI rebuild here: the YAML files live in the archive zip, not in
+	// a .docx, so importing documents never changes openapi_specs and a
+	// rebuild could only rewrite every chunk to what it already was.
 	if err := pipeline.ConvertSingleFile(ctx, d, docxPath, convertImage); err != nil {
-		return err
-	}
-	if err := rebuildOpenAPIIndex(ctx, d); err != nil {
 		return err
 	}
 	fmt.Printf("Written to %s\n", dbPath)
@@ -457,10 +457,12 @@ func runConvertDir(ctx context.Context, dbPath, dirPath string, workers int, con
 
 	// ConvertDir's errors do not all carry the directory (e.g. "all N files
 	// failed to parse"), so name it here.
+	// As in runConvert, a .docx import cannot change openapi_specs, so there
+	// is nothing for an OpenAPI rebuild to do.
 	if err := pipeline.ConvertDir(ctx, d, dirPath, workers, convertDoc, convertImage); err != nil {
 		return fmt.Errorf("import %s: %w", dirPath, err)
 	}
-	return rebuildOpenAPIIndex(ctx, d)
+	return nil
 }
 
 // exit is swapped in tests to cover fatal error paths without terminating
@@ -660,17 +662,15 @@ func runPipeline(ctx context.Context, dbPath string, client *http.Client, specs 
 }
 
 // rebuildOpenAPIIndex refreshes the search_openapi index and reports what it
-// wrote. Every command that imports into a database ends with this: an
-// OpenAPI $ref usually points into another document, so a chunk cannot be
-// rendered until the whole table is in place, and importing one document can
-// change the chunks of documents imported long before it.
+// wrote. Every command that writes openapi_specs ends with this: an OpenAPI
+// $ref usually points into another document, so a chunk cannot be rendered
+// until the whole table is in place, and importing one document can change the
+// chunks of documents imported long before it. Build names each unparsable
+// document as it goes.
 func rebuildOpenAPIIndex(ctx context.Context, d *db.DB) error {
 	stats, err := openapiindex.Build(ctx, d)
 	if err != nil {
 		return fmt.Errorf("build openapi index: %w", err)
-	}
-	if stats.Unparsable > 0 {
-		log.Printf("warning: %d OpenAPI documents could not be parsed and are not searchable", stats.Unparsable)
 	}
 	fmt.Printf("OpenAPI index: %s\n", stats)
 	return nil
@@ -1056,10 +1056,14 @@ func cmdUpdate(args []string) {
 	// The working copy carries the old index, and a removed or re-imported
 	// spec can invalidate chunks anywhere in it, so rebuild before the copy
 	// becomes the live database.
+	//
+	// A failure here is not worth throwing the update away over: the chunks
+	// are derived data, ReplaceOpenAPIChunks is transactional so the previous
+	// index survives intact, and build-openapi-index regenerates it in
+	// seconds. Discarding the working copy would instead cost the whole spec
+	// import that just ran, which takes hours to redo.
 	if err := rebuildOpenAPIIndex(ctx, d); err != nil {
-		_ = d.Close()
-		discardWorkingCopy(newPath)
-		log.Fatalf("Update failed: %v", err)
+		log.Printf("warning: %v; the database keeps its previous OpenAPI index — run '3gpp-mcp build-openapi-index --db %s' to refresh it", err, *dbPath)
 	}
 
 	// Checkpoint WAL into the main file so the renamed DB is self-contained.
