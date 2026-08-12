@@ -407,19 +407,39 @@ func LoadSpecList(path string) ([]string, error) {
 	return entries, scanner.Err()
 }
 
+// SpecFilter selects which archive entries a build or download processes.
+// The zero value selects everything.
+type SpecFilter struct {
+	// Release keeps only that release; 0 keeps every release.
+	Release int
+	// MaxRelease keeps releases at or below it; 0 leaves the selection
+	// uncapped. Unlike Release it does not drop a spec that has no version in
+	// the named release — combined with LatestOnly the spec falls back to its
+	// newest version below the cap.
+	MaxRelease int
+	Series     []string
+	SpecID     string
+	// LatestOnly keeps a single version per spec: the newest one that passed
+	// the filters above.
+	LatestOnly bool
+}
+
 // FilterSpecs filters specs by release/series/spec_id and optionally keeps only the latest version.
-func FilterSpecs(specs []*SpecVersion, release int, series []string, specID string, latestOnly bool) []*SpecVersion {
+func FilterSpecs(specs []*SpecVersion, f SpecFilter) []*SpecVersion {
 	var filtered []*SpecVersion
 
 	for _, s := range specs {
-		if release > 0 && s.Release != release {
+		if f.Release > 0 && s.Release != f.Release {
 			continue
 		}
-		if len(series) > 0 && !contains(series, s.Series) {
+		if f.MaxRelease > 0 && s.Release > f.MaxRelease {
 			continue
 		}
-		if specID != "" {
-			normalized := strings.ReplaceAll(specID, ".", "")
+		if len(f.Series) > 0 && !contains(f.Series, s.Series) {
+			continue
+		}
+		if f.SpecID != "" {
+			normalized := strings.ReplaceAll(f.SpecID, ".", "")
 			if strings.ReplaceAll(s.SpecID, ".", "") != normalized {
 				continue
 			}
@@ -427,7 +447,7 @@ func FilterSpecs(specs []*SpecVersion, release int, series []string, specID stri
 		filtered = append(filtered, s)
 	}
 
-	if latestOnly {
+	if f.LatestOnly {
 		best := make(map[string]*SpecVersion)
 		for _, s := range filtered {
 			key := s.SpecID

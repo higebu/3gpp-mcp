@@ -1814,6 +1814,78 @@ func TestUpsertSpec_Replaces(t *testing.T) {
 	}
 }
 
+// TestDeleteSpec verifies a removed spec takes its sections, search index
+// entries, OpenAPI definitions and outgoing references with it, while
+// references that merely target it stay with the spec that made them.
+func TestDeleteSpec(t *testing.T) {
+	d := setupTestDB(t)
+
+	// Seed data has TS 24.229 referencing TS 33.203, so deleting the target
+	// must not touch the referencing spec's rows.
+	if err := d.DeleteSpec("TS 29.510"); err != nil {
+		t.Fatalf("DeleteSpec: %v", err)
+	}
+
+	result, err := d.ListSpecs(t.Context(), "", "", -1, 0)
+	if err != nil {
+		t.Fatalf("ListSpecs: %v", err)
+	}
+	for _, s := range result.Specs {
+		if s.ID == "TS 29.510" {
+			t.Errorf("TS 29.510 still listed after delete")
+		}
+	}
+
+	sections, err := d.AllSections(t.Context(), "TS 29.510", "18.5.0")
+	if err != nil {
+		t.Fatalf("AllSections: %v", err)
+	}
+	if len(sections) != 0 {
+		t.Errorf("sections after delete = %d, want 0", len(sections))
+	}
+
+	// The FTS index is external-content, so it only stays in step through the
+	// sections triggers.
+	hits, err := d.Search(t.Context(), "NRF services", nil, 10, 0)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	for _, r := range hits.Results {
+		if r.SpecID == "TS 29.510" {
+			t.Errorf("deleted spec still in the search index: %+v", r)
+		}
+	}
+
+	apis, err := d.ListOpenAPI(t.Context(), "TS 29.510")
+	if err != nil {
+		t.Fatalf("ListOpenAPI: %v", err)
+	}
+	if len(apis) != 0 {
+		t.Errorf("openapi definitions after delete = %d, want 0", len(apis))
+	}
+
+	// TS 24.229's outgoing references survive: it was not the spec deleted.
+	refs, err := d.GetReferences(t.Context(), "TS 24.229", "18.4.0", "5.1", "outgoing", false)
+	if err != nil {
+		t.Fatalf("GetReferences: %v", err)
+	}
+	if len(refs) == 0 {
+		t.Error("deleting one spec dropped another spec's references")
+	}
+
+	// ...and go when that spec is the one deleted.
+	if err := d.DeleteSpec("TS 24.229"); err != nil {
+		t.Fatalf("DeleteSpec: %v", err)
+	}
+	refs, err = d.GetReferences(t.Context(), "TS 24.229", "18.4.0", "5.1", "outgoing", false)
+	if err != nil {
+		t.Fatalf("GetReferences: %v", err)
+	}
+	if len(refs) != 0 {
+		t.Errorf("outgoing references after delete = %d, want 0", len(refs))
+	}
+}
+
 // TestUpsertSection_ReplacesContent verifies UpsertSection deletes and
 // re-inserts a section, and that the FTS index is updated accordingly.
 func TestUpsertSection_ReplacesContent(t *testing.T) {

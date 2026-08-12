@@ -9,6 +9,14 @@ BIN_DIR ?= bin
 # number (e.g. RELEASE=19) to restrict to a single release.
 RELEASE ?= latest
 release_flag = $(if $(filter latest,$(RELEASE)),--latest,--release $(RELEASE))
+# MAX_RELEASE caps the newest release used: every spec is taken at its newest
+# version at or below it, so a spec without a version in that release is kept
+# at an older one instead of dropping out, which is what RELEASE=<n> does. Use
+# it with the default RELEASE=latest — combining it with RELEASE=<n> is an
+# error. Pass the same MAX_RELEASE to update-specs, or the update lifts the
+# database to the newest release on the archive.
+MAX_RELEASE ?=
+max_release_flag = $(if $(MAX_RELEASE),--max-release $(MAX_RELEASE))
 
 # Build the MCP server
 build:
@@ -29,23 +37,25 @@ import-dir: build
 	./$(BIN_DIR)/3gpp-mcp import-dir --db $(DB_PATH) $(SPECS_DIR)
 
 # Download + import in one step (recommended). Builds the latest version of
-# every spec by default; pass RELEASE=19 to restrict to a single release.
+# every spec by default; pass RELEASE=19 to restrict to a single release, or
+# MAX_RELEASE=19 to cap the newest release without dropping specs.
 build-db: build
-	./$(BIN_DIR)/3gpp-mcp build $(release_flag) --db $(DB_PATH) --convert-doc
+	./$(BIN_DIR)/3gpp-mcp build $(release_flag) $(max_release_flag) --db $(DB_PATH) --convert-doc
 
 # Download specs (no database import; legacy .doc files are converted to
 # .docx). Latest of every spec by default; pass RELEASE=19 to restrict to a
-# single release.
+# single release, or MAX_RELEASE=19 to cap the newest release.
 download-specs: build
-	./$(BIN_DIR)/3gpp-mcp download $(release_flag) --output-dir $(SPECS_DIR) --convert-doc
+	./$(BIN_DIR)/3gpp-mcp download $(release_flag) $(max_release_flag) --output-dir $(SPECS_DIR) --convert-doc
 
 # Download the single latest version of each spec across all releases
 download-latest-specs: build
-	./$(BIN_DIR)/3gpp-mcp download --latest --output-dir $(SPECS_DIR) --convert-doc
+	./$(BIN_DIR)/3gpp-mcp download --latest $(max_release_flag) --output-dir $(SPECS_DIR) --convert-doc
 
-# Update specs in DB to latest versions
+# Update specs in DB to latest versions. Pass the same MAX_RELEASE the database
+# was built with to keep the cap.
 update-specs: build
-	./$(BIN_DIR)/3gpp-mcp update --db $(DB_PATH) --convert-doc
+	./$(BIN_DIR)/3gpp-mcp update $(max_release_flag) --db $(DB_PATH) --convert-doc
 
 # Show database info
 db-info:

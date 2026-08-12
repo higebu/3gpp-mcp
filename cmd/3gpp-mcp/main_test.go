@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"syscall"
@@ -278,9 +279,7 @@ func TestResolveSpecs_FromSpecList(t *testing.T) {
 			context.Background(),
 			&http.Client{},
 			listPath,
-			"",    // specFlag
-			"",    // seriesFlag
-			0,     // release
+			pipeline.SpecFilter{},
 			false, // useCache
 			0,     // scrapeConcurrency
 		)
@@ -319,12 +318,10 @@ func TestResolveSpecs_FetchBySpecFlag(t *testing.T) {
 		specs := resolveSpecs(
 			context.Background(),
 			client,
-			"",       // specList
-			"23.501", // specFlag
-			"",       // seriesFlag
-			0,        // release
-			false,    // useCache
-			0,        // scrapeConcurrency
+			"", // specList
+			pipeline.SpecFilter{SpecID: "23.501"},
+			false, // useCache
+			0,     // scrapeConcurrency
 		)
 		if len(specs) != 1 {
 			t.Fatalf("expected 1 spec, got %d", len(specs))
@@ -338,23 +335,36 @@ func TestResolveSpecs_FetchBySpecFlag(t *testing.T) {
 	}
 }
 
-// TestRequireSelector covers the selector guard shared by cmdDownload and
-// cmdPipeline, including --series as a valid sole selector and the exit path
-// taken when no selector is given.
-func TestRequireSelector(t *testing.T) {
+// TestSpecFilterFromFlags covers the selector guard shared by cmdDownload and
+// cmdPipeline, including --series as a valid sole selector, the exit path taken
+// when no selector is given, and the release flags that contradict each other.
+func TestSpecFilterFromFlags(t *testing.T) {
 	tests := []struct {
-		name     string
-		release  int
-		latest   bool
-		spec     string
-		series   string
-		wantExit bool
+		name       string
+		release    int
+		maxRelease int
+		latest     bool
+		spec       string
+		series     string
+		wantExit   bool
+		wantErr    string
+		wantFilter pipeline.SpecFilter
 	}{
-		{"none", 0, false, "", "", true},
-		{"release", 19, false, "", "", false},
-		{"latest", 0, true, "", "", false},
-		{"spec", 0, false, "23.501", "", false},
-		{"series alone", 0, false, "", "23,29", false},
+		{name: "none", wantExit: true, wantErr: "Specify --release, --max-release, --latest, --series, or --spec"},
+		{name: "release", release: 19, wantFilter: pipeline.SpecFilter{Release: 19}},
+		{name: "max release", maxRelease: 19, wantFilter: pipeline.SpecFilter{MaxRelease: 19}},
+		{name: "latest", latest: true},
+		{name: "latest with max release", latest: true, maxRelease: 19, wantFilter: pipeline.SpecFilter{MaxRelease: 19}},
+		{name: "spec", spec: "23.501", wantFilter: pipeline.SpecFilter{SpecID: "23.501"}},
+		{name: "series alone", series: "23,29", wantFilter: pipeline.SpecFilter{Series: []string{"23", "29"}}},
+		{
+			name: "release and max release", release: 19, maxRelease: 18,
+			wantExit: true, wantErr: "Specify only one of --release and --max-release",
+		},
+		{
+			name: "negative max release", maxRelease: -1,
+			wantExit: true, wantErr: "--release and --max-release must not be negative",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -363,19 +373,25 @@ func TestRequireSelector(t *testing.T) {
 			exit = func(code int) { exitCode = code }
 			t.Cleanup(func() { exit = orig })
 
+			var got pipeline.SpecFilter
 			stderr := captureStderr(t, func() {
-				requireSelector(tt.release, tt.latest, tt.spec, tt.series)
+				got = specFilterFromFlags(tt.release, tt.maxRelease, tt.latest, tt.spec, tt.series)
 			})
 
 			if tt.wantExit {
 				if exitCode != 1 {
 					t.Errorf("exit code = %d, want 1", exitCode)
 				}
-				if !strings.Contains(stderr, "Specify --release, --latest, --series, or --spec") {
-					t.Errorf("stderr = %q, want selector message", stderr)
+				if !strings.Contains(stderr, tt.wantErr) {
+					t.Errorf("stderr = %q, want %q", stderr, tt.wantErr)
 				}
-			} else if exitCode != -1 {
+				return
+			}
+			if exitCode != -1 {
 				t.Errorf("exit(%d) called, want no exit", exitCode)
+			}
+			if !reflect.DeepEqual(got, tt.wantFilter) {
+				t.Errorf("filter = %+v, want %+v", got, tt.wantFilter)
 			}
 		})
 	}
@@ -704,10 +720,8 @@ func TestResolveSpecs_FetchAllSeries(t *testing.T) {
 		specs := resolveSpecs(
 			context.Background(),
 			client,
-			"",    // specList
-			"",    // specFlag
-			"23",  // seriesFlag
-			0,     // release
+			"", // specList
+			pipeline.SpecFilter{Series: []string{"23"}},
 			false, // useCache
 			0,     // scrapeConcurrency
 		)
@@ -761,6 +775,105 @@ func TestCmdUpdate_AllUpToDate(t *testing.T) {
 	}
 }
 
+// TestCmdUpdate_MaxReleaseMovesDown covers applying a cap to a database built
+// without one: the target version is older than the stored version, so an
+// update that only ever moves forward would report nothing to do and silently
+// leave the database above the cap.
+func TestCmdUpdate_MaxReleaseMovesDown(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "update.db")
+	seedUpdatableDB(t, dbPath) // 23.501 at v20.1.0
+
+	ts := specArchive(t, "23501-j60.zip")
+	origClient := newHTTPClient
+	newHTTPClient = func(timeout time.Duration) *http.Client {
+		return &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+	}
+	t.Cleanup(func() { newHTTPClient = origClient })
+
+	out := captureStdout(t, func() {
+		cmdUpdate([]string{"-db", dbPath, "-max-release", "19", "-no-cache", "-workers", "1", "-timeout", "5s"})
+	})
+	if !strings.Contains(out, "23.501: 20.1.0 -> 19.6.0") {
+		t.Errorf("output = %q, want 23.501 moved down to the capped version", out)
+	}
+
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	result, err := d.ListSpecs(context.Background(), "", "", -1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Specs) != 1 || result.Specs[0].Version != "19.6.0" {
+		t.Errorf("specs after update = %+v, want a single spec at 19.6.0", result.Specs)
+	}
+}
+
+// TestCmdUpdate_MaxReleaseRemovesAboveCap covers a spec the cap excludes
+// outright: the archive has no version at or below it, so leaving the stored
+// rows would keep the database above --max-release no matter how often it is
+// updated. A spec missing from the listing altogether must survive, since that
+// is indistinguishable from a listing that failed to fetch.
+func TestCmdUpdate_MaxReleaseRemovesAboveCap(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "update.db")
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := d.InitSchema(); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	// Introduced in Rel-20, so nothing at or below the cap exists.
+	if err := d.InsertSpecWithSections(db.Spec{
+		ID: "TS 23.999", Title: "Brand new", Version: "20.0.0", VersionToken: "k00", Release: "20", Series: "23",
+	}, []db.Section{
+		{SpecID: "TS 23.999", Version: "20.0.0", Number: "1", Title: "Scope", Level: 1, Content: "# 1 Scope\nBrand new spec."},
+	}); err != nil {
+		t.Fatalf("insert spec: %v", err)
+	}
+	// Absent from the spec list below, so the cap must leave it alone.
+	if err := d.UpsertSpec(db.Spec{
+		ID: "TS 34.108", Title: "Common test environments", Version: "18.4.0", VersionToken: "i40", Release: "18", Series: "34",
+	}); err != nil {
+		t.Fatalf("upsert spec: %v", err)
+	}
+	d.Close()
+
+	listPath := filepath.Join(t.TempDir(), "list.txt")
+	if err := os.WriteFile(listPath, []byte("23_series/23.999/23999-k00.zip\n"), 0o644); err != nil {
+		t.Fatalf("write list: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		cmdUpdate([]string{"-db", dbPath, "-max-release", "19", "-spec-list", listPath, "-no-cache"})
+	})
+	if !strings.Contains(out, "TS 23.999: 20.0.0 -> removed") {
+		t.Errorf("output = %q, want TS 23.999 reported as removed", out)
+	}
+
+	d, err = db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	result, err := d.ListSpecs(context.Background(), "", "", -1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Specs) != 1 || result.Specs[0].ID != "TS 34.108" {
+		t.Fatalf("specs after update = %+v, want only TS 34.108", result.Specs)
+	}
+	sections, err := d.AllSections(context.Background(), "TS 23.999", "20.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sections) != 0 {
+		t.Errorf("sections of the removed spec survived: %d", len(sections))
+	}
+}
+
 // partialArchive serves a mock archive where 23.501 lists one zip and 23.502
 // fails, so a full scrape assembles a partial spec list.
 func partialArchive(t *testing.T, healthyZip string) *httptest.Server {
@@ -811,7 +924,7 @@ func TestResolveSpecs_PartialSpecListAborts(t *testing.T) {
 
 	logged := captureLog(t, func() {
 		_ = captureStdout(t, func() {
-			specs := resolveSpecs(context.Background(), client, "", "", "23", 0, false, 0)
+			specs := resolveSpecs(context.Background(), client, "", pipeline.SpecFilter{Series: []string{"23"}}, false, 0)
 			if specs != nil {
 				t.Errorf("expected nil specs after an abort, got %d", len(specs))
 			}
