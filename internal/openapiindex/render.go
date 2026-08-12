@@ -6,8 +6,10 @@ import (
 )
 
 // httpMethods are the operation keys read out of a path item, in the order
-// their chunks are emitted.
-var httpMethods = []string{"get", "put", "post", "patch", "delete"}
+// their chunks are emitted. It is the full OpenAPI set rather than the four
+// verbs the SBI APIs mostly use, so a rarer one (TS 29.510 defines an OPTIONS
+// operation) still gets a chunk.
+var httpMethods = []string{"get", "put", "post", "patch", "delete", "head", "options", "trace"}
 
 // Operation is one method of one path.
 type Operation struct {
@@ -77,9 +79,28 @@ func (s *Store) RequestSchema(doc *Doc, op map[string]any) (*Doc, string, map[st
 func (s *Store) RenderSchema(doc *Doc, name string, schema map[string]any, depth int) string {
 	out := []string{name + ":"}
 
+	// A schema that is nothing but a $ref is an alias for another type. Without
+	// this the chunk would be its own name and nothing else.
+	if ref, _ := schema["$ref"].(string); ref != "" {
+		out = append(out, "  $ref: "+ref)
+		if target, tName, tSchema, ok := s.expand(doc, ref, depth); ok {
+			out = append(out, "  # expanded:")
+			out = append(out, indent(s.RenderSchema(target, tName, tSchema, depth+1), "  ")...)
+		}
+	}
+
 	for _, key := range []string{"type", "description"} {
 		if v, ok := schema[key].(string); ok {
 			out = append(out, "  "+key+": "+v)
+		}
+	}
+
+	// enum and required are lists of leaves, and they are the text a question
+	// often quotes — a status value like REGISTERED, or the field a request is
+	// rejected for missing.
+	for _, key := range []string{"enum", "required"} {
+		if line, ok := scalarLine("  "+key, schema[key]); ok {
+			out = append(out, line)
 		}
 	}
 
@@ -105,8 +126,8 @@ func (s *Store) RenderSchema(doc *Doc, name string, schema map[string]any, depth
 				continue
 			}
 			for _, k := range sortedKeys(m) {
-				if v, ok := scalar(m[k]); ok {
-					out = append(out, "    - "+k+": "+v)
+				if line, ok := scalarLine("    - "+k, m[k]); ok {
+					out = append(out, line)
 				}
 			}
 			if props, ok := m["properties"].(map[string]any); ok {
@@ -133,14 +154,44 @@ func (s *Store) RenderSchema(doc *Doc, name string, schema map[string]any, depth
 				}
 			}
 			for _, k := range sortedKeys(v) {
-				if sv, ok := scalar(v[k]); ok {
-					out = append(out, "      "+k+": "+sv)
+				if line, ok := scalarLine("      "+k, v[k]); ok {
+					out = append(out, line)
 				}
 			}
+			out = append(out, s.renderContainerRefs(doc, v, depth)...)
 		}
 	}
 
 	return strings.Join(out, "\n")
+}
+
+// containerKeys are the wrappers a property puts between itself and the type it
+// actually holds.
+var containerKeys = []string{"items", "additionalProperties"}
+
+// renderContainerRefs renders the $ref a property holds through a container.
+// The 5G SBI definitions state most of their relationships this way — a list is
+// `items: {$ref: NFService}` and a map is `additionalProperties: {$ref:
+// AmfInfo}` — so reading only a property's direct $ref drops the majority of
+// them, and with them every occurrence of the referenced type's name.
+func (s *Store) renderContainerRefs(doc *Doc, prop map[string]any, depth int) []string {
+	var out []string
+	for _, key := range containerKeys {
+		inner, _ := prop[key].(map[string]any)
+		if inner == nil {
+			continue
+		}
+		ref, _ := inner["$ref"].(string)
+		if ref == "" {
+			continue
+		}
+		out = append(out, "      "+key+":", "        $ref: "+ref)
+		if target, tName, tSchema, ok := s.expand(doc, ref, depth); ok {
+			out = append(out, "        # expanded:")
+			out = append(out, indent(s.RenderSchema(target, tName, tSchema, depth+1), "        ")...)
+		}
+	}
+	return out
 }
 
 // expand resolves ref only at the top level of a chunk, which is what keeps
@@ -164,6 +215,29 @@ func scalar(v any) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// scalarLine renders "key: value" for a leaf, or for a list of leaves as a
+// comma-separated run. key carries its own indentation.
+func scalarLine(key string, v any) (string, bool) {
+	if s, ok := scalar(v); ok {
+		return key + ": " + s, true
+	}
+	items, ok := v.([]any)
+	if !ok || len(items) == 0 {
+		return "", false
+	}
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		s, ok := scalar(item)
+		if !ok {
+			// A list of mappings is structure, not text; it belongs to a
+			// deeper level than this rendering goes.
+			return "", false
+		}
+		parts = append(parts, s)
+	}
+	return key + ": " + strings.Join(parts, ", "), true
 }
 
 // indent prefixes every line of text.

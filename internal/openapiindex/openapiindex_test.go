@@ -29,11 +29,16 @@ paths:
               $ref: '#/components/schemas/NFProfile'
     get:
       summary: Read NF Instance
+    options:
+      summary: Discover communication options
 components:
   schemas:
     NFProfile:
       type: object
       description: Information of an NF Instance
+      required:
+        - nfInstanceId
+        - nfType
       properties:
         nfInstanceId:
           type: string
@@ -41,6 +46,16 @@ components:
           $ref: 'TS29571_CommonData.yaml#/components/schemas/NFType'
         offRef:
           $ref: 'TS29999_Missing.yaml#/components/schemas/Nowhere'
+        nfServices:
+          type: array
+          items:
+            $ref: 'TS29571_CommonData.yaml#/components/schemas/NFService'
+        plmnIdList:
+          type: object
+          additionalProperties:
+            $ref: 'TS29571_CommonData.yaml#/components/schemas/PlmnId'
+    SupportedFeatures:
+      $ref: 'TS29571_CommonData.yaml#/components/schemas/NFType'
 `,
 	},
 	{
@@ -51,6 +66,15 @@ components:
     NFType:
       type: string
       description: NF types known to the NRF
+      enum:
+        - NRF
+        - AMF
+        - SMF
+    NFService:
+      type: object
+      properties:
+        serviceInstanceId:
+          type: string
     PlmnId:
       type: object
       allOf:
@@ -74,9 +98,9 @@ func chunkByName(t *testing.T, chunks []db.OpenAPIChunk, kind, name string) db.O
 }
 
 func TestChunks(t *testing.T) {
-	store, unparsable := NewStore(crossFileDocs)
-	if unparsable != 0 {
-		t.Fatalf("unparsable = %d, want 0", unparsable)
+	store, parseErrs := NewStore(crossFileDocs)
+	if len(parseErrs) != 0 {
+		t.Fatalf("parse errors = %v, want none", parseErrs)
 	}
 	chunks := Chunks(store)
 
@@ -86,8 +110,11 @@ func TestChunks(t *testing.T) {
 	}
 	want := []string{
 		"schema NFProfile",
+		"schema SupportedFeatures",
 		"operation GET /nf-instances/{nfInstanceID}",
 		"operation PUT /nf-instances/{nfInstanceID}",
+		"operation OPTIONS /nf-instances/{nfInstanceID}",
+		"schema NFService",
 		"schema NFType",
 		"schema PlmnId",
 	}
@@ -128,6 +155,68 @@ func TestChunksExpandsOneLevel(t *testing.T) {
 	if strings.Count(plmn, "# expanded:") != 1 {
 		t.Errorf("PlmnId expanded more than one level:\n%s", plmn)
 	}
+}
+
+// TestChunksExpandsContainerRefs covers the shape most 5G SBI relationships
+// actually take: the type is behind items or additionalProperties, not behind
+// the property's own $ref.
+func TestChunksExpandsContainerRefs(t *testing.T) {
+	store, _ := NewStore(crossFileDocs)
+	body := chunkByName(t, Chunks(store), db.OpenAPIKindSchema, "NFProfile").Body
+
+	for _, want := range []string{
+		// items: the referenced type is named and its fields are expanded, so
+		// NFProfile is reachable from a search for NFService.
+		"items:", "NFService", "serviceInstanceId",
+		// additionalProperties: the map's value type, likewise.
+		"additionalProperties:", "PlmnId", "mcc",
+		// The property's own scalars survive alongside the container ref.
+		"type: array",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("NFProfile body missing %q:\n%s", want, body)
+		}
+	}
+}
+
+// TestChunksIndexesScalarLists covers enum and required, which are the text a
+// question quotes most directly.
+func TestChunksIndexesScalarLists(t *testing.T) {
+	chunks := Chunks(mustStore(t))
+
+	nfType := chunkByName(t, chunks, db.OpenAPIKindSchema, "NFType").Body
+	if !strings.Contains(nfType, "enum: NRF, AMF, SMF") {
+		t.Errorf("NFType body missing its enum:\n%s", nfType)
+	}
+	nfProfile := chunkByName(t, chunks, db.OpenAPIKindSchema, "NFProfile").Body
+	if !strings.Contains(nfProfile, "required: nfInstanceId, nfType") {
+		t.Errorf("NFProfile body missing its required list:\n%s", nfProfile)
+	}
+	// A list of mappings is structure, not text, and stays out.
+	if strings.Contains(nfProfile, "allOf: map[") {
+		t.Errorf("a composite list leaked into the body:\n%s", nfProfile)
+	}
+}
+
+// TestChunksRendersAliasSchema covers a schema that is nothing but a $ref,
+// which would otherwise index as its own name and no content at all.
+func TestChunksRendersAliasSchema(t *testing.T) {
+	body := chunkByName(t, Chunks(mustStore(t)), db.OpenAPIKindSchema, "SupportedFeatures").Body
+
+	for _, want := range []string{"$ref: TS29571_CommonData.yaml", "# expanded:", "NF types known to the NRF"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("SupportedFeatures body missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func mustStore(t *testing.T) *Store {
+	t.Helper()
+	store, parseErrs := NewStore(crossFileDocs)
+	if len(parseErrs) != 0 {
+		t.Fatalf("parse errors = %v, want none", parseErrs)
+	}
+	return store
 }
 
 func TestChunksOperationBody(t *testing.T) {
@@ -173,9 +262,13 @@ func TestNewStoreSkipsUnparsable(t *testing.T) {
 		Content: "\topenapi: [unclosed\n",
 	}}, crossFileDocs...)
 
-	store, unparsable := NewStore(docs)
-	if unparsable != 1 {
-		t.Errorf("unparsable = %d, want 1", unparsable)
+	store, parseErrs := NewStore(docs)
+	if len(parseErrs) != 1 {
+		t.Fatalf("parse errors = %v, want 1", parseErrs)
+	}
+	// The error has to name the file, or an operator cannot act on it.
+	if !strings.Contains(parseErrs[0].Error(), "broken.yaml") {
+		t.Errorf("error does not name the document: %v", parseErrs[0])
 	}
 	if len(store.Docs) != len(crossFileDocs) {
 		t.Errorf("kept %d documents, want %d", len(store.Docs), len(crossFileDocs))
