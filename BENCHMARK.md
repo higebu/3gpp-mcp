@@ -90,10 +90,35 @@ resolves too:
 The same BM25 index over the same database performs the same whether it
 arrives as a tool result or as a prepended block. The whole apparent deficit is
 in the questions answered from memory — 86% of Luna's −3.7pt — where fixed-k
-retrieved and the agent did not. Those are questions the models were fairly
-confident about, and mostly right about (83-88% without any retrieval), but
-retrieval would still have gained 3-5 points: the decision to skip it is
-better than chance and worse than always searching.
+retrieved and the agent did not.
+
+### Asking for retrieval closes it
+
+A prompt variant adds one sentence to the shared prompt — do not answer from
+memory, search first — and names no source and no search terms, so it can only
+remove the model's discretion over whether to look. On Luna, the model that
+skipped most often:
+
+| Run | Accuracy | Never searched |
+|---|---|---|
+| baseline prompt, no tools | 73.2% | 100% |
+| baseline prompt, 3gpp-mcp | 79.1% | 60.6% |
+| **search prompt, no tools** | 71.8% | 100% |
+| **search prompt, 3gpp-mcp** | **83.8%** | **0.0%** |
+
+Retrieval goes from skipped on 60.6% of questions to none, and the tools
+condition gains **+12.0pt** over its own baseline (249/68, p<10⁻²³) instead of
++5.9pt. The sentence itself is worth nothing — with no tools to call it moves
+the model −1.5pt (p=0.086) — so the gain is the retrieval, not the wording.
+
+That lands the agentic condition on 83.8% against fixed-k's 82.8%: a difference
+of +0.9pt with a 95% interval of [−1.0, +2.9]. Reaching the same index by
+tool call is worth what reaching it through a pipeline is worth, to within
+three points on 1,509 questions — which is what should happen, since it is the
+same index, the same sections and the same BM25. The fixed-k pipeline is one
+query; 3gpp-mcp is that query plus the ability to keep going, and TeleQnA is a
+question set where one query is usually enough. The next section is where the
+rest of it is worth something.
 
 Two cautions on these subsets. They are chosen by the model, not sampled: it
 searches when unsure, so the searched subset starts 8-24 points lower and
@@ -149,16 +174,14 @@ difference retrieval depth makes.
 
 ## Takeaways
 
-- **A tool that is not called measures nothing.** Sonnet skipped searching on
-  40% of TeleQnA questions and Luna on 60%, and on those the tools condition
-  scored the same as no tools at all (+0.1pt, +0.4pt). Where the tool was used,
-  the gain is +12.0 to +15.7pt on all three models — the headline spread of
-  +6.5 to +12.0pt is dilution. **Make retrieval unconditional**, in the prompt
-  or in how the tools are offered: the models skip it on questions where it
-  would still have been worth 3-5 points.
-- **Search through a tool is worth what the same search is worth in a
-  pipeline.** On the questions where the model searched, the agentic condition
-  matched or beat a fixed-k pipeline over the same index on all three models.
+- **Ask for retrieval and you get the whole effect.** Sonnet skipped searching
+  on 40% of TeleQnA questions and Luna on 60%, and a question where nothing was
+  retrieved measures the model, not the server. One sentence in the prompt
+  takes Luna's skip rate to zero and its gain from +5.9 to +12.0pt.
+- **Reaching the index by tool call is worth what reaching it through a
+  pipeline is worth** — the two land within three points of each other on
+  1,509 questions, as they should: same database, same sections, same BM25.
+  A fixed-k pipeline is one query of what 3gpp-mcp can do.
 - **What the tool adds beyond a pipeline is depth, and depth is what the
   documents demand.** A TeleQnA question is usually one hop from the first
   retrieved passage, so one query reaches it. Protocol structure is two or more
@@ -185,7 +208,10 @@ difference retrieval depth makes.
 - Both conditions of every pair send the identical prompt, reproducing
   TeleQnA's own; a test fails the build if they ever diverge. The superseded
   measurement used a different prompt per condition, which inflated the gain to
-  a uniform ≈+11pt across models.
+  a uniform ≈+11pt across models. The search variant is a second registered
+  prompt, appended to that same text and sent to both conditions alike, so the
+  pair it forms is symmetric on its own terms; it is never compared with a run
+  of the other prompt as if the tools were the only difference.
 - Same 1,509-question set for every run; questions whose text lacks `3GPP`
   (IEEE 802.11 etc.) are excluded from the category.
 - Each model on its vendor's own API: `api.deepseek.com` (DeepSeek V4 Flash),
