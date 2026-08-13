@@ -154,9 +154,10 @@ func htmlLink(text, url string) string {
 }
 
 // markerText escapes reference text for use inside an unresolved-reference
-// marker, folding newlines to spaces: the reference regexes can match across
-// a line break (sp includes \s), but the web sanitizer relies on markers
-// never spanning lines, so the invariant is enforced here at generation.
+// marker, folding newlines to spaces: the reference regexes can match across a
+// soft line break inside a block (spPlus allows one), but the web sanitizer
+// relies on markers never spanning lines, so the invariant is enforced here at
+// generation.
 func markerText(text string) string {
 	text = strings.ReplaceAll(text, "\r", " ")
 	text = strings.ReplaceAll(text, "\n", " ")

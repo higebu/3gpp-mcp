@@ -817,11 +817,109 @@ func TestLinkifyRefs_NilURLFor(t *testing.T) {
 	}
 }
 
-// A reference matched across a line break must not produce a multi-line
-// marker: the web sanitizer relies on markers staying on one line.
+// A reference matched across a soft line break inside a paragraph (a w:br in
+// the source document) must not produce a multi-line marker: the web sanitizer
+// relies on markers staying on one line.
 func TestLinkifyRefs_MarkerFoldsNewline(t *testing.T) {
 	input := "See clause\n9.9 for details."
 	want := `See <span class="ref-unresolved" title="Section 9.9 does not exist in this document — possibly a stale or incorrect reference in the source text">clause 9.9</span> for details.`
+	got := LinkifyRefs(input, LinkifyRefsOpts{URLFor: bareURLFor, SectionExists: bareSectionSet})
+	if got != want {
+		t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", input, got, want)
+	}
+}
+
+// Regression test for #191: no reference may span a blank line. Blocks are
+// joined with "\n\n", so a link or marker emitted across one glues the two
+// blocks together — a heading ending in "clause" swallowed the paragraph that
+// followed it, and goldmark rendered both as a single heading.
+func TestLinkifyRefs_NoMatchAcrossBlankLine(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "heading ending in keyword and following paragraph",
+			input: "# 5 Test clause\n\nUpon receipt of the REGISTRATION ACCEPT message, the UE shall:",
+		},
+		{
+			name:  "two body paragraphs",
+			input: "The procedure is defined in clause\n\nAnnex text follows here.",
+		},
+		{
+			name:  "keyword and section number in separate paragraphs",
+			input: "See clause\n\n4.2 is the relevant one.",
+		},
+		{
+			name:  "CRLF blank line",
+			input: "# 5 Test clause\r\n\r\nUpon receipt of the message.",
+		},
+		{
+			name:  "spec designator split across a blank line",
+			input: "As defined in TS\n\n23.501 the procedure applies.",
+		},
+		{
+			name:  "RFC number split across a blank line",
+			input: "See RFC\n\n6733 for details.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LinkifyRefs(tt.input, LinkifyRefsOpts{URLFor: bareURLFor, SectionExists: bareSectionSet})
+			if got != tt.input {
+				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want it unchanged", tt.input, got)
+			}
+		})
+	}
+}
+
+// The optional gap between a spec designator and a trailing clause reference
+// holds one optional comma, and it must not span a blank line either: written
+// as two separator runs it would take a line break on each side of the absent
+// comma. Each block linkifies on its own instead.
+func TestLinkifyRefs_QualifiedSectionGapAcrossBlankLine(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "TS designator and clause in separate blocks",
+			input: "See TS 23.501\n\nclause 5.1 here.",
+			want:  "See [TS 23.501](/specs/TS 23.501)\n\n[clause 5.1](/specs/TS 23.501/sections/5.1) here.",
+		},
+		{
+			name:  "RFC number and section in separate blocks",
+			input: "See RFC 6733\n\nsection 5.1 here.",
+			want:  "See [RFC 6733](https://www.rfc-editor.org/rfc/rfc6733)\n\n[section 5.1](/specs/TS 23.501/sections/5.1) here.",
+		},
+		{
+			name:  "soft break in the gap still links as one reference",
+			input: "See TS 23.501\nclause 5.1 here.",
+			want:  "See [TS 23.501\nclause 5.1](/specs/TS 23.501/sections/5.1) here.",
+		},
+		{
+			name:  "soft break after the comma still links as one reference",
+			input: "See TS 23.501,\nclause 5.1 here.",
+			want:  "See [TS 23.501,\nclause 5.1](/specs/TS 23.501/sections/5.1) here.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LinkifyRefs(tt.input, LinkifyRefsOpts{URLFor: bareURLFor, SectionExists: bareSectionSet})
+			if got != tt.want {
+				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// A blank line between a bare reference and the "of TS ..." that qualifies it
+// leaves the reference same-document: bareTrailingQualRE must not see across
+// the block boundary either.
+func TestLinkifyRefs_QualifierAcrossBlankLineIgnored(t *testing.T) {
+	input := "See clause 4.2\n\nof TS 23.402 for details."
+	want := "See [clause 4.2](/specs/TS 23.501/sections/4.2)\n\nof [TS 23.402](/specs/TS 23.402) for details."
 	got := LinkifyRefs(input, LinkifyRefsOpts{URLFor: bareURLFor, SectionExists: bareSectionSet})
 	if got != want {
 		t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", input, got, want)
