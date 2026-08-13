@@ -1118,8 +1118,12 @@ func cmdUpdate(args []string) {
 		if errors.Is(err, errSidecarsRemain) {
 			log.Fatalf("Database replaced, but %v", err)
 		}
-		discardWorkingCopy(newPath)
-		log.Fatalf("Failed to replace database: %v", err)
+		// The working copy is finalized and self-contained at this point, and
+		// it holds an import that cost hours; the rename is the only step
+		// that failed (e.g. the target is held open on Windows, or a
+		// transient permission error). Keep the copy so the user can rename
+		// it by hand or rerun, matching the finalize-failure branch above.
+		log.Fatalf("Failed to replace database: %v\nThe updated database is left at %s; %s was not replaced.", err, newPath, *dbPath)
 	}
 	fmt.Println("Database updated successfully.")
 }
