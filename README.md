@@ -350,6 +350,27 @@ nesting in any renderer and stay out of the way of full-text search.
 
 ## Tips
 
+### Tell the model to use the tools
+
+Attaching the server does not by itself make a model consult it: given the
+choice, some models answer 3GPP questions from memory. In
+[the benchmark](BENCHMARK.md), Claude Sonnet 5 skipped retrieval on 40% of
+TeleQnA questions and GPT 5.6 Luna on 60%, and on those questions the tools
+were worth nothing. One sentence in the client's system prompt removes that
+discretion. The measured wording:
+
+> Do not answer from memory. Search the specifications first and base your
+> answer on the text you retrieve, even when you are confident you already
+> know the answer.
+
+That sentence took Luna's skip rate to zero and its gain from +5.9 to +12.0
+points, moved nothing on a model that already searched every question, and is
+worth nothing without the tools attached — it forces retrieval rather than
+smuggling in an answer. Stronger house rules in the same spirit — *base every
+answer about 3GPP on clause text retrieved through these tools, and cite the
+clause* — are reasonable, but only the sentence above is what the benchmark
+measured.
+
 ### Separate databases per release
 
 For spot comparisons across releases, `compare_versions` and the `version` parameter need no extra setup. Building a separate database per release still pays off when you work against one release continuously: full-text `search`, `get_references` and OpenAPI definitions only cover the version baked into the database, so a release-specific database gives you all three for that release, with no on-demand downloads.
