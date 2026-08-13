@@ -31,7 +31,11 @@ func HandleGetTOC(src *Source) func(ctx context.Context, req *mcp.CallToolReques
 		}
 
 		if len(sections) == 0 {
-			if parts, partsErr := src.DB.FindSpecIDsByFamily(ctx, input.SpecID); partsErr == nil && len(parts) > 0 {
+			parts, partsErr := src.DB.FindSpecIDsByFamily(ctx, input.SpecID)
+			if partsErr != nil {
+				return errorResult(fmt.Sprintf("failed to check %s for parts: %v", input.SpecID, partsErr)), nil, nil
+			}
+			if len(parts) > 0 {
 				return errorResult(fmt.Sprintf("%s has multiple parts: %s — specify one", input.SpecID, strings.Join(parts, ", "))), nil, nil
 			}
 			return errorResult(fmt.Sprintf("no sections found for %s%s", input.SpecID, versionSuffix(res))), nil, nil
@@ -44,10 +48,13 @@ func HandleGetTOC(src *Source) func(ctx context.Context, req *mcp.CallToolReques
 // RenderTOC renders a specification's sections as a Markdown table of
 // contents. It is shared with the CLI's get-toc command.
 func RenderTOC(sections []db.Section) string {
+	if len(sections) == 0 {
+		return ""
+	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# %s - Table of Contents\n\n", specLabel(sections[0]))
 	for _, s := range sections {
-		indent := strings.Repeat("  ", s.Level-1)
+		indent := strings.Repeat("  ", max(s.Level-1, 0))
 		if s.Number != "" && s.Number != s.Title {
 			fmt.Fprintf(&sb, "%s- %s %s\n", indent, s.Number, s.Title)
 		} else {
