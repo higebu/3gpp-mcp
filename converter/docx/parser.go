@@ -851,12 +851,13 @@ func getHeadingLevel(styleName string) int {
 // gzip size metadata is attacker-controlled, so the guard sits on the read
 // itself: a crafted entry could otherwise expand without bound (a zip bomb)
 // before any content validation runs. The largest document.xml in the 3GPP
-// corpus is far below this.
-const maxEntrySize = 1 << 30 // 1 GiB
+// corpus is far below this. A var, not a const, so tests can shrink it and
+// exercise the cap without allocating a gibibyte.
+var maxEntrySize = 1 << 30 // 1 GiB
 
 // readAllLimited reads r to EOF but fails once the data exceeds maxEntrySize.
 func readAllLimited(r io.Reader, what string) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(r, maxEntrySize+1))
+	data, err := io.ReadAll(io.LimitReader(r, int64(maxEntrySize)+1))
 	if err != nil {
 		return nil, err
 	}
