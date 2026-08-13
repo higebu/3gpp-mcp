@@ -276,10 +276,12 @@ on — 50 kB to 537 kB of text per task, a median of 57 clauses — which
 |---|---|---|---|---|
 | Clause-tree references | 2% | 0% | 82% | **86%** |
 
-+86pt over the strongest baseline, and rounds 2 through 20 are worth **+4pt, 9
-wins to 7 losses, p=0.803** — nothing, bought with 13 more tool calls per task
-and 30 times the prompt tokens. Where one call already *is* the aggregation, the
-reading the extra rounds buy is reading the model did not need.
++84pt over the strongest baseline — 42 wins to 0 losses against no tools, and
++86pt with 43/0 against fixed-k, which here is the *weaker* of the two — and
+rounds 2 through 20 are worth **+4pt, 9 wins to 7 losses, p=0.803**: nothing,
+bought with 13 more tool calls per task and 30 times the prompt tokens. Where
+one call already *is* the aggregation, the reading the extra rounds buy is
+reading the model did not need.
 
 **`search_openapi` is a cost, not an accuracy.** Repeating the three
 designation types with the FTS index over the OpenAPI store dropped — the server
@@ -380,9 +382,9 @@ names a schema without saying where it lives.
   engineer's question.
 - n=50 per task type, one pass per condition on that set — enough for the
   +24 to +88pt differences, not for the small ones. The three designation types
-  are n=21: they share one pool of schemas, and 22 of the corpus's 5,664
-  described schemas survive a test that no *other* schema fits the same
-  description.
+  are n=21: they share one pool of schemas, 22 of the corpus's 5,664 described
+  schemas survive a test that no *other* schema fits the same description, and
+  21 of those 22 are selected under a cap of two per API document.
 - The depth and designation tracks ran on DeepSeek only. Their 20-round columns
   sit at 95-100%, where a second model can only tie; the column with room is one
   round, and that is what they were priced to measure.
