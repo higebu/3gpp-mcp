@@ -106,6 +106,17 @@ func TestHandleGetTOC(t *testing.T) {
 		}
 	})
 
+	t.Run("render guards", func(t *testing.T) {
+		if got := RenderTOC(nil); got != "" {
+			t.Errorf("RenderTOC(nil) = %q, want empty", got)
+		}
+		// A non-positive level must not panic strings.Repeat.
+		got := RenderTOC([]db.Section{{SpecID: "TS 23.501", Number: "1", Title: "Scope", Level: 0}})
+		if !strings.Contains(got, "- 1 Scope") {
+			t.Errorf("RenderTOC with level 0 = %q, want it to contain %q", got, "- 1 Scope")
+		}
+	})
+
 	t.Run("family spec id with multiple parts", func(t *testing.T) {
 		if err := d.ExecScript(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
     ('TS 38.101-1', '18.6.0', 'i60', 'Part 1', '18', '38'),

@@ -33,7 +33,11 @@ func HandleListImages(src *Source) func(ctx context.Context, req *mcp.CallToolRe
 
 		if len(images) == 0 {
 			if !res.Archived {
-				if parts, partsErr := src.DB.FindSpecIDsByFamily(ctx, input.SpecID); partsErr == nil && len(parts) > 0 {
+				parts, partsErr := src.DB.FindSpecIDsByFamily(ctx, input.SpecID)
+				if partsErr != nil {
+					return errorResult(fmt.Sprintf("failed to check %s for parts: %v", input.SpecID, partsErr)), nil, nil
+				}
+				if len(parts) > 0 {
 					return errorResult(fmt.Sprintf("%s has multiple parts: %s — specify one", input.SpecID, strings.Join(parts, ", "))), nil, nil
 				}
 			}

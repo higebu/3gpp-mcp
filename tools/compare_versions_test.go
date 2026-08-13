@@ -468,3 +468,31 @@ func TestCompareVersionsFamilyIDSuggestsParts(t *testing.T) {
 		t.Errorf("expected the parts hint naming TS 38.101-1, got: %q", text)
 	}
 }
+
+// TestFamilyPartsHint_DBError verifies that a failing family lookup is
+// surfaced instead of being silently skipped: the caller would otherwise show
+// only the raw resolve errors while hiding that the hint query itself broke.
+func TestFamilyPartsHint_DBError(t *testing.T) {
+	d := setupTestDB(t)
+	src := NewSource(d)
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	oldErr, newErr := context.DeadlineExceeded, context.DeadlineExceeded
+	res := familyPartsHint(context.Background(), src, "TS 38.101", oldErr, newErr)
+	if res == nil || !res.IsError {
+		t.Fatalf("familyPartsHint on a closed DB = %v, want an error result", res)
+	}
+	if text := getTextContent(res); !strings.Contains(text, "failed to check") {
+		t.Errorf("familyPartsHint error = %q, want it to mention the failed lookup", text)
+	}
+
+	res = checkComparable(context.Background(), src, "TS 38.101", "", nil, nil, Resolution{}, Resolution{})
+	if res == nil || !res.IsError {
+		t.Fatalf("checkComparable on a closed DB = %v, want an error result", res)
+	}
+	if text := getTextContent(res); !strings.Contains(text, "failed to check") {
+		t.Errorf("checkComparable error = %q, want it to mention the failed lookup", text)
+	}
+}

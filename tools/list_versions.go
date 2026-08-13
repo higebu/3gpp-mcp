@@ -133,7 +133,11 @@ func HandleListVersions(src *Source) func(ctx context.Context, req *mcp.CallTool
 			if archiveErr != nil {
 				return errorResult(fmt.Sprintf("no versions found for %s: %v", input.SpecID, archiveErr)), nil, nil
 			}
-			if parts, partsErr := src.DB.FindSpecIDsByFamily(ctx, input.SpecID); partsErr == nil && len(parts) > 0 {
+			parts, partsErr := src.DB.FindSpecIDsByFamily(ctx, input.SpecID)
+			if partsErr != nil {
+				return errorResult(fmt.Sprintf("failed to check %s for parts: %v", input.SpecID, partsErr)), nil, nil
+			}
+			if len(parts) > 0 {
 				return errorResult(fmt.Sprintf("%s has multiple parts: %s — specify one", input.SpecID, strings.Join(parts, ", "))), nil, nil
 			}
 			return errorResult(fmt.Sprintf("no versions found for %s", input.SpecID)), nil, nil

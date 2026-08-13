@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/higebu/3gpp-mcp/db"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -48,7 +49,7 @@ Tips:
 
 func HandleSearch(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, input SearchInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input SearchInput) (*mcp.CallToolResult, any, error) {
-		if input.Query == "" {
+		if strings.TrimSpace(input.Query) == "" {
 			return errorResult("query is required"), nil, nil
 		}
 
