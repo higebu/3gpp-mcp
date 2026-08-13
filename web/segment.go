@@ -110,10 +110,41 @@ func fenceInfo(line string) (char byte, length int, info string) {
 }
 
 // splitInlineCode splits a chunk containing no fenced blocks into text and
-// inline-code segments. Per CommonMark 6.1, a code span opens with a run of
-// backticks and closes at the next run of exactly the same length; an
-// unmatched run is literal text, and a span may not cross a blank line.
+// inline-code segments. A converter-emitted <table> region is kept whole as
+// text first: backticks inside it are cell content, and a code span opening
+// or closing inside the region would slice the table across segments —
+// breaking the verbatim passthrough escapeOutsideTables gives table markup,
+// so LinkifyRefs anchors and cell wrappers would render as literal text.
+// Region bounds mirror escapeOutsideTables: a line-start opener, and an
+// opener without a closer is not a region.
 func splitInlineCode(chunk string) []mdSegment {
+	var segs []mdSegment
+	for len(chunk) > 0 {
+		loc := tableOpenRE.FindStringIndex(chunk)
+		end := -1
+		if loc != nil {
+			if rel := strings.Index(chunk[loc[0]:], "</table>"); rel >= 0 {
+				end = loc[0] + rel + len("</table>")
+			}
+		}
+		if end < 0 {
+			segs = append(segs, scanInlineCode(chunk)...)
+			return segs
+		}
+		if loc[0] > 0 {
+			segs = append(segs, scanInlineCode(chunk[:loc[0]])...)
+		}
+		segs = append(segs, mdSegment{text: chunk[loc[0]:end]})
+		chunk = chunk[end:]
+	}
+	return segs
+}
+
+// scanInlineCode performs the code-span scan on a chunk containing no fenced
+// blocks and no table regions. Per CommonMark 6.1, a code span opens with a
+// run of backticks and closes at the next run of exactly the same length; an
+// unmatched run is literal text, and a span may not cross a blank line.
+func scanInlineCode(chunk string) []mdSegment {
 	var segs []mdSegment
 	textStart := 0
 	i := 0
