@@ -44,7 +44,11 @@ specifications), served by 3gpp-mcp `09330a0`:
 | Claude Sonnet 5 | 75.1% (SD 0.6) | **84.1%** (SD 0.5) | +8.9pt | [+7.7, +10.1] | 592 / 188 | χ²=208.2, p<10⁻⁴⁶ | 2.1 |
 | GPT 5.6 Luna | 73.4% (SD 0.2) | **80.0%** (SD 1.0) | +6.5pt | [+5.4, +7.7] | 511 / 215 | χ²=119.9, p<10⁻²⁷ | 1.3 |
 
-¹ questions only the tools run answered correctly / only the baseline answered correctly.
+¹ questions only the tools run answered correctly / only the baseline answered
+correctly. The tests pool the three repeats into 4,527 pairs; repeats of one
+question are correlated, so the χ² values and CI widths are optimistic. Scored
+one repeat at a time, the weakest of the nine per-repeat McNemar tests is still
+p<10⁻⁷.
 
 ### Where the gain comes from
 
