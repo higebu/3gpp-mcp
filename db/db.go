@@ -1096,10 +1096,13 @@ var fts5Operators = map[string]bool{
 // character is either an operator there — a hyphen is the column-filter/NOT
 // separator, a star the prefix operator, a comma the NEAR distance
 // separator, a colon a column filter (classifyToken checks for a real
-// column before falling back here) — or a hard "fts5: syntax error", as
-// with the period in "38.101", the slash in "N1/N2", or the plus in "C++".
-// Quoting turns all of them into literal search text; quoteFTS5Term keeps a
-// single trailing "*" meaningful as a prefix match.
+// column before falling back here), a caret the initial-token anchor — or a
+// hard "fts5: syntax error", as with the period in "38.101", the slash in
+// "N1/N2", or the plus in "C++". Quoting turns all of them into literal
+// search text; quoteFTS5Term keeps a single trailing "*" meaningful as a
+// prefix match and classifyToken keeps a single leading "^" as the anchor.
+// (FTS5 also counts the substitute character 0x1A as a bareword byte, but
+// the tokenizer splits on it either way, so quoting it changes nothing.)
 func needsFTS5Quoting(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
@@ -1159,15 +1162,33 @@ func classifyToken(token string, cols map[string]bool) string {
 				return col + ":" + quoteFTS5Term(strings.Trim(val, "\""))
 			}
 			if needsFTS5Quoting(val) {
-				return col + ":" + quoteFTS5Term(val)
+				return col + ":" + quoteFTS5TermKeepCaret(val)
 			}
 			return token
 		}
 	}
 	if needsFTS5Quoting(token) {
-		return quoteFTS5Term(token)
+		return quoteFTS5TermKeepCaret(token)
 	}
 	return token
+}
+
+// quoteFTS5TermKeepCaret quotes a term like quoteFTS5Term but keeps a single
+// leading "^" outside the quotes: the caret is FTS5's initial-token anchor
+// and is valid before a bareword or phrase, so "^scope" must stay an
+// anchored match and "^N1/N2" must become ^"N1/N2" — quoting the caret into
+// the string would silently turn both into match-anywhere queries. A caret
+// with nothing after it, or a doubled caret, has no anchor meaning and is
+// quoted whole as literal text.
+func quoteFTS5TermKeepCaret(s string) string {
+	rest, ok := strings.CutPrefix(s, "^")
+	if !ok || rest == "" || strings.HasPrefix(rest, "^") {
+		return quoteFTS5Term(s)
+	}
+	if needsFTS5Quoting(rest) {
+		return "^" + quoteFTS5Term(rest)
+	}
+	return "^" + rest
 }
 
 // splitFTS5Tokens splits s on whitespace, keeping a double-quoted phrase —

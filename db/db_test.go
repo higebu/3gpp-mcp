@@ -443,6 +443,12 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"phrase prefix kept attached", `"38.101"*`, `"38.101"*`},
 		{"phrase prefix kept with following term", `"38.101"* AND UE`, `"38.101"* AND UE`},
 		{"phrase with repeated stars keeps one", `"38.101"**`, `"38.101"* "*"`},
+		{"caret anchor on bareword kept", "^scope", "^scope"},
+		{"caret anchor kept outside quotes", "^N1/N2", `^"N1/N2"`},
+		{"caret anchor kept in column filter", "title:^38.101", `title:^"38.101"`},
+		{"caret anchor with prefix star", "^38.10*", `^"38.10"*`},
+		{"lone caret quoted", "^", `"^"`},
+		{"doubled caret quoted whole", "^^x", `"^^x"`},
 	}
 
 	for _, tt := range tests {
@@ -517,6 +523,9 @@ func TestSanitizeFTS5Query_ExecutesWithoutError(t *testing.T) {
 		"N1/N2", "S5/S8 interface", "C++", "a=b", "AMF & SMF",
 		"[bracket]", "{brace}", "what?", "don't", "a\\b", "x|y",
 		"100%", "#5", "~x", "N1/N2*", "title:N1/N2",
+		// The caret is FTS5's initial-token anchor and must survive
+		// sanitizing in every placement.
+		"^scope", "^N1/N2", "^38.10*", "title:^band", "^", "^^x", "^ scope",
 	}
 	for _, q := range queries {
 		sanitized := sanitizeFTS5Query(q)
@@ -2508,5 +2517,52 @@ func TestExtractReferences_CoordinatedList(t *testing.T) {
 		if !found {
 			t.Errorf("expected reference to TS 23.502 section %s, got refs: %+v", want, refs)
 		}
+	}
+}
+
+// TestSanitizeFTS5Query_CaretKeepsAnchor verifies the initial-token anchor
+// still anchors after sanitizing: quoting the caret into the string would
+// silently turn "^scope" into a match-anywhere query.
+func TestSanitizeFTS5Query_CaretKeepsAnchor(t *testing.T) {
+	dbConn, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbConn.Close()
+	dbConn.SetMaxOpenConns(1)
+
+	if _, err := dbConn.Exec(`CREATE VIRTUAL TABLE t USING fts5(content)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []string{
+		"scope of the present document",
+		"the system scope is wide",
+	} {
+		if _, err := dbConn.Exec(`INSERT INTO t(content) VALUES (?)`, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	count := func(q string) int {
+		rows, err := dbConn.Query(`SELECT rowid FROM t WHERE t MATCH ?`, sanitizeFTS5Query(q))
+		if err != nil {
+			t.Fatalf("query %q sanitized to %q, which FTS5 rejected: %v", q, sanitizeFTS5Query(q), err)
+		}
+		defer rows.Close()
+		n := 0
+		for rows.Next() {
+			n++
+		}
+		return n
+	}
+
+	if got := count("^scope"); got != 1 {
+		t.Errorf("^scope matched %d rows, want 1 (anchor must be preserved)", got)
+	}
+	if got := count("scope"); got != 2 {
+		t.Errorf("scope matched %d rows, want 2", got)
+	}
+	if got := count("^system"); got != 0 {
+		t.Errorf("^system matched %d rows, want 0 (system is never the first token)", got)
 	}
 }
