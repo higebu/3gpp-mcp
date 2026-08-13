@@ -67,8 +67,8 @@ func DottedToToken(dotted string) (string, bool) {
 	}
 	token := make([]byte, tokenLength)
 	for i, p := range parts {
-		v, err := strconv.Atoi(p)
-		if err != nil || v < 0 || v > maxComponent {
+		v, err := parseComponent(p)
+		if err != nil || v > maxComponent {
 			return "", false
 		}
 		token[i] = digitChar(v)
@@ -76,31 +76,64 @@ func DottedToToken(dotted string) (string, bool) {
 	return string(token), true
 }
 
+// parseComponent parses one dotted-version component: an unsigned decimal
+// number. Unlike strconv.Atoi it rejects a sign, so "+18" is not a component.
+func parseComponent(p string) (int, error) {
+	if p == "" {
+		return 0, fmt.Errorf("empty component")
+	}
+	for i := 0; i < len(p); i++ {
+		if p[i] < '0' || p[i] > '9' {
+			return 0, fmt.Errorf("non-numeric component %q", p)
+		}
+	}
+	v, err := strconv.Atoi(p)
+	if err != nil {
+		return 0, fmt.Errorf("component %q out of range", p)
+	}
+	return v, nil
+}
+
 // IsDotted reports whether s looks like a dotted version ("18.6.0").
 func IsDotted(s string) bool {
 	return strings.Contains(s, ".")
 }
 
-// Normalize accepts either notation and returns both. When only one of the two
-// can be derived, the other is returned empty rather than guessed: unusual
-// tokens (not three digits) and versions with a component above 35 have no
+// Normalize accepts either notation and returns both. The dotted form comes
+// back canonical ("018.6.0" is "18.6.0"). When only one of the two can be
+// derived, the other is returned empty rather than guessed: unusual tokens
+// (not three digits) and versions with a component above 35 have no
 // counterpart, and callers display whichever form they have.
 func Normalize(s string) (dotted, token string, err error) {
 	s = strings.TrimSpace(s)
-	s = strings.TrimPrefix(s, "v")
-	s = strings.TrimPrefix(s, "V")
+	// A leading v/V is decoration only in the dotted notation ("v18.6.0").
+	// In a token it is the base-36 digit 31 ("va0" is 31.10.0), so strip the
+	// prefix only when a dotted version follows.
+	if len(s) > 1 && (s[0] == 'v' || s[0] == 'V') && IsDotted(s[1:]) {
+		s = s[1:]
+	}
 	if s == "" {
 		return "", "", fmt.Errorf("empty version")
 	}
 
 	if IsDotted(s) {
-		if t, ok := DottedToToken(s); ok {
-			return s, t, nil
-		}
-		if len(strings.Split(s, ".")) != tokenLength {
+		parts := strings.Split(s, ".")
+		if len(parts) != tokenLength {
 			return "", "", fmt.Errorf("invalid version %q: expected three dot-separated components", s)
 		}
-		return s, "", nil
+		nums := make([]string, tokenLength)
+		for i, p := range parts {
+			v, err := parseComponent(p)
+			if err != nil {
+				return "", "", fmt.Errorf("invalid version %q: %w", s, err)
+			}
+			nums[i] = strconv.Itoa(v)
+		}
+		dotted = strings.Join(nums, ".")
+		if t, ok := DottedToToken(dotted); ok {
+			return dotted, t, nil
+		}
+		return dotted, "", nil
 	}
 
 	s = strings.ToLower(s)
