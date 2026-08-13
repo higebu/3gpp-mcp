@@ -609,6 +609,23 @@ func wrapEmphasis(text, delim string) string {
 	return lead + delim + mid + delim + trail
 }
 
+// wrapVertAlign wraps text in a <sup>/<sub> tag, moving any leading
+// whitespace outside the tag: preserveIndent recognizes a line's indentation
+// only at the start of the line, so whitespace hidden behind a generated tag
+// on a line that begins with a superscript or subscript run would escape the
+// no-break-space rewrite and collapse in rendering. Trailing whitespace stays
+// inside the tag — it renders the same either way, so moving it would only
+// churn the notation of every "<sub>xx </sub>" already emitted. Text that is
+// only whitespace has nothing to raise or lower and is returned unchanged,
+// mirroring wrapEmphasis.
+func wrapVertAlign(text, tag string) string {
+	mid := strings.TrimLeftFunc(text, unicode.IsSpace)
+	if mid == "" {
+		return text
+	}
+	return text[:len(text)-len(mid)] + "<" + tag + ">" + mid + "</" + tag + ">"
+}
+
 // listStyleLevelRE matches a list style name's trailing nesting-level digits,
 // e.g. "2" in "List Bullet 2" or "ListBullet2".
 var listStyleLevelRE = regexp.MustCompile(`\s*(\d+)$`)
@@ -698,9 +715,9 @@ func runsToMarkdown(runs []runInfo) string {
 		}
 		switch run.VertAlign {
 		case "superscript":
-			runText = "<sup>" + runText + "</sup>"
+			runText = wrapVertAlign(runText, "sup")
 		case "subscript":
-			runText = "<sub>" + runText + "</sub>"
+			runText = wrapVertAlign(runText, "sub")
 		}
 		parts = append(parts, runText)
 	}

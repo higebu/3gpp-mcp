@@ -751,6 +751,37 @@ func TestParagraphToMarkdown_NestedIndentPreserved(t *testing.T) {
 			want:  "- item",
 			style: "List Bullet",
 		},
+		{
+			// The tab is inside the subscript run itself: the whitespace must
+			// move outside the generated <sub> tag, where the line-start
+			// rewrite can see it, instead of collapsing inside the markup.
+			name: "indentation inside a leading subscript run",
+			info: paragraphInfo{
+				Text: "\tx = y",
+				Runs: []runInfo{
+					{Text: "\tx", VertAlign: "subscript"},
+					{Text: " = y"},
+				},
+			},
+			want:  strings.Repeat(nbsp, 4) + "<sub>x</sub> = y",
+			style: "Normal",
+		},
+		{
+			// A subscript run's trailing whitespace stays inside the tag
+			// (renders identically, and keeps the pre-existing notation of
+			// "<sub>xx </sub>" runs stable).
+			name: "trailing whitespace stays inside a subscript run",
+			info: paragraphInfo{
+				Text: "BWCh = F",
+				Runs: []runInfo{
+					{Text: "BW"},
+					{Text: "Ch ", VertAlign: "subscript"},
+					{Text: "= F"},
+				},
+			},
+			want:  "BW<sub>Ch </sub>= F",
+			style: "Normal",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
