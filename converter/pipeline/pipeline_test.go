@@ -32,6 +32,46 @@ func setupTestDB(t *testing.T) *db.DB {
 	return d
 }
 
+// TestImportYAML exercises the _yaml import directly: matching files are
+// upserted with the version read from the document, and non-matching names
+// are skipped.
+func TestImportYAML(t *testing.T) {
+	d := setupTestDB(t)
+	tmpDir := t.TempDir()
+	yamlDir := filepath.Join(tmpDir, "_yaml")
+	if err := os.MkdirAll(yamlDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	yaml := "openapi: 3.0.0\ninfo:\n  version: '1.2.3'\n  title: Nnrf_NFManagement\n"
+	if err := os.WriteFile(filepath.Join(yamlDir, "TS29510_Nnrf_NFManagement.yaml"), []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(yamlDir, "readme.txt"), []byte("not yaml"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A matching name that cannot be read as a file is logged and skipped.
+	if err := os.MkdirAll(filepath.Join(yamlDir, "TS29510_Broken.yaml"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &Pipeline{DB: d}
+	p.importYAML(tmpDir)
+
+	apis, err := d.ListOpenAPI(t.Context(), "TS 29.510")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(apis) != 1 {
+		t.Fatalf("imported %d OpenAPI specs, want 1", len(apis))
+	}
+	if apis[0].APIName != "Nnrf_NFManagement" || apis[0].Version != "1.2.3" {
+		t.Errorf("imported %q version %q, want Nnrf_NFManagement version 1.2.3", apis[0].APIName, apis[0].Version)
+	}
+
+	// A spec directory without _yaml is a no-op.
+	p.importYAML(t.TempDir())
+}
+
 func makeZipWithFile(t *testing.T, name string, content []byte) []byte {
 	t.Helper()
 	return makeZipWithFiles(t, map[string][]byte{name: content})

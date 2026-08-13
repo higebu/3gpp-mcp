@@ -70,6 +70,16 @@ func TestRenderMarkdown(t *testing.T) {
 			specID:  "TS 38.211",
 			want:    `<span class="math-display">\frac{1}{2}</span>`,
 		},
+		{
+			// Two backticks inside one table region must not open a code
+			// span: a span crossing cell boundaries would slice the table
+			// across segments and mangle the markup the table passthrough
+			// protects, such as LinkifyRefs anchors.
+			name:    "table with backticks stays whole",
+			content: "<table><tr><td>rate `a</td><td>rate `b</td><td><a href=\"/specs/TS%2023.501\">TS 23.501</a></td></tr></table>",
+			specID:  "TS 38.211",
+			want:    `<a href="/specs/TS%2023.501">TS 23.501</a>`,
+		},
 	}
 
 	for _, tt := range tests {

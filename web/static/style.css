@@ -1397,6 +1397,12 @@ body:has(dialog.lightbox[open]) {
 /* GenericTraceback */ [data-theme="dark"][data-code-theme="github"] .chroma .gt { color: #ff7b72 }
 /* GenericUnderline */ [data-theme="dark"][data-code-theme="github"] .chroma .gl { text-decoration: underline }
 /* TextWhitespace */ [data-theme="dark"][data-code-theme="github"] .chroma .w { color: #6e7681 }
+/* Classes only the light half styles, pinned to the dark style's base colour so light ink cannot bleed into dark mode: */
+/* NameAttribute */ [data-theme="dark"][data-code-theme="github"] .chroma .na { color: #e6edf3 }
+/* NameBuiltin */ [data-theme="dark"][data-code-theme="github"] .chroma .nb { color: #e6edf3 }
+/* NameBuiltinPseudo */ [data-theme="dark"][data-code-theme="github"] .chroma .bp { color: #e6edf3 }
+/* NameOther */ [data-theme="dark"][data-code-theme="github"] .chroma .nx { color: #e6edf3 }
+/* Punctuation */ [data-theme="dark"][data-code-theme="github"] .chroma .p { color: #e6edf3 }
 
 /* --- monokai: monokailight (light) --- */
 /* Error */ [data-code-theme="monokai"] .chroma .err { color: #960050; background-color: #1e0010 }
@@ -1519,6 +1525,20 @@ body:has(dialog.lightbox[open]) {
 /* GenericInserted */ [data-theme="dark"][data-code-theme="monokai"] .chroma .gi { color: #a6e22e }
 /* GenericStrong */ [data-theme="dark"][data-code-theme="monokai"] .chroma .gs { font-weight: bold }
 /* GenericSubheading */ [data-theme="dark"][data-code-theme="monokai"] .chroma .gu { color: #75715e }
+/* Classes only the light half styles, pinned to the dark style's base colour so light ink cannot bleed into dark mode: */
+/* Name */ [data-theme="dark"][data-code-theme="monokai"] .chroma .n { color: #f8f8f2 }
+/* NameBuiltin */ [data-theme="dark"][data-code-theme="monokai"] .chroma .nb { color: #f8f8f2 }
+/* NameBuiltinPseudo */ [data-theme="dark"][data-code-theme="monokai"] .chroma .bp { color: #f8f8f2 }
+/* NameEntity */ [data-theme="dark"][data-code-theme="monokai"] .chroma .ni { color: #f8f8f2 }
+/* NameLabel */ [data-theme="dark"][data-code-theme="monokai"] .chroma .nl { color: #f8f8f2 }
+/* NameNamespace */ [data-theme="dark"][data-code-theme="monokai"] .chroma .nn { color: #f8f8f2 }
+/* NameProperty */ [data-theme="dark"][data-code-theme="monokai"] .chroma .py { color: #f8f8f2 }
+/* NameVariable */ [data-theme="dark"][data-code-theme="monokai"] .chroma .nv { color: #f8f8f2 }
+/* NameVariableClass */ [data-theme="dark"][data-code-theme="monokai"] .chroma .vc { color: #f8f8f2 }
+/* NameVariableGlobal */ [data-theme="dark"][data-code-theme="monokai"] .chroma .vg { color: #f8f8f2 }
+/* NameVariableInstance */ [data-theme="dark"][data-code-theme="monokai"] .chroma .vi { color: #f8f8f2 }
+/* NameVariableMagic */ [data-theme="dark"][data-code-theme="monokai"] .chroma .vm { color: #f8f8f2 }
+/* Punctuation */ [data-theme="dark"][data-code-theme="monokai"] .chroma .p { color: #f8f8f2 }
 
 /* --- xcode-dracula: xcode (light) --- */
 /* Error */ [data-code-theme="xcode-dracula"] .chroma .err { color: #000000 }
@@ -1641,6 +1661,18 @@ body:has(dialog.lightbox[open]) {
 /* GenericOutput */ [data-theme="dark"][data-code-theme="xcode-dracula"] .chroma .go { color: #44475a }
 /* GenericSubheading */ [data-theme="dark"][data-code-theme="xcode-dracula"] .chroma .gu { font-weight: bold }
 /* GenericUnderline */ [data-theme="dark"][data-code-theme="xcode-dracula"] .chroma .gl { text-decoration: underline }
+/* Classes only the light half styles, pinned to the dark style's base colour so light ink cannot bleed into dark mode: */
+/* Error */ [data-theme="dark"][data-code-theme="xcode-dracula"] .chroma .err { color: #f8f8f2 }
+/* Literal */ [data-theme="dark"][data-code-theme="xcode-dracula"] .chroma .l { color: #f8f8f2 }
+/* LiteralDate */ [data-theme="dark"][data-code-theme="xcode-dracula"] .chroma .ld { color: #f8f8f2 }
+/* Name */ [data-theme="dark"][data-code-theme="xcode-dracula"] .chroma .n { color: #f8f8f2 }
+/* NameConstant */ [data-theme="dark"][data-code-theme="xcode-dracula"] .chroma .no { color: #f8f8f2 }
+/* NameDecorator */ [data-theme="dark"][data-code-theme="xcode-dracula"] .chroma .nd { color: #f8f8f2 }
+/* NameEntity */ [data-theme="dark"][data-code-theme="xcode-dracula"] .chroma .ni { color: #f8f8f2 }
+/* NameException */ [data-theme="dark"][data-code-theme="xcode-dracula"] .chroma .ne { color: #f8f8f2 }
+/* NameNamespace */ [data-theme="dark"][data-code-theme="xcode-dracula"] .chroma .nn { color: #f8f8f2 }
+/* NameOther */ [data-theme="dark"][data-code-theme="xcode-dracula"] .chroma .nx { color: #f8f8f2 }
+/* NameProperty */ [data-theme="dark"][data-code-theme="xcode-dracula"] .chroma .py { color: #f8f8f2 }
 
 /* === Settings popover (code highlighting theme) === */
 .settings-menu { position: relative; }

@@ -138,6 +138,31 @@ func TestDownloadAndExtract_DocOnly(t *testing.T) {
 	}
 }
 
+// TestDownloadAndExtract_CancelledContextStopsRetries verifies that a
+// cancelled context makes the retry loop return immediately instead of
+// serving its full 2s+4s backoff on guaranteed-futile retries.
+func TestDownloadAndExtract_CancelledContextStopsRetries(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	result, err := DownloadAndExtract(ctx, ts.Client(), &SpecVersion{SpecID: "TS 99.001", URL: ts.URL + "/x.zip"}, t.TempDir(), 5*time.Second)
+	if err == nil {
+		t.Fatal("expected an error for a cancelled context")
+	}
+	if result.Status != "FAILED" {
+		t.Errorf("status = %q, want FAILED", result.Status)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("took %v; retries kept backing off after cancellation", elapsed)
+	}
+}
+
 // TestDownloadAndExtract_AllDocExtractionsFail verifies that a ZIP whose only
 // .doc entry cannot be extracted is reported FAILED, not DOC_ONLY (#143): a
 // DOC_ONLY status with nothing on disk to convert misdirects the operator

@@ -150,7 +150,7 @@ func (h *handler) initTemplates() {
 			return "/specs/" + url.PathEscape(specID)
 		},
 		"sectionURL": func(specID, number, version string) string {
-			u := "/specs/" + url.PathEscape(specID) + "/sections/" + number
+			u := "/specs/" + url.PathEscape(specID) + "/sections/" + url.PathEscape(number)
 			if version != "" {
 				u += "?version=" + url.QueryEscape(version)
 			}
@@ -672,7 +672,7 @@ func refURL(ref db.Reference) string {
 	}
 	u := "/specs/" + url.PathEscape(target)
 	if ref.TargetSection != "" {
-		u += "/sections/" + ref.TargetSection
+		u += "/sections/" + url.PathEscape(ref.TargetSection)
 	}
 	return u
 }

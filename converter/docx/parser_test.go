@@ -3,6 +3,7 @@ package docx
 import (
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"io"
 	"os"
 	"path/filepath"
@@ -1389,5 +1390,36 @@ func TestImagePlaceholder_UnifiedNotation(t *testing.T) {
 				t.Errorf("imagePlaceholder() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestReadAllLimited_Cap exercises the decompression cap: reads at the limit
+// succeed, reads over it fail, and the PCZ gzip path reports the failure.
+// maxEntrySize is shrunk so the test does not allocate a gibibyte.
+func TestReadAllLimited_Cap(t *testing.T) {
+	old := maxEntrySize
+	maxEntrySize = 8
+	t.Cleanup(func() { maxEntrySize = old })
+
+	data, err := readAllLimited(strings.NewReader("12345678"), "test entry")
+	if err != nil || string(data) != "12345678" {
+		t.Fatalf("at-limit read = %q, %v; want full data and nil error", data, err)
+	}
+
+	if _, err := readAllLimited(strings.NewReader("123456789"), "test entry"); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("over-limit read error = %v; want an 'exceeds' error", err)
+	}
+
+	// Through the PCZ path: a payload that decompresses past the cap fails.
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(make([]byte, 100)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decompressPCZ(buf.Bytes()); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("decompressPCZ over-limit error = %v; want an 'exceeds' error", err)
 	}
 }

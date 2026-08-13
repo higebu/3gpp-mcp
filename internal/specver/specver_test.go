@@ -44,6 +44,9 @@ func TestDottedToToken(t *testing.T) {
 		{"18.6", "", false},
 		{"18.6.0.1", "", false},
 		{"x.y.z", "", false},
+		{"+18.6.0", "", false},                   // strconv leniency must not admit a sign
+		{"18..0", "", false},                     // empty component
+		{"18.99999999999999999999.0", "", false}, // component overflows int
 		{"", "", false},
 	}
 	for _, tt := range tests {
@@ -82,7 +85,14 @@ func TestNormalize(t *testing.T) {
 		{in: " 18.6.0 ", dotted: "18.6.0", token: "i60", desc: "surrounding space"},
 		{in: "36.0.0", dotted: "36.0.0", token: "", desc: "no token counterpart"},
 		{in: "k2", dotted: "", token: "k2", desc: "odd token kept as-is"},
+		{in: "va0", dotted: "31.10.0", token: "va0", desc: "token starting with the digit v"},
+		{in: "v00", dotted: "31.0.0", token: "v00", desc: "token v00 is release 31, not a prefixed 00"},
+		{in: "v920", dotted: "9.2.0", token: "920", desc: "v prefix on a token"},
+		{in: "V920", dotted: "9.2.0", token: "920", desc: "uppercase prefix on a token"},
+		{in: "018.6.0", dotted: "18.6.0", token: "i60", desc: "leading zeros canonicalized"},
 		{in: "18.6", wantErr: true, desc: "two components"},
+		{in: "+18.6.0", wantErr: true, desc: "signed component"},
+		{in: "18.foo.0", wantErr: true, desc: "non-numeric component"},
 		{in: "", wantErr: true, desc: "empty"},
 	}
 	for _, tt := range tests {

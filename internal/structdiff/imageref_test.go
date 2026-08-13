@@ -91,6 +91,15 @@ func TestNormalizeImageRefs(t *testing.T) {
 			b:    "![Figure](image://image1.wmf.png)",
 			same: true,
 		},
+		{
+			// A filename-shaped alt must fold the same way against the
+			// disambiguated conversion name as against the original, or the
+			// alt survives on one side only and the keys differ.
+			name: "filename alt folds against disambiguated conversion name",
+			a:    "![image1.wmf](image://image1.wmf)",
+			b:    "![image1.wmf](image://image1.wmf.png)",
+			same: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

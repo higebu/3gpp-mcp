@@ -93,13 +93,15 @@ func SetupTestDB(t testing.TB) *db.DB {
 	if err != nil {
 		t.Fatalf("failed to open test db: %v", err)
 	}
+	// Register before the ExecScript calls: their t.Fatalf would otherwise
+	// leave the database open.
+	t.Cleanup(func() { _ = d.Close() })
 	if err := d.ExecScript(db.Schema); err != nil {
 		t.Fatalf("failed to create schema: %v", err)
 	}
 	if err := d.ExecScript(SeedData); err != nil {
 		t.Fatalf("failed to seed data: %v", err)
 	}
-	t.Cleanup(func() { _ = d.Close() })
 	return d
 }
 

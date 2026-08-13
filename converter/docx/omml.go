@@ -150,11 +150,18 @@ func mVal(prNode *ommlNode, childLocal string) (val string, ok bool) {
 	return v, ok
 }
 
-// isTrue reports whether an OMML boolean attribute value is set. OMML on/off
-// values are "1"/"true"/"on" for true; an absent value defaults to true.
-func isTrue(v string, present bool) bool {
-	if !present {
+// mFlag reads an OMML on/off property child of prNode (e.g. the degHide of a
+// radPr). An absent child is false; a present child without m:val is true per
+// ECMA-376 (<m:degHide/> means "hide"); otherwise "0"/"false"/"off" are false
+// and anything else is true.
+func mFlag(prNode *ommlNode, childLocal string) bool {
+	c := child(prNode, childLocal)
+	if c == nil {
 		return false
+	}
+	v, ok := c.Attr["val"]
+	if !ok {
+		return true
 	}
 	switch strings.ToLower(v) {
 	case "0", "false", "off":
@@ -358,9 +365,9 @@ func renderDelimiter(n *ommlNode) string {
 
 func renderRadical(n *ommlNode) string {
 	e := renderOMML(child(n, "e"))
-	degHide, present := mVal(child(n, "radPr"), "degHide")
+	degHide := mFlag(child(n, "radPr"), "degHide")
 	deg := renderOMML(child(n, "deg"))
-	if isTrue(degHide, present) || trimMathSpace(deg) == "" {
+	if degHide || trimMathSpace(deg) == "" {
 		return "\\sqrt{" + e + "}"
 	}
 	return "\\sqrt[" + deg + "]{" + e + "}"
@@ -373,17 +380,17 @@ func renderNary(n *ommlNode) string {
 	if ok {
 		op = naryOp(chr)
 	}
-	subHide, sp := mVal(naryPr, "subHide")
-	supHide, pp := mVal(naryPr, "supHide")
+	subHide := mFlag(naryPr, "subHide")
+	supHide := mFlag(naryPr, "supHide")
 
 	var b strings.Builder
 	b.WriteString(op)
 	limits := false
-	if sub := child(n, "sub"); sub != nil && !isTrue(subHide, sp) {
+	if sub := child(n, "sub"); sub != nil && !subHide {
 		b.WriteString("_{" + renderOMML(sub) + "}")
 		limits = true
 	}
-	if sup := child(n, "sup"); sup != nil && !isTrue(supHide, pp) {
+	if sup := child(n, "sup"); sup != nil && !supHide {
 		b.WriteString("^{" + renderOMML(sup) + "}")
 		limits = true
 	}
