@@ -1,4 +1,4 @@
-.PHONY: build install import import-dir build-db download-specs download-latest-specs update-specs db-info test clean web
+.PHONY: build install import import-dir build-db download-specs download-latest-specs update-specs db-info test e2e clean web
 
 SPECS_DIR ?= specs
 DB_PATH ?= data/3gpp.db
@@ -70,6 +70,11 @@ web: build
 # Run Go tests
 test:
 	go test ./...
+
+# Run Playwright end-to-end tests for the web viewer (requires Node.js).
+# Set CHROMIUM_PATH to use a system Chromium instead of the managed download.
+e2e:
+	cd e2e && npm ci && npx playwright install chromium && npx playwright test
 
 # Clean build artifacts
 clean:
