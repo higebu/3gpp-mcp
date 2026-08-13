@@ -1091,20 +1091,26 @@ var fts5Operators = map[string]bool{
 }
 
 // needsFTS5Quoting reports whether a bare token contains a character FTS5
-// cannot parse as part of an unquoted bareword: a hyphen (misread as the
-// column-filter/NOT operator), a period (e.g. spec numbers like "38.101",
-// which FTS5 otherwise rejects with "syntax error near \".\""), a stray
-// double quote, a parenthesis riding along inside the token (an unquoted
-// "(38.331" or "SMF)" is a hard syntax error), a star (valid only as a
-// trailing prefix operator; quoteFTS5Term keeps that meaning and quotes
-// every other placement, so a bare "*" degrades to no results instead of
-// "unknown special query"), a comma (only valid as the NEAR distance
-// separator, so "AMF, SMF" is a syntax error), or a colon (valid only as
-// the separator of a column filter naming a real column, which
-// classifyToken checks before falling back here: "NOTE: mentions" would
-// otherwise fail the whole match with "no such column: NOTE").
+// cannot parse as part of an unquoted bareword. FTS5 barewords are ASCII
+// alphanumerics, "_", and bytes >= 0x80 (non-ASCII text); every other
+// character is either an operator there — a hyphen is the column-filter/NOT
+// separator, a star the prefix operator, a comma the NEAR distance
+// separator, a colon a column filter (classifyToken checks for a real
+// column before falling back here) — or a hard "fts5: syntax error", as
+// with the period in "38.101", the slash in "N1/N2", or the plus in "C++".
+// Quoting turns all of them into literal search text; quoteFTS5Term keeps a
+// single trailing "*" meaningful as a prefix match.
 func needsFTS5Quoting(s string) bool {
-	return strings.ContainsAny(s, `-."()*,:`)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z',
+			c >= '0' && c <= '9', c == '_', c >= 0x80:
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 // quoteFTS5String wraps s in double quotes, doubling any quote already

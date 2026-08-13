@@ -511,6 +511,12 @@ func TestSanitizeFTS5Query_ExecutesWithoutError(t *testing.T) {
 		// Mixed-case NEAR is not a keyword but still a hard syntax error
 		// when left bare.
 		"Near(a b)", "near(AMF UE)",
+		// Any ASCII punctuation outside the FTS5 bareword set is a hard
+		// syntax error unquoted; slash-joined reference points (N1/N2,
+		// S5/S8) are routine 3GPP query text.
+		"N1/N2", "S5/S8 interface", "C++", "a=b", "AMF & SMF",
+		"[bracket]", "{brace}", "what?", "don't", "a\\b", "x|y",
+		"100%", "#5", "~x", "N1/N2*", "title:N1/N2",
 	}
 	for _, q := range queries {
 		sanitized := sanitizeFTS5Query(q)
