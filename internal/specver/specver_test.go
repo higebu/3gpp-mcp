@@ -44,6 +44,9 @@ func TestDottedToToken(t *testing.T) {
 		{"18.6", "", false},
 		{"18.6.0.1", "", false},
 		{"x.y.z", "", false},
+		{"+18.6.0", "", false},                   // strconv leniency must not admit a sign
+		{"18..0", "", false},                     // empty component
+		{"18.99999999999999999999.0", "", false}, // component overflows int
 		{"", "", false},
 	}
 	for _, tt := range tests {
