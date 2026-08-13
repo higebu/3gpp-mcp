@@ -162,6 +162,7 @@ func (p *Pipeline) processOne(ctx context.Context, spec *SpecVersion) (string, e
 	if err != nil {
 		return "FAILED", err
 	}
+
 	if result.Status != "OK" {
 		if result.Status == "DOC_ONLY" && p.ConvertDoc {
 			docDir := filepath.Join(tmpDir, "_doc_files")
@@ -189,6 +190,13 @@ func (p *Pipeline) processOne(ctx context.Context, spec *SpecVersion) (string, e
 			}
 		}
 		if result.Status != "OK" {
+			// No document text will be imported, so the YAML is this spec's
+			// only artifact: DownloadAndExtract extracted it before deciding
+			// DOC_ONLY/NO_DOC, and skipping it here would keep the spec out
+			// of openapi_specs entirely. Mid-parse failures below deliberately
+			// do not import, so a FAILED spec cannot advance openapi_specs
+			// ahead of its text.
+			p.importYAML(tmpDir)
 			return result.Status, nil
 		}
 	}
@@ -254,34 +262,41 @@ func (p *Pipeline) processOne(ctx context.Context, spec *SpecVersion) (string, e
 	}
 
 	// Import YAML files if present
-	yamlDir := filepath.Join(tmpDir, "_yaml")
-	if entries, err := os.ReadDir(yamlDir); err == nil {
-		for _, entry := range entries {
-			match := yamlFilenameRE.FindStringSubmatch(entry.Name())
-			if match == nil {
-				continue
-			}
-			series, num, apiName := match[1], match[2], match[3]
-			specID := fmt.Sprintf("TS %s.%s", series, num)
-
-			content, err := os.ReadFile(filepath.Join(yamlDir, entry.Name()))
-			if err != nil {
-				log.Printf("  %s: failed to read YAML %s: %v", specID, entry.Name(), err)
-				continue
-			}
-
-			var version string
-			if verMatch := yamlVersionRE.FindSubmatch(content); verMatch != nil {
-				version = strings.TrimSpace(string(verMatch[1]))
-			}
-
-			if err := p.DB.UpsertOpenAPI(specID, apiName, version, entry.Name(), string(content)); err != nil {
-				log.Printf("  OpenAPI import error %s: %v", entry.Name(), err)
-			}
-		}
-	}
+	p.importYAML(tmpDir)
 
 	return "OK", nil
+}
+
+// importYAML upserts every OpenAPI YAML file extracted into tmpDir/_yaml.
+func (p *Pipeline) importYAML(tmpDir string) {
+	yamlDir := filepath.Join(tmpDir, "_yaml")
+	entries, err := os.ReadDir(yamlDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		match := yamlFilenameRE.FindStringSubmatch(entry.Name())
+		if match == nil {
+			continue
+		}
+		series, num, apiName := match[1], match[2], match[3]
+		specID := fmt.Sprintf("TS %s.%s", series, num)
+
+		content, err := os.ReadFile(filepath.Join(yamlDir, entry.Name()))
+		if err != nil {
+			log.Printf("  %s: failed to read YAML %s: %v", specID, entry.Name(), err)
+			continue
+		}
+
+		var version string
+		if verMatch := yamlVersionRE.FindSubmatch(content); verMatch != nil {
+			version = strings.TrimSpace(string(verMatch[1]))
+		}
+
+		if err := p.DB.UpsertOpenAPI(specID, apiName, version, entry.Name(), string(content)); err != nil {
+			log.Printf("  OpenAPI import error %s: %v", entry.Name(), err)
+		}
+	}
 }
 
 // docTypeID replaces the "TS "/"TR " document-type prefix of a spec ID with
