@@ -660,12 +660,14 @@ func TestListStyleLevel(t *testing.T) {
 	}
 }
 
-func TestParagraphToMarkdown_LeadingTabTrimmed(t *testing.T) {
+func TestParagraphToMarkdown_LeadingTabBecomesNBSPIndent(t *testing.T) {
 	// A leading <w:tab/> (e.g. used to center an equation via a paragraph
-	// style's tab stops) must not survive into the returned markdown: a
-	// line starting with a tab is parsed as an indented code block by
-	// CommonMark, inside which raw HTML tags like <sub> are never
-	// interpreted and show up as literal text (issue #25).
+	// style's tab stops) must not survive as a literal tab: a line starting
+	// with a tab is parsed as an indented code block by CommonMark, inside
+	// which raw HTML tags like <sub> are never interpreted and show up as
+	// literal text (issue #25). It must not be dropped either — indentation
+	// carries the spec's structure (issue #188) — so it is rewritten as
+	// no-break spaces, which CommonMark treats as ordinary text.
 	info := paragraphInfo{
 		Text: "\tBW= F",
 		Runs: []runInfo{
@@ -677,12 +679,85 @@ func TestParagraphToMarkdown_LeadingTabTrimmed(t *testing.T) {
 		},
 	}
 	got := paragraphToMarkdown(info, "Normal")
-	want := "BW<sub>Channel_CA </sub>= F"
+	want := strings.Repeat(nbsp, 4) + "BW<sub>Channel_CA </sub>= F"
 	if got != want {
 		t.Errorf("paragraphToMarkdown = %q, want %q", got, want)
 	}
 	if strings.HasPrefix(got, "\t") || strings.HasPrefix(got, " ") {
-		t.Errorf("expected no leading whitespace, got %q", got)
+		t.Errorf("expected no leading tab or space, got %q", got)
+	}
+}
+
+func TestParagraphToMarkdown_NestedIndentPreserved(t *testing.T) {
+	// Nested requirement/condition lists encode their structure in leading
+	// tabs and spaces (issue #188). Each indentation level must survive into
+	// the markdown, one tab as four no-break spaces and one space as one.
+	cases := []struct {
+		name  string
+		info  paragraphInfo
+		want  string
+		style string
+	}{
+		{
+			name: "one leading tab",
+			info: paragraphInfo{
+				Text: "\t1)\tif the UE supports S1 mode:",
+				Runs: []runInfo{{Text: "\t1)\tif the UE supports S1 mode:"}},
+			},
+			want:  strings.Repeat(nbsp, 4) + "1)\tif the UE supports S1 mode:",
+			style: "Normal",
+		},
+		{
+			name: "two leading tabs",
+			info: paragraphInfo{
+				Text: "\t\ti)\tthe UE shall set the bit;",
+				Runs: []runInfo{{Text: "\t\ti)\tthe UE shall set the bit;"}},
+			},
+			want:  strings.Repeat(nbsp, 8) + "i)\tthe UE shall set the bit;",
+			style: "Normal",
+		},
+		{
+			name: "leading spaces, trailing whitespace trimmed",
+			info: paragraphInfo{
+				Text: "  indented text \t",
+				Runs: []runInfo{{Text: "  indented text \t"}},
+			},
+			want:  strings.Repeat(nbsp, 2) + "indented text",
+			style: "Normal",
+		},
+		{
+			name: "indentation kept on every line of a multi-line paragraph",
+			info: paragraphInfo{
+				Text: "first:\n\tsecond\n\t\tthird",
+				Runs: []runInfo{{Text: "first:\n\tsecond\n\t\tthird"}},
+			},
+			want:  "first:\n" + strings.Repeat(nbsp, 4) + "second\n" + strings.Repeat(nbsp, 8) + "third",
+			style: "Normal",
+		},
+		{
+			name: "fallback without runs preserves indentation too",
+			info: paragraphInfo{
+				Text: "\tno runs here",
+			},
+			want:  strings.Repeat(nbsp, 4) + "no runs here",
+			style: "Normal",
+		},
+		{
+			name: "list items keep the style-level indent, not an NBSP one",
+			info: paragraphInfo{
+				Text: "\titem",
+				Runs: []runInfo{{Text: "\titem"}},
+			},
+			want:  "- item",
+			style: "List Bullet",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := paragraphToMarkdown(tc.info, tc.style); got != tc.want {
+				t.Errorf("paragraphToMarkdown = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

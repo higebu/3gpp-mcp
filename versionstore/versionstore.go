@@ -75,8 +75,10 @@ const DefaultFileName = "versions.db"
 // table-cell formulas are no longer HTML-escaped, generation 11 parses
 // multi-character clause number suffixes, trailing periods and multi-letter
 // annex prefixes, which renames the affected sections (and their parent
-// references) from the raw heading text to the real clause number.
-const cacheSchemaVersion = 11
+// references) from the raw heading text to the real clause number,
+// generation 12 preserves paragraph indentation, rewriting each line's
+// leading whitespace as no-break spaces instead of trimming it away.
+const cacheSchemaVersion = 12
 
 // schema mirrors the spec, section and image tables of the main database,
 // without the full-text index: cached versions must never appear in search

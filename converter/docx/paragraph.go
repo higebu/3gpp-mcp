@@ -651,14 +651,17 @@ func paragraphToMarkdown(info paragraphInfo, styleName string) string {
 		// paragraph's, so bold/italic/<sup>/<sub> survive inside list items;
 		// fall back to the plain text when the runs render to nothing (e.g. a
 		// paragraphInfo carrying Text but no Runs) so an item is never empty.
-		return indent + marker + runsOrText(info, text)
+		// The style's list level already encodes the nesting, so the
+		// no-break-space indent preserveIndent gives non-list paragraphs is
+		// stripped here (TrimSpace treats U+00A0 as whitespace).
+		return indent + marker + strings.TrimSpace(runsOrText(info, text))
 	}
 
-	return runsOrText(info, text)
+	return runsOrText(info, preserveIndent(info.Text))
 }
 
 // runsOrText renders info's runs to markdown, falling back to the given
-// already-trimmed plain text when they produce nothing.
+// plain text when they produce nothing.
 func runsOrText(info paragraphInfo, text string) string {
 	if len(info.Runs) > 0 {
 		if md := runsToMarkdown(info.Runs); md != "" {
@@ -704,12 +707,59 @@ func runsToMarkdown(runs []runInfo) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	// Trim leading/trailing whitespace (e.g. a leading <w:tab/> used to
-	// center an equation via tab stops): a line that starts with a tab or
-	// 4+ spaces is parsed as an indented code block by CommonMark, inside
-	// which HTML tags like <sub> are never interpreted and show up as
-	// literal text (see issue #25).
-	return strings.TrimSpace(strings.Join(parts, ""))
+	// Rewrite each line's leading whitespace as no-break spaces instead of
+	// trimming it away or keeping it verbatim: the indentation carries the
+	// spec's structure — nested requirement and condition lists (issue #188)
+	// — but a line starting with a tab or 4+ spaces is parsed as an indented
+	// code block by CommonMark, inside which HTML tags like <sub> are never
+	// interpreted and show up as literal text (see issue #25). Trailing
+	// whitespace is still trimmed.
+	return preserveIndent(strings.Join(parts, ""))
+}
+
+// nbsp is a no-break space (U+00A0). CommonMark does not count it as
+// indentation — only spaces and tabs open an indented code block — and HTML
+// renderers do not collapse runs of it, so it is the one whitespace a
+// paragraph can safely be indented with in Markdown.
+const nbsp = "\u00a0"
+
+// nbspIndentLine rewrites one line's leading whitespace as no-break spaces —
+// a tab becomes four, a space or an NBSP one — and trims trailing whitespace.
+// A whitespace-only line becomes empty.
+func nbspIndentLine(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range line[:strings.Index(line, trimmed)] {
+		switch r {
+		case '\t':
+			b.WriteString(nbsp + nbsp + nbsp + nbsp)
+		case ' ', '\u00a0':
+			b.WriteString(nbsp)
+		}
+	}
+	return b.String() + trimmed
+}
+
+// preserveIndent renders a paragraph's indentation in Markdown-safe form:
+// every line (a w:br within the paragraph is a "\n") keeps its leading
+// whitespace as no-break spaces via nbspIndentLine, and blank lines at either
+// end are dropped, mirroring the TrimSpace this replaces (issue #188).
+func preserveIndent(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = nbspIndentLine(line)
+	}
+	start, end := 0, len(lines)
+	for start < end && lines[start] == "" {
+		start++
+	}
+	for end > start && lines[end-1] == "" {
+		end--
+	}
+	return strings.Join(lines[start:end], "\n")
 }
 
 // paragraphToMarkdownBlocks converts a paragraph into one or more ordered
@@ -762,7 +812,7 @@ func paragraphToMarkdownBlocks(info paragraphInfo, styleName string, renderImage
 	flush()
 
 	if len(blocks) == 0 {
-		if text := strings.TrimSpace(info.Text); text != "" {
+		if text := preserveIndent(info.Text); text != "" {
 			blocks = append(blocks, text)
 		}
 	}
