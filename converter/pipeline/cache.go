@@ -46,14 +46,30 @@ func CacheDir() (string, error) {
 
 // CacheKey generates a cache file name from a prefix and parameters.
 // e.g., CacheKey("speclist", "23", "29") -> "speclist_23_29.txt"
+// Characters that carry meaning in file paths are replaced so the result can
+// never name anything outside the cache directory.
 func CacheKey(prefix string, params ...string) string {
 	if len(params) == 0 {
 		return prefix + ".txt"
 	}
 	sorted := make([]string, len(params))
-	copy(sorted, params)
+	for i, p := range params {
+		sorted[i] = sanitizeKeyPart(p)
+	}
 	sort.Strings(sorted)
 	return prefix + "_" + strings.Join(sorted, "_") + ".txt"
+}
+
+// sanitizeKeyPart keeps a cache-key parameter to filename-safe characters.
+func sanitizeKeyPart(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-':
+			return r
+		default:
+			return '.'
+		}
+	}, s)
 }
 
 // LoadCache reads cached entries from a file if it exists and is within TTL.
