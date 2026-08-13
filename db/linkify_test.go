@@ -914,14 +914,40 @@ func TestLinkifyRefs_QualifiedSectionGapAcrossBlankLine(t *testing.T) {
 	}
 }
 
-// A blank line between a bare reference and the "of TS ..." that qualifies it
-// leaves the reference same-document: bareTrailingQualRE must not see across
-// the block boundary either.
-func TestLinkifyRefs_QualifierAcrossBlankLineIgnored(t *testing.T) {
-	input := "See clause 4.2\n\nof TS 23.402 for details."
-	want := "See [clause 4.2](/specs/TS 23.501/sections/4.2)\n\nof [TS 23.402](/specs/TS 23.402) for details."
-	got := LinkifyRefs(input, LinkifyRefsOpts{URLFor: bareURLFor, SectionExists: bareSectionSet})
-	if got != want {
-		t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", input, got, want)
+// The context gates around a bare reference must not see across a block
+// boundary either: a designator or an "of TS ..." qualifier in the neighbouring
+// block belongs to that block, and reading it suppresses a legitimate
+// same-document link.
+func TestLinkifyRefs_ContextGatesStopAtBlankLine(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "trailing qualifier in the next block",
+			input: "See clause 4.2\n\nof TS 23.402 for details.",
+			want:  "See [clause 4.2](/specs/TS 23.501/sections/4.2)\n\nof [TS 23.402](/specs/TS 23.402) for details.",
+		},
+		{
+			name:  "qualifier reached through a coordinated list in the next block",
+			input: "The following apply: clause 4.2,\n\nclause 4.3 of TS 23.402.",
+			want: "The following apply: [clause 4.2](/specs/TS 23.501/sections/4.2),\n\n" +
+				"[clause 4.3 of TS 23.402](/specs/TS 23.402/sections/4.3).",
+		},
+		{
+			name:  "leading designator in the previous block",
+			input: "See TS 23.402 clause 5.1,\n\nclause 4.2 applies.",
+			want: "See [TS 23.402 clause 5.1](/specs/TS 23.402/sections/5.1),\n\n" +
+				"[clause 4.2](/specs/TS 23.501/sections/4.2) applies.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LinkifyRefs(tt.input, LinkifyRefsOpts{URLFor: bareURLFor, SectionExists: bareSectionSet})
+			if got != tt.want {
+				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }

@@ -1538,7 +1538,10 @@ const coordElemTail = `(?:(?:of|in)` + spPlus + `(?:[Cc]lauses?|[Ss]ections?|[Ss
 // " and 4.4", ", and 4.4", "; or Annex B", " and in clause 4.12.2a") so
 // bareTrailingQualRE and barePresentDocRE can see through a list to the
 // "of"/"in" that qualifies its every element.
-const bareRefChain = `(?:` + spStar + `(?:[,;]` + spStar + `(?:and|or)?|and|or)` + spStar + coordElemTail + `)*`
+// Each element keeps its separators in one run per gap — a comma with no
+// conjunction after it must not put two runs side by side, or the pair spans a
+// blank line and the chain reads a qualifier out of the next block.
+const bareRefChain = `(?:` + spStar + `(?:[,;]` + spStar + `(?:(?:and|or)` + spStar + `)?|(?:and|or)` + spStar + `)` + coordElemTail + `)*`
 
 var (
 	// "TS 23.501 clause 5.1" or "3GPP TS 33.203 Annex H"
