@@ -5,11 +5,19 @@
     const toggle = document.getElementById('theme-toggle');
     const html = document.documentElement;
 
+    // localStorage can throw (private browsing, storage disabled); the
+    // preference then simply lasts for the page instead of persisting.
+    const persist = function (key, value) {
+        try {
+            localStorage.setItem(key, value);
+        } catch (e) { /* ignore */ }
+    };
+
     if (toggle) {
         toggle.addEventListener('click', function () {
             const next = html.dataset.theme === 'dark' ? 'light' : 'dark';
             html.dataset.theme = next;
-            localStorage.setItem('theme', next);
+            persist('theme', next);
         });
     }
 
@@ -54,7 +62,7 @@
             setOpen(settingsPopover.hidden);
         });
         document.addEventListener('click', function (e) {
-            if (!settingsPopover.hidden && !settingsPopover.contains(e.target) && e.target !== settingsToggle) {
+            if (!settingsPopover.hidden && !settingsPopover.contains(e.target) && !settingsToggle.contains(e.target)) {
                 setOpen(false);
             }
         });
@@ -71,7 +79,7 @@
             radio.addEventListener('change', function () {
                 if (radio.checked) {
                     html.dataset.codeTheme = radio.value;
-                    localStorage.setItem('codeTheme', radio.value);
+                    persist('codeTheme', radio.value);
                 }
             });
         });
@@ -145,7 +153,7 @@
     // ::backdrop target the dialog itself), and Escape is native <dialog>
     // behavior.
     const sectionBody = document.querySelector('.section-body');
-    if (sectionBody) {
+    if (sectionBody && typeof HTMLDialogElement !== 'undefined' && HTMLDialogElement.prototype.showModal) {
         let lightbox = null;
         const openLightbox = function (img) {
             if (!lightbox) {
