@@ -188,12 +188,30 @@ func TestOMMLToLaTeX(t *testing.T) {
 			want: "\\sqrt{x}",
 		},
 		{
+			// An on/off property present without m:val is true per ECMA-376:
+			// <m:degHide/> hides the degree even when m:deg has content.
+			name: "radical with valueless degHide",
+			xml: `<m:oMath ` + mXMLNS + `><m:rad><m:radPr><m:degHide/></m:radPr>` +
+				`<m:deg>` + mrun("3") + `</m:deg><m:e>` + mrun("x") + `</m:e>` +
+				`</m:rad></m:oMath>`,
+			want: "\\sqrt{x}",
+		},
+		{
 			name: "nary sum",
 			xml: `<m:oMath ` + mXMLNS + `><m:nary><m:naryPr><m:chr m:val="∑"/></m:naryPr>` +
 				`<m:sub>` + mrun("i=1") + `</m:sub><m:sup>` + mrun("n") + `</m:sup>` +
 				`<m:e>` + mrun("i") + `</m:e>` +
 				`</m:nary></m:oMath>`,
 			want: "\\sum_{i=1}^{n}i",
+		},
+		{
+			name: "nary with valueless subHide and supHide",
+			xml: `<m:oMath ` + mXMLNS + `><m:nary><m:naryPr><m:chr m:val="∑"/>` +
+				`<m:subHide/><m:supHide/></m:naryPr>` +
+				`<m:sub>` + mrun("i=1") + `</m:sub><m:sup>` + mrun("n") + `</m:sup>` +
+				`<m:e>` + mrun("i") + `</m:e>` +
+				`</m:nary></m:oMath>`,
+			want: "\\sum i",
 		},
 		{
 			// Without limits to close it, the operator command would run into
