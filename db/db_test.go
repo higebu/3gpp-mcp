@@ -1193,6 +1193,21 @@ func TestExtractReferences_UnicodeWhitespace(t *testing.T) {
 	}
 }
 
+// Regression test for #191: a keyword at the end of one block and a section
+// number at the start of the next are two blocks, not a reference.
+func TestExtractReferences_NoMatchAcrossBlankLine(t *testing.T) {
+	content := "The requirements are specified in TS 33.203 clause\n\n" +
+		"5.1 is out of scope of the present document."
+
+	refs := ExtractReferences("TS 24.229", "5.1", content, nil)
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 reference, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].TargetSpec != "TS 33.203" || refs[0].TargetSection != "" {
+		t.Errorf("expected a section-less reference to TS 33.203, got %+v", refs[0])
+	}
+}
+
 func TestExtractReferences_Annex(t *testing.T) {
 	// "TS X Annex Y" pattern (keyword after spec ID)
 	content := `The security procedures are described in TS 33.203 Annex H.
