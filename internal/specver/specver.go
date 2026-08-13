@@ -106,11 +106,17 @@ func IsDotted(s string) bool {
 // counterpart, and callers display whichever form they have.
 func Normalize(s string) (dotted, token string, err error) {
 	s = strings.TrimSpace(s)
-	// A leading v/V is decoration only in the dotted notation ("v18.6.0").
-	// In a token it is the base-36 digit 31 ("va0" is 31.10.0), so strip the
-	// prefix only when a dotted version follows.
-	if len(s) > 1 && (s[0] == 'v' || s[0] == 'V') && IsDotted(s[1:]) {
-		s = s[1:]
+	// A leading v/V is decoration in the dotted notation ("v18.6.0") and in
+	// front of a token ("v920" is the token 920) — but it is also the base-36
+	// digit 31, so a three-character input like "va0" is itself a token
+	// (31.10.0), not a prefixed "a0". Strip the prefix only when what follows
+	// is a dotted version or a full-length token.
+	if len(s) > 1 && (s[0] == 'v' || s[0] == 'V') {
+		if rest := s[1:]; IsDotted(rest) {
+			s = rest
+		} else if _, ok := TokenToDotted(strings.ToLower(rest)); ok && len(s) != tokenLength {
+			s = rest
+		}
 	}
 	if s == "" {
 		return "", "", fmt.Errorf("empty version")

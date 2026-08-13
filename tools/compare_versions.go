@@ -187,7 +187,11 @@ func familyPartsHint(ctx context.Context, src *Source, specID string, oldErr, ne
 	if oldErr == nil || newErr == nil {
 		return nil
 	}
-	if parts, err := src.DB.FindSpecIDsByFamily(ctx, specID); err == nil && len(parts) > 0 {
+	parts, err := src.DB.FindSpecIDsByFamily(ctx, specID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to check %s for parts: %v", specID, err))
+	}
+	if len(parts) > 0 {
 		return errorResult(fmt.Sprintf("%s has multiple parts: %s — specify one", specID, strings.Join(parts, ", ")))
 	}
 	return nil

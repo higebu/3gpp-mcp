@@ -163,12 +163,6 @@ func (p *Pipeline) processOne(ctx context.Context, spec *SpecVersion) (string, e
 		return "FAILED", err
 	}
 
-	// Import OpenAPI YAML before the docx status gate: DownloadAndExtract
-	// extracts the _yaml directory even when the archive holds no usable
-	// document, and a spec whose only artifact is YAML must still reach
-	// openapi_specs.
-	p.importYAML(tmpDir)
-
 	if result.Status != "OK" {
 		if result.Status == "DOC_ONLY" && p.ConvertDoc {
 			docDir := filepath.Join(tmpDir, "_doc_files")
@@ -196,6 +190,13 @@ func (p *Pipeline) processOne(ctx context.Context, spec *SpecVersion) (string, e
 			}
 		}
 		if result.Status != "OK" {
+			// No document text will be imported, so the YAML is this spec's
+			// only artifact: DownloadAndExtract extracted it before deciding
+			// DOC_ONLY/NO_DOC, and skipping it here would keep the spec out
+			// of openapi_specs entirely. Mid-parse failures below deliberately
+			// do not import, so a FAILED spec cannot advance openapi_specs
+			// ahead of its text.
+			p.importYAML(tmpDir)
 			return result.Status, nil
 		}
 	}
@@ -259,6 +260,9 @@ func (p *Pipeline) processOne(ctx context.Context, spec *SpecVersion) (string, e
 			return "FAILED", fmt.Errorf("db insert: %w", err)
 		}
 	}
+
+	// Import YAML files if present
+	p.importYAML(tmpDir)
 
 	return "OK", nil
 }

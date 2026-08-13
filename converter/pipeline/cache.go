@@ -61,15 +61,20 @@ func CacheKey(prefix string, params ...string) string {
 }
 
 // sanitizeKeyPart keeps a cache-key parameter to filename-safe characters.
+// Every other byte becomes %XX (with % itself encoded), so distinct
+// parameters can never collide onto the same cache file.
 func sanitizeKeyPart(s string) string {
-	return strings.Map(func(r rune) rune {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-':
-			return r
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '.':
+			b.WriteByte(c)
 		default:
-			return '.'
+			fmt.Fprintf(&b, "%%%02X", c)
 		}
-	}, s)
+	}
+	return b.String()
 }
 
 // LoadCache reads cached entries from a file if it exists and is within TTL.

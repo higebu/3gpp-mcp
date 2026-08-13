@@ -84,6 +84,8 @@ func TestNormalize(t *testing.T) {
 		{in: "k2", dotted: "", token: "k2", desc: "odd token kept as-is"},
 		{in: "va0", dotted: "31.10.0", token: "va0", desc: "token starting with the digit v"},
 		{in: "v00", dotted: "31.0.0", token: "v00", desc: "token v00 is release 31, not a prefixed 00"},
+		{in: "v920", dotted: "9.2.0", token: "920", desc: "v prefix on a token"},
+		{in: "V920", dotted: "9.2.0", token: "920", desc: "uppercase prefix on a token"},
 		{in: "018.6.0", dotted: "18.6.0", token: "i60", desc: "leading zeros canonicalized"},
 		{in: "18.6", wantErr: true, desc: "two components"},
 		{in: "+18.6.0", wantErr: true, desc: "signed component"},
