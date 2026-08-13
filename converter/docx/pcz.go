@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
-	"io"
 )
 
 // gzipMagic is the magic number at the start of a gzip stream.
@@ -30,7 +29,7 @@ func decompressPCZ(data []byte) ([]byte, error) {
 	}
 	defer r.Close()
 
-	raw, err := io.ReadAll(r)
+	raw, err := readAllLimited(r, "pcz payload")
 	if err != nil {
 		return nil, fmt.Errorf("gzip decompress: %w", err)
 	}

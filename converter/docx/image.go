@@ -2,7 +2,6 @@ package docx
 
 import (
 	"archive/zip"
-	"io"
 	"path/filepath"
 	"strings"
 )
@@ -81,5 +80,5 @@ func readZipFileEntry(f *zip.File) ([]byte, error) {
 		return nil, err
 	}
 	defer rc.Close()
-	return io.ReadAll(rc)
+	return readAllLimited(rc, f.Name)
 }

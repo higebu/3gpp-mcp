@@ -847,6 +847,25 @@ func getHeadingLevel(styleName string) int {
 	return 0
 }
 
+// maxEntrySize caps how far a single archive entry may decompress. Zip and
+// gzip size metadata is attacker-controlled, so the guard sits on the read
+// itself: a crafted entry could otherwise expand without bound (a zip bomb)
+// before any content validation runs. The largest document.xml in the 3GPP
+// corpus is far below this.
+const maxEntrySize = 1 << 30 // 1 GiB
+
+// readAllLimited reads r to EOF but fails once the data exceeds maxEntrySize.
+func readAllLimited(r io.Reader, what string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxEntrySize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxEntrySize {
+		return nil, fmt.Errorf("%s exceeds %d bytes decompressed", what, maxEntrySize)
+	}
+	return data, nil
+}
+
 // readZipFile reads a file from within a zip archive.
 func readZipFile(r *zip.Reader, name string) ([]byte, error) {
 	for _, f := range r.File {
@@ -856,7 +875,7 @@ func readZipFile(r *zip.Reader, name string) ([]byte, error) {
 				return nil, err
 			}
 			defer rc.Close()
-			return io.ReadAll(rc)
+			return readAllLimited(rc, name)
 		}
 	}
 	return nil, fmt.Errorf("file not found in zip: %s", name)
