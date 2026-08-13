@@ -60,28 +60,40 @@ func DownloadAndExtract(ctx context.Context, client *http.Client, spec *SpecVers
 
 	result := &DownloadResult{SpecID: spec.SpecID}
 
+	// backoff sleeps before the next retry, or reports false immediately
+	// when ctx is cancelled: retrying a cancelled download cannot succeed,
+	// and each worker sitting out its full backoff would stall shutdown.
+	backoff := func(attempt int) bool {
+		t := time.NewTimer(time.Duration(1<<uint(attempt+1)) * time.Second)
+		defer t.Stop()
+		select {
+		case <-t.C:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
 	var lastErr error
 	for attempt := range 3 {
 		data, err := downloadZip(ctx, client, spec.URL)
 		if err != nil {
 			lastErr = err
-			if attempt < 2 {
-				time.Sleep(time.Duration(1<<uint(attempt+1)) * time.Second)
+			if attempt < 2 && backoff(attempt) {
 				continue
 			}
 			result.Status = "FAILED"
-			return result, fmt.Errorf("download failed after 3 attempts: %w", lastErr)
+			return result, fmt.Errorf("download failed after %d attempt(s): %w", attempt+1, lastErr)
 		}
 
 		r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 		if err != nil {
 			lastErr = err
-			if attempt < 2 {
-				time.Sleep(time.Duration(1<<uint(attempt+1)) * time.Second)
+			if attempt < 2 && backoff(attempt) {
 				continue
 			}
 			result.Status = "FAILED"
-			return result, fmt.Errorf("bad zip after 3 attempts: %w", lastErr)
+			return result, fmt.Errorf("bad zip after %d attempt(s): %w", attempt+1, lastErr)
 		}
 
 		if err := os.MkdirAll(outputDir, 0o700); err != nil {

@@ -66,9 +66,14 @@ func foldName(name string) string {
 }
 
 // foldAlt maps an alt text that adds no information beyond the filename to
-// the "Figure" default the converter uses.
+// the "Figure" default the converter uses. The comparison uses foldName on
+// both sides so a filename-shaped alt still folds against a
+// collision-disambiguated conversion name: alt "image1.wmf" must match name
+// "image1.wmf.png" the same way it matches the unconverted "image1.wmf", or
+// the two sides of a compare would fold differently and a pure conversion
+// difference would show up as a content change.
 func foldAlt(alt, name string) string {
-	if alt == "" || alt == name ||
+	if alt == "" || alt == name || foldName(alt) == foldName(name) ||
 		strings.TrimSuffix(alt, path.Ext(alt)) == strings.TrimSuffix(name, path.Ext(name)) {
 		return "Figure"
 	}
