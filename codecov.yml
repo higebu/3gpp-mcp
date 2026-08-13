@@ -1,0 +1,4 @@
+ignore:
+  # Playwright e2e server harness: test infrastructure, exercised by the
+  # e2e CI job rather than go test, so it carries no Go coverage.
+  - "e2e/**"
