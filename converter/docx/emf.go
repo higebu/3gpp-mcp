@@ -62,13 +62,13 @@ func assignConvertedImages(images map[string]*EmbeddedImage, items []*batchItem)
 	// image1.wmf, kept side by side per the batchItem doc comment above)
 	// would otherwise both convert to "image1.png" and collide: whichever
 	// is assigned last in the map below silently discards the other's image
-	// data. Count how many successfully converted items want each plain PNG
-	// name so colliding items can be given a name that keeps them distinct.
+	// data. Count how many items want each plain PNG name so colliding items
+	// can be given a name that keeps them distinct. Failed items count too:
+	// if image1.wmf failed to convert, naming the surviving sibling plainly
+	// "image1.png" would let UpdateImagePlaceholders' base-name fallback
+	// rewrite image://image1.wmf to the EMF sibling's content.
 	nameCount := make(map[string]int, len(items))
 	for _, item := range items {
-		if item.err != nil {
-			continue
-		}
 		nameCount[toPNGName(item.original.Name)]++
 	}
 

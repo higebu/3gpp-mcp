@@ -3,6 +3,7 @@ package docx
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -174,6 +175,32 @@ func TestAssignConvertedImages_NameCollision(t *testing.T) {
 	// image2.emf has no colliding sibling, so it keeps the plain name.
 	if got, want := images["image2.emf"].Name, "image2.png"; got != want {
 		t.Errorf("non-colliding image name = %q, want %q", got, want)
+	}
+}
+
+// TestAssignConvertedImages_CollisionWithFailedSibling verifies that a
+// surviving image is still disambiguated when its same-base-name sibling
+// failed to convert. A plain "image1.png" here would let
+// UpdateImagePlaceholders' base-name fallback rewrite the failed sibling's
+// image://image1.wmf reference to the EMF sibling's content.
+func TestAssignConvertedImages_CollisionWithFailedSibling(t *testing.T) {
+	images := map[string]*EmbeddedImage{
+		"image1.emf": {Name: "image1.emf", MIMEType: "image/x-emf", Data: []byte("emf-src")},
+		"image1.wmf": {Name: "image1.wmf", MIMEType: "image/x-wmf", Data: []byte("wmf-src")},
+	}
+	items := []*batchItem{
+		{key: "image1.emf", original: images["image1.emf"], pngData: []byte("emf-png")},
+		{key: "image1.wmf", original: images["image1.wmf"], err: errors.New("soffice produced no output")},
+	}
+
+	if n := assignConvertedImages(images, items); n != 1 {
+		t.Fatalf("assignConvertedImages converted %d images, want 1", n)
+	}
+	if got, want := images["image1.emf"].Name, "image1.emf.png"; got != want {
+		t.Errorf("surviving sibling name = %q, want %q (must stay disambiguated)", got, want)
+	}
+	if got, want := images["image1.wmf"].Name, "image1.wmf"; got != want {
+		t.Errorf("failed sibling name = %q, want %q (must stay unconverted)", got, want)
 	}
 }
 
