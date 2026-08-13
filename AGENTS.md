@@ -17,6 +17,7 @@ go test ./...             # Run tests (-short skips tests that hit the 3GPP FTP)
 gofmt -l . && go vet ./... && golangci-lint run   # Lint (CI also runs go test -race)
 make build-db             # Download + import latest version of every spec (RELEASE=19 for one release, MAX_RELEASE=19 to cap)
 make web                  # HTTP server with web viewer at :8080
+make e2e                  # Playwright suite for web viewer JS behavior (CI job "e2e"); hermetic server harness in e2e/e2eserver
 ```
 
 ## Package Map
