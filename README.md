@@ -338,6 +338,16 @@ readable whether it stands alone or sits in a sentence:
 | `$$...$$` | Display equations that cannot be a fenced block — inside a table cell or a list item. |
 | `$...$` | A formula inside a sentence. |
 
+### Indentation
+
+3GPP prose encodes structure in indentation — nested requirement and
+condition lists, multi-level definitions. A body paragraph's leading
+whitespace is preserved as no-break spaces (U+00A0), one tab of the source
+document becoming four: a literal tab or 4+ leading spaces would turn the
+line into an indented code block in Markdown (inside which HTML like
+`<sub>` is never interpreted), while no-break spaces keep the visual
+nesting in any renderer and stay out of the way of full-text search.
+
 ## Tips
 
 ### Separate databases per release

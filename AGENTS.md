@@ -89,6 +89,12 @@ make web                  # HTTP server with web viewer at :8080
   `ommlToLaTeX` guarantees the LaTeX carries no `<`/`>` (`escapeMathAngles`),
   which is why `converter/docx/table.go` can write cell math unescaped and
   keep `&` as a matrix column separator.
+- **Paragraph indentation is preserved as no-break spaces** (U+00A0, one
+  source tab = four): trimming it destroyed list nesting (issue #188), and
+  keeping literal tabs/spaces would reopen the CommonMark indented-code-block
+  problem (issue #25). `preserveIndent` in `converter/docx/paragraph.go` is
+  the single place the rewrite happens; like fence/notation changes, touching
+  it needs a rebuild and a `versionstore.cacheSchemaVersion` bump.
 - **HTTP transport runs stateless** (`StreamableHTTPOptions{Stateless: true}`)
   — required to serve MCP protocol 2026-07-28; older protocol versions get
   per-request sessions.
