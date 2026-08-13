@@ -74,7 +74,9 @@ test:
 # Run Playwright end-to-end tests for the web viewer (requires Node.js).
 # Set CHROMIUM_PATH to use a system Chromium instead of the managed download.
 e2e:
-	cd e2e && npm ci && npx playwright install chromium && npx playwright test
+	cd e2e && npm ci && \
+	if [ -z "$$CHROMIUM_PATH" ]; then npx playwright install chromium; fi && \
+	npx playwright test
 
 # Clean build artifacts
 clean:
