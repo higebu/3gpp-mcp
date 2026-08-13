@@ -3,7 +3,7 @@
 How much does 3gpp-mcp improve LLM accuracy on 3GPP questions, and how much of
 that a plain search baseline — or the same agent stopped one round in — already
 reaches. Measured with
-[teleqna-eval](https://github.com/higebu/teleqna-eval) on two task sets:
+[3gpp-mcp-bench](https://github.com/higebu/3gpp-mcp-bench) on two task sets:
 [TeleQnA](https://github.com/netop-team/TeleQnA), and tasks generated from the
 specification documents themselves.
 
@@ -410,4 +410,4 @@ is published instead is the protocol, the pinned database identifier, and the
 harness that regenerates every figure from a dataset you obtain yourself.
 
 Harness, full methodology and reproduction scripts:
-[higebu/teleqna-eval](https://github.com/higebu/teleqna-eval).
+[higebu/3gpp-mcp-bench](https://github.com/higebu/3gpp-mcp-bench).
