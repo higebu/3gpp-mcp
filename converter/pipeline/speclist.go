@@ -105,11 +105,19 @@ func SpecVersionString(sv *SpecVersion) string {
 	return sv.Version
 }
 
+// isZipName reports whether name is a zip entry. The match must not be
+// case-sensitive: a handful of legacy directories carry uppercase extensions
+// — 08_series/08.09 holds 0809-301.ZIP — and a case-sensitive match dropped
+// those specs from every build without a trace (issue #211).
+func isZipName(name string) bool {
+	return len(name) >= 4 && strings.EqualFold(name[len(name)-4:], ".zip")
+}
+
 // ParseSpecEntry parses a spec list entry like "23_series/23.501/23501-k10.zip"
 // or "38_series/38.101-1/38101-1-j50.zip".
 func ParseSpecEntry(entry string) *SpecVersion {
 	entry = strings.TrimSpace(entry)
-	if entry == "" || !strings.HasSuffix(entry, ".zip") {
+	if entry == "" || !isZipName(entry) {
 		return nil
 	}
 
@@ -132,8 +140,10 @@ func ParseSpecEntry(entry string) *SpecVersion {
 	// The version is the final hyphen-delimited token of the filename, e.g.
 	// "k10" in "23501-k10.zip" or "j50" in "38101-1-j50.zip". Each character is
 	// a base-36 digit; the first character encodes the release (a=10, k=20, ...,
-	// and plain digits for legacy releases such as "300" -> release 3).
-	base := strings.TrimSuffix(filename, ".zip")
+	// and plain digits for legacy releases such as "300" -> release 3). The
+	// suffix was matched case-insensitively, so trim by length, and lowercase
+	// the token: 11_series/11.20 writes its one version as 1120-3J0.ZIP.
+	base := filename[:len(filename)-len(".zip")]
 	idx := strings.LastIndex(base, "-")
 	if idx < 0 {
 		return nil
@@ -214,19 +224,20 @@ func FetchSpecZips(ctx context.Context, client *http.Client, specID string, useC
 	links := extractLinks(html)
 	var entries []string
 	for _, name := range links {
-		if strings.HasSuffix(name, ".zip") {
+		if isZipName(name) {
 			entries = append(entries, seriesDir+"/"+specDir+"/"+name)
 		}
 	}
 	log.Printf("Found %d versions for %s", len(entries), specDir)
 
 	if useCache {
-		// A listing with no .zip in it is not a real answer: every spec
-		// directory in the archive holds at least one version, so an empty
-		// result means the response was unusable (an error page served as
-		// 200, a redirect, a truncated body). Caching it would pin the spec
-		// to "no versions available" for the whole TTL, because an empty
-		// cache file counts as a hit and never triggers a re-fetch.
+		// A listing with no zip in it is usually not a real answer — an
+		// error page served as 200, a redirect, a truncated body — though a
+		// few legacy directories genuinely hold no versions (issue #211).
+		// Either way, don't cache it: caching would pin the spec to "no
+		// versions available" for the whole TTL, because an empty cache
+		// file counts as a hit and never triggers a re-fetch, and for the
+		// rare genuinely empty directory a re-fetch costs one page.
 		// FetchSpecList refuses to cache its own partial results for the
 		// same reason.
 		if len(entries) == 0 {
@@ -327,11 +338,16 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			// Every series directory holds spec directories; none means the
-			// response was unusable, same as a failed fetch.
+			// A listing page always carries anchors — even an empty archive
+			// directory keeps its breadcrumb and sort links — while the
+			// WAF's block page carries none at all. So a page without a
+			// single anchor is an unusable response, same as a failed
+			// fetch, and a page with anchors but no spec directories is a
+			// genuinely empty series: 47_series exists in the archive and
+			// holds nothing (issue #211).
 			html, err := fetchPageRetry(ctx, client, baseURL+sd+"/", func(html string) error {
-				if !slices.ContainsFunc(extractLinks(html), specDirRE.MatchString) {
-					return fmt.Errorf("listing contains no spec directories")
+				if len(extractLinks(html)) == 0 {
+					return fmt.Errorf("listing contains no links")
 				}
 				return nil
 			})
@@ -345,6 +361,9 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 				if specDirRE.MatchString(name) {
 					specDirs = append(specDirs, name)
 				}
+			}
+			if len(specDirs) == 0 {
+				log.Printf("%s: empty series directory (no spec directories); skipping", sd)
 			}
 			mu.Lock()
 			for _, name := range specDirs {
@@ -368,14 +387,15 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			// Every spec directory in the archive holds at least one version
-			// (FetchSpecZips relies on the same invariant), so a page with no
-			// .zip links is an unusable response, same as a failed fetch.
+			// Same rule as the series level: no anchors at all is a block
+			// page served as 200 and retries like a failed fetch, while
+			// anchors without a zip entry is a genuinely empty directory —
+			// seven exist in the archive, 00_series/00.02 among them
+			// (issue #211) — and contributes nothing without failing the
+			// build.
 			html, err := fetchPageRetry(ctx, client, baseURL+pair.seriesDir+"/"+pair.specDir+"/", func(html string) error {
-				if !slices.ContainsFunc(extractLinks(html), func(name string) bool {
-					return strings.HasSuffix(name, ".zip")
-				}) {
-					return fmt.Errorf("listing contains no .zip entries")
+				if len(extractLinks(html)) == 0 {
+					return fmt.Errorf("listing contains no links")
 				}
 				return nil
 			})
@@ -386,9 +406,12 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 			}
 			var zips []string
 			for _, name := range extractLinks(html) {
-				if strings.HasSuffix(name, ".zip") {
+				if isZipName(name) {
 					zips = append(zips, pair.seriesDir+"/"+pair.specDir+"/"+name)
 				}
+			}
+			if len(zips) == 0 {
+				log.Printf("%s/%s: empty spec directory (no zip entries); skipping", pair.seriesDir, pair.specDir)
 			}
 			mu.Lock()
 			entries = append(entries, zips...)
