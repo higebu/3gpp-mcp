@@ -1041,3 +1041,23 @@ func TestFetchSpecZips_UppercaseZipIncluded(t *testing.T) {
 		t.Fatalf("entries = %v, want the uppercase .ZIP entry", entries)
 	}
 }
+
+// TestFetchSpecList_BlockPageWithLinksIsFailure verifies the empty-directory
+// classification requires the listing UI's own sort anchors: a block page
+// that happens to carry an unrelated link must still count as an unusable
+// response, not as a genuinely empty directory.
+func TestFetchSpecList_BlockPageWithLinksIsFailure(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("THREEGPP_LISTING_RETRY_MS", "0")
+
+	ts := issueArchive(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>Blocked. <a href="https://example.com/support">Contact support</a></body></html>`)
+	})
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	_, err := FetchSpecList(context.Background(), client, nil, false, 2)
+	var partial *PartialSpecListError
+	if !errors.As(err, &partial) {
+		t.Fatalf("FetchSpecList err = %v, want *PartialSpecListError", err)
+	}
+}

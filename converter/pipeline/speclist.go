@@ -113,6 +113,18 @@ func isZipName(name string) bool {
 	return len(name) >= 4 && strings.EqualFold(name[len(name)-4:], ".zip")
 }
 
+// hasListingChrome reports whether the extracted links carry the archive
+// listing UI's own sort anchors (href="?sortby=name" and friends). Every real
+// listing page has them, a genuinely empty directory included, while an error
+// page served as 200 does not — so their presence is what separates "this
+// directory really is empty" from "this response is not a listing", and a
+// block page that happens to carry unrelated links still counts as unusable.
+func hasListingChrome(links []string) bool {
+	return slices.ContainsFunc(links, func(name string) bool {
+		return strings.HasPrefix(name, "?sortby=")
+	})
+}
+
 // ParseSpecEntry parses a spec list entry like "23_series/23.501/23501-k10.zip"
 // or "38_series/38.101-1/38101-1-j50.zip".
 func ParseSpecEntry(entry string) *SpecVersion {
@@ -338,16 +350,15 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			// A listing page always carries anchors — even an empty archive
-			// directory keeps its breadcrumb and sort links — while the
-			// WAF's block page carries none at all. So a page without a
-			// single anchor is an unusable response, same as a failed
-			// fetch, and a page with anchors but no spec directories is a
-			// genuinely empty series: 47_series exists in the archive and
-			// holds nothing (issue #211).
+			// A page with spec directories is a listing; a page without
+			// them counts as a listing only if it carries the listing UI's
+			// own sort anchors — then it is a genuinely empty series, like
+			// 47_series (issue #211). Anything else is an unusable
+			// response, same as a failed fetch.
 			html, err := fetchPageRetry(ctx, client, baseURL+sd+"/", func(html string) error {
-				if len(extractLinks(html)) == 0 {
-					return fmt.Errorf("listing contains no links")
+				links := extractLinks(html)
+				if !slices.ContainsFunc(links, specDirRE.MatchString) && !hasListingChrome(links) {
+					return fmt.Errorf("listing contains no spec directories")
 				}
 				return nil
 			})
@@ -361,9 +372,6 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 				if specDirRE.MatchString(name) {
 					specDirs = append(specDirs, name)
 				}
-			}
-			if len(specDirs) == 0 {
-				log.Printf("%s: empty series directory (no spec directories); skipping", sd)
 			}
 			mu.Lock()
 			for _, name := range specDirs {
@@ -387,15 +395,17 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			// Same rule as the series level: no anchors at all is a block
-			// page served as 200 and retries like a failed fetch, while
-			// anchors without a zip entry is a genuinely empty directory —
-			// seven exist in the archive, 00_series/00.02 among them
-			// (issue #211) — and contributes nothing without failing the
-			// build.
+			// Same rule as the series level: a page with zip entries is a
+			// listing, a page with the sort anchors but no entries is a
+			// genuinely empty directory — seven exist in the archive,
+			// 00_series/00.02 among them (issue #211) — and contributes
+			// nothing without failing the build. Anything else, including
+			// a block page that happens to carry unrelated links, retries
+			// like a failed fetch.
 			html, err := fetchPageRetry(ctx, client, baseURL+pair.seriesDir+"/"+pair.specDir+"/", func(html string) error {
-				if len(extractLinks(html)) == 0 {
-					return fmt.Errorf("listing contains no links")
+				links := extractLinks(html)
+				if !slices.ContainsFunc(links, isZipName) && !hasListingChrome(links) {
+					return fmt.Errorf("listing contains no .zip entries")
 				}
 				return nil
 			})
