@@ -46,7 +46,7 @@ func ListVersions(ctx context.Context, client *http.Client, specID string, useCa
 		}
 	}
 	sort.Slice(versions, func(i, j int) bool {
-		return versionKey(versions[i]) > versionKey(versions[j])
+		return compareVersions(versions[i], versions[j]) > 0
 	})
 	return versions, nil
 }

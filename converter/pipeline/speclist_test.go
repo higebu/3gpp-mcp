@@ -59,32 +59,74 @@ func TestParseSpecEntry(t *testing.T) {
 	}
 }
 
-func TestIsNewerVersion(t *testing.T) {
-	tests := []struct {
-		newVer, oldVer string
-		want           bool
-	}{
-		{"k10", "j60", true},
-		{"j60", "k10", false},
-		{"k10", "k10", false},
-		{"k20", "k10", true},
-		{"a01", "", true},
-		{"", "", true}, // oldVer=="" always returns true
-		{"300", "200", true},
-		{"200", "300", false},
-		// Base-36 versions: "fa0" (technical=10) is newer than "f20".
-		{"fa0", "f20", true},
-		{"f20", "fa0", false},
-		{"j50", "j40", true},
+func TestCompareVersions(t *testing.T) {
+	entry := func(t *testing.T, e string) *SpecVersion {
+		t.Helper()
+		sv := ParseSpecEntry(e)
+		if sv == nil {
+			t.Fatalf("ParseSpecEntry(%q) = nil", e)
+		}
+		return sv
 	}
-
+	tests := []struct {
+		name string
+		a, b string // archive entries
+		want int    // sign of compareVersions(a, b)
+	}{
+		{"newer release wins", "23_series/23.501/23501-k10.zip", "23_series/23.501/23501-j60.zip", 1},
+		{"older release loses", "23_series/23.501/23501-j60.zip", "23_series/23.501/23501-k10.zip", -1},
+		{"same version ties", "23_series/23.501/23501-k10.zip", "23_series/23.501/23501-k10.zip", 0},
+		{"minor decides within release", "23_series/23.501/23501-k20.zip", "23_series/23.501/23501-k10.zip", 1},
+		{"legacy vs letter era", "37_series/37.571-5/37571-5-j10.zip", "37_series/37.571-5/37571-5-100.zip", 1},
+		{"base36 minor", "34_series/34.108/34108-fa0.zip", "34_series/34.108/34108-f20.zip", 1},
+		// A long token's remainder must stay inside the minor component
+		// instead of bleeding into the release comparison: release 18 with a
+		// huge minor ("izzz") still loses to release 20 ("k00").
+		{"long token cannot outrank a newer release", "23_series/23.501/23501-izzz.zip", "23_series/23.501/23501-k00.zip", -1},
+	}
 	for _, tt := range tests {
-		t.Run(tt.newVer+"_vs_"+tt.oldVer, func(t *testing.T) {
-			got := IsNewerVersion(tt.newVer, tt.oldVer)
-			if got != tt.want {
-				t.Errorf("IsNewerVersion(%q, %q) = %v, want %v", tt.newVer, tt.oldVer, got, tt.want)
+		t.Run(tt.name, func(t *testing.T) {
+			got := compareVersions(entry(t, tt.a), entry(t, tt.b))
+			switch {
+			case tt.want > 0 && got <= 0, tt.want < 0 && got >= 0, tt.want == 0 && got != 0:
+				t.Errorf("compareVersions = %d, want sign %d", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestFilterSpecs_LatestAcrossTokenEras pits legacy all-digit tokens against
+// letter-era tokens through the real parser, in several input orders: the
+// newest version must win regardless of how the archive listed the files.
+func TestFilterSpecs_LatestAcrossTokenEras(t *testing.T) {
+	entries := []string{
+		"37_series/37.571-5/37571-5-100.zip",
+		"37_series/37.571-5/37571-5-200.zip",
+		"37_series/37.571-5/37571-5-g50.zip",
+		"37_series/37.571-5/37571-5-i10.zip",
+		"37_series/37.571-5/37571-5-j10.zip",
+	}
+	orders := [][]int{
+		{0, 1, 2, 3, 4},
+		{4, 3, 2, 1, 0},
+		{2, 4, 0, 3, 1},
+	}
+	for _, order := range orders {
+		var specs []*SpecVersion
+		for _, i := range order {
+			sv := ParseSpecEntry(entries[i])
+			if sv == nil {
+				t.Fatalf("ParseSpecEntry(%q) = nil", entries[i])
+			}
+			specs = append(specs, sv)
+		}
+		got := FilterSpecs(specs, SpecFilter{LatestOnly: true})
+		if len(got) != 1 {
+			t.Fatalf("order %v: expected 1 spec, got %d", order, len(got))
+		}
+		if got[0].Version != "j10" {
+			t.Errorf("order %v: latest = %q, want %q", order, got[0].Version, "j10")
+		}
 	}
 }
 

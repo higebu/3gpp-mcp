@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -74,14 +75,15 @@ func base36Digit(c byte) int {
 }
 
 // versionValue converts a base-36 version token into a comparable integer.
-// Returns 0 if the token contains an invalid character.
+// Returns -1 if the token contains an invalid character, so garbage never
+// compares equal to a legitimate all-zero token.
 func versionValue(v string) int64 {
 	v = strings.ToLower(strings.TrimSpace(v))
 	var n int64
 	for i := 0; i < len(v); i++ {
 		d := base36Digit(v[i])
 		if d < 0 {
-			return 0
+			return -1
 		}
 		n = n*36 + int64(d)
 	}
@@ -146,14 +148,6 @@ func ParseSpecEntry(entry string) *SpecVersion {
 		Release:       base36Digit(token[0]),
 		URL:           baseURL + entry,
 	}
-}
-
-// IsNewerVersion compares version strings (e.g., "k10" vs "j60").
-func IsNewerVersion(newVer, oldVer string) bool {
-	if oldVer == "" {
-		return true
-	}
-	return versionValue(newVer) > versionValue(oldVer)
 }
 
 // FetchSpecZips fetches zip file entries for a single spec directly,
@@ -451,7 +445,7 @@ func FilterSpecs(specs []*SpecVersion, f SpecFilter) []*SpecVersion {
 		best := make(map[string]*SpecVersion)
 		for _, s := range filtered {
 			key := s.SpecID
-			if existing, ok := best[key]; !ok || versionKey(s) > versionKey(existing) {
+			if existing, ok := best[key]; !ok || compareVersions(s, existing) > 0 {
 				best[key] = s
 			}
 		}
@@ -468,8 +462,20 @@ func FilterSpecs(specs []*SpecVersion, f SpecFilter) []*SpecVersion {
 	return filtered
 }
 
-func versionKey(s *SpecVersion) int64 {
-	return int64(s.Release)*10000 + int64(s.VersionMinor)
+// compareVersions orders two versions of the same spec: release first, then
+// the base-36 value of the token's remainder. Comparing the components keeps
+// a large VersionMinor — possible because versionTokenRE puts no upper bound
+// on token length — from bleeding into the release, which the previous
+// Release*10000+VersionMinor key allowed. The raw token is the final
+// tie-break so ties resolve deterministically regardless of input order.
+func compareVersions(a, b *SpecVersion) int {
+	if c := cmp.Compare(a.Release, b.Release); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.VersionMinor, b.VersionMinor); c != 0 {
+		return c
+	}
+	return strings.Compare(a.Version, b.Version)
 }
 
 func fetchPage(ctx context.Context, client *http.Client, url string) (string, error) {
