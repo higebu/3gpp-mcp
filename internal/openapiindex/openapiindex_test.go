@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/testutil"
 )
 

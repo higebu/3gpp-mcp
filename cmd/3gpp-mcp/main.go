@@ -18,13 +18,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/higebu/3gpp-mcp/converter/pipeline"
-	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/converter/pipeline"
+	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/openapiindex"
 	"github.com/higebu/3gpp-mcp/internal/specver"
-	"github.com/higebu/3gpp-mcp/tools"
-	"github.com/higebu/3gpp-mcp/versionstore"
-	"github.com/higebu/3gpp-mcp/web"
+	"github.com/higebu/3gpp-mcp/internal/tools"
+	"github.com/higebu/3gpp-mcp/internal/versionstore"
+	"github.com/higebu/3gpp-mcp/internal/web"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

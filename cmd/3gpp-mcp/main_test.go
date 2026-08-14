@@ -25,10 +25,10 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/higebu/3gpp-mcp/converter/pipeline"
-	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/converter/pipeline"
+	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/testutil"
-	"github.com/higebu/3gpp-mcp/tools"
+	"github.com/higebu/3gpp-mcp/internal/tools"
 
 	_ "modernc.org/sqlite"
 )

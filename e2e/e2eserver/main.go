@@ -17,10 +17,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/testutil"
-	"github.com/higebu/3gpp-mcp/tools"
-	"github.com/higebu/3gpp-mcp/web"
+	"github.com/higebu/3gpp-mcp/internal/tools"
+	"github.com/higebu/3gpp-mcp/internal/web"
 )
 
 // e2eSeed extends testutil.SeedData with content the Playwright suite needs:

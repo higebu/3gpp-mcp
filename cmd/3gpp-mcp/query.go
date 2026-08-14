@@ -21,11 +21,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/structdiff"
 	"github.com/higebu/3gpp-mcp/internal/textdiff"
-	"github.com/higebu/3gpp-mcp/tools"
-	"github.com/higebu/3gpp-mcp/versionstore"
+	"github.com/higebu/3gpp-mcp/internal/tools"
+	"github.com/higebu/3gpp-mcp/internal/versionstore"
 )
 
 // queryFlags holds the flags shared by every query subcommand.

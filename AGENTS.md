@@ -26,10 +26,10 @@ make e2e                  # Playwright suite for web viewer JS behavior (CI job 
   update, plus query subcommands mirroring the MCP read tools 1:1 in `query.go`).
   New subcommands register in the `commands` slice in `main.go` — dispatch, the
   usage line and the shell completion scripts are all generated from it
-- `converter/docx/` — DOCX → Markdown parser; `converter/pipeline/` — streaming download + convert worker pool
-- `db/` — SQLite schema, queries, FTS5
-- `versionstore/` — on-demand cache of spec versions not in the prebuilt database
-- `tools/` — MCP tool handlers; `web/` — web viewer (reads through the same `tools.Source`, so it is version-aware)
+- `internal/converter/docx/` — DOCX → Markdown parser; `internal/converter/pipeline/` — streaming download + convert worker pool
+- `internal/db/` — SQLite schema, queries, FTS5
+- `internal/versionstore/` — on-demand cache of spec versions not in the prebuilt database
+- `internal/tools/` — MCP tool handlers; `internal/web/` — web viewer (reads through the same `tools.Source`, so it is version-aware)
 - `internal/specver/` — base-36 archive token (`k20`) ↔ dotted version (`20.2.0`)
 - `internal/structdiff/`, `internal/textdiff/` — compare_versions diff logic, shared with the web compare page
 
@@ -75,10 +75,10 @@ make e2e                  # Playwright suite for web viewer JS behavior (CI job 
 - **Tagged code fences** (` ```asn1 `, ` ```diameter `, ` ```xml `, ` ```sip `,
   ` ```sdp `, ` ```latex `): Diameter, XML, SIP and SDP blocks carry no code
   style in the source documents and are detected by content
-  (`converter/docx/xmlblock.go`, `converter/docx/sipblock.go`); paragraphs
+  (`internal/converter/docx/xmlblock.go`, `internal/converter/docx/sipblock.go`); paragraphs
   already fenced via style/font keep bare ` ``` ` fences and never enter
   content detection. ` ```latex ` is structural, not content-detected:
-  `mathFenceBody` (`converter/docx/mathblock.go`) promotes a paragraph whose
+  `mathFenceBody` (`internal/converter/docx/mathblock.go`) promotes a paragraph whose
   only content is one formula. Changing fence or notation output requires a
   database rebuild (`make build-db`) and a bump of
   `versionstore.cacheSchemaVersion`, which wipes old version caches on open.
@@ -88,12 +88,12 @@ make e2e                  # Playwright suite for web viewer JS behavior (CI job 
   and `runInfo.markdownText()` is the only place the delimiters are added — so
   `mergeAdjacentRuns` must never merge a math run, or they vanish silently.
   `ommlToLaTeX` guarantees the LaTeX carries no `<`/`>` (`escapeMathAngles`),
-  which is why `converter/docx/table.go` can write cell math unescaped and
+  which is why `internal/converter/docx/table.go` can write cell math unescaped and
   keep `&` as a matrix column separator.
 - **Paragraph indentation is preserved as no-break spaces** (U+00A0, one
   source tab = four): trimming it destroyed list nesting (issue #188), and
   keeping literal tabs/spaces would reopen the CommonMark indented-code-block
-  problem (issue #25). `preserveIndent` in `converter/docx/paragraph.go` is
+  problem (issue #25). `preserveIndent` in `internal/converter/docx/paragraph.go` is
   the single place the rewrite happens; like fence/notation changes, touching
   it needs a rebuild and a `versionstore.cacheSchemaVersion` bump.
 - **HTTP transport runs stateless** (`StreamableHTTPOptions{Stateless: true}`)

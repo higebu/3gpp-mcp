@@ -15,12 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/higebu/3gpp-mcp/converter/pipeline"
-	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/converter/pipeline"
+	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/openapiindex"
 	"github.com/higebu/3gpp-mcp/internal/testutil"
-	"github.com/higebu/3gpp-mcp/tools"
-	"github.com/higebu/3gpp-mcp/versionstore"
+	"github.com/higebu/3gpp-mcp/internal/tools"
+	"github.com/higebu/3gpp-mcp/internal/versionstore"
 )
 
 func TestRunListSpecs(t *testing.T) {

@@ -1,0 +1,587 @@
+package pipeline
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/higebu/3gpp-mcp/internal/converter/docx"
+	"github.com/higebu/3gpp-mcp/internal/db"
+	"github.com/higebu/3gpp-mcp/internal/specver"
+)
+
+// docxVersionRE matches 3GPP docx filenames like "21900-j10.docx" or
+// "38101-1-j50.docx" to capture the base-36 version token. It anchors on the
+// leading 5-digit spec number (series+number) and optional multi-part suffix
+// instead of matching the last "-xxx" before ".docx", so a split-spec chunk
+// suffix appended after the token (e.g. "36133-920_s00-11.docx") is never
+// mistaken for the version token itself.
+var docxVersionRE = regexp.MustCompile(`(?i)^\d{2}\d{3}(?:-\d{1,2})?-?([0-9a-z]{3})`)
+
+// releaseFromDocxFilename extracts the release number from a 3GPP docx filename.
+// The release is encoded in the first character of the version token (base-36:
+// a=10, k=20, ..., and plain digits for legacy releases). Returns 0 if the
+// filename does not match the expected pattern.
+func releaseFromDocxFilename(filename string) int {
+	m := docxVersionRE.FindStringSubmatch(filename)
+	if m == nil {
+		return 0
+	}
+	if r := base36Digit(strings.ToLower(m[1])[0]); r > 0 {
+		return r
+	}
+	return 0
+}
+
+var (
+	yamlFilenameRE = regexp.MustCompile(`^TS(\d{2})(\d{3})_(.+)\.ya?ml$`)
+	yamlVersionRE  = regexp.MustCompile(`(?m)^\s+version:\s*['"]?([^'"\n]+)`)
+)
+
+// Pipeline orchestrates the download-convert-store workflow.
+type Pipeline struct {
+	DB           *db.DB
+	Client       *http.Client
+	Workers      int
+	ConvertDoc   bool
+	ConvertImage bool
+	Timeout      time.Duration
+}
+
+// Run processes a list of specs: download, convert, store in DB, and delete temp files.
+func (p *Pipeline) Run(ctx context.Context, specs []*SpecVersion) error {
+	if p.Workers <= 0 {
+		p.Workers = runtime.NumCPU()
+	}
+	if p.Timeout == 0 {
+		p.Timeout = 30 * time.Second
+	}
+	if p.Client == nil {
+		p.Client = &http.Client{Timeout: p.Timeout}
+	}
+
+	sem := make(chan struct{}, p.Workers)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	stats := map[string]int{"OK": 0, "DOC_ONLY": 0, "NO_DOC": 0, "FAILED": 0}
+	var docOnlySpecs []string
+	total := len(specs)
+
+	for i, spec := range specs {
+		if ctx.Err() != nil {
+			// Stop launching, but fall through to wg.Wait: workers still
+			// running must finish (or notice the cancellation) so their
+			// temp directories are removed and DB writes complete.
+			break
+		}
+
+		spec := spec
+		idx := i + 1
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				mu.Lock()
+				stats["FAILED"]++
+				mu.Unlock()
+				return
+			}
+			defer func() { <-sem }()
+
+			status, err := p.processOne(ctx, spec)
+			if err != nil {
+				log.Printf("[%d/%d] %s: FAILED (%v)", idx, total, spec.SpecID, err)
+			} else if status == "DOC_ONLY" && !p.ConvertDoc {
+				log.Printf("[%d/%d] %s: DOC_ONLY (use --convert-doc to index)", idx, total, spec.SpecID)
+			} else if status == "DOC_ONLY" && p.ConvertDoc {
+				log.Printf("[%d/%d] %s: DOC_ONLY (conversion failed)", idx, total, spec.SpecID)
+			} else {
+				log.Printf("[%d/%d] %s: %s", idx, total, spec.SpecID, status)
+			}
+
+			mu.Lock()
+			stats[status]++
+			if status == "DOC_ONLY" {
+				docOnlySpecs = append(docOnlySpecs, spec.SpecID)
+			}
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+
+	log.Println("Pipeline complete:")
+	for status, count := range stats {
+		if count > 0 {
+			log.Printf("  %s: %d", status, count)
+		}
+	}
+
+	if len(docOnlySpecs) > 0 && !p.ConvertDoc {
+		sort.Strings(docOnlySpecs)
+		log.Printf("WARNING: %d spec(s) were skipped because they only contain .doc files.", len(docOnlySpecs))
+		log.Println("Re-run with --convert-doc (requires LibreOffice) to index these:")
+		for _, id := range docOnlySpecs {
+			log.Printf("  - %s", id)
+		}
+	}
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// A run where nothing succeeded should not report success to cron/CI.
+	if len(specs) > 0 && stats["OK"] == 0 && stats["FAILED"] > 0 {
+		return fmt.Errorf("all %d specs failed", stats["FAILED"])
+	}
+	return nil
+}
+
+// processOne downloads, converts, stores, and cleans up a single spec.
+func (p *Pipeline) processOne(ctx context.Context, spec *SpecVersion) (string, error) {
+	// Create temp directory for this spec
+	tmpDir, err := os.MkdirTemp("", "3gpp-"+spec.SpecID+"-")
+	if err != nil {
+		return "FAILED", err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Download and extract
+	result, err := DownloadAndExtract(ctx, p.Client, spec, tmpDir, p.Timeout)
+	if err != nil {
+		return "FAILED", err
+	}
+
+	if result.Status != "OK" {
+		if result.Status == "DOC_ONLY" && p.ConvertDoc {
+			docDir := filepath.Join(tmpDir, "_doc_files")
+			n, err := ConvertDocFiles(ctx, docDir, tmpDir)
+			if err != nil {
+				log.Printf("  %s: doc conversion failed: %v", spec.SpecID, err)
+			}
+			if n > 0 {
+				// Re-scan for docx files
+				entries, readErr := os.ReadDir(tmpDir)
+				if readErr != nil {
+					return "FAILED", fmt.Errorf("read converted files: %w", readErr)
+				}
+				result.DocxFiles = nil
+				for _, e := range entries {
+					if strings.HasSuffix(strings.ToLower(e.Name()), ".docx") && !strings.HasPrefix(e.Name(), ".") {
+						result.DocxFiles = append(result.DocxFiles, filepath.Join(tmpDir, e.Name()))
+					}
+				}
+				if len(result.DocxFiles) > 0 {
+					result.Status = "OK"
+				}
+			} else if err == nil {
+				log.Printf("  %s: no .doc files were converted (is LibreOffice installed?)", spec.SpecID)
+			}
+		}
+		if result.Status != "OK" {
+			// No document text will be imported, so the YAML is this spec's
+			// only artifact: DownloadAndExtract extracted it before deciding
+			// DOC_ONLY/NO_DOC, and skipping it here would keep the spec out
+			// of openapi_specs entirely. Mid-parse failures below deliberately
+			// do not import, so a FAILED spec cannot advance openapi_specs
+			// ahead of its text.
+			p.importYAML(tmpDir)
+			return result.Status, nil
+		}
+	}
+
+	// Sort files with cover files last
+	sortCoverLast(result.DocxFiles)
+
+	// Parse every docx file before storing anything: the part files of a
+	// split spec carry no cover page and cannot tell a TS from a TR, so the
+	// file that does know — usually the cover, sorted last — has to decide
+	// the spec ID for all of them, or a TR would end up split across a
+	// "TS x" and a "TR x" row.
+	type parsedDocx struct {
+		spec     db.Spec
+		sections []db.Section
+		images   []db.Image
+	}
+	var parsedFiles []parsedDocx
+	docType := ""
+	for _, docxPath := range result.DocxFiles {
+		if ctx.Err() != nil {
+			return "FAILED", ctx.Err()
+		}
+		parseResult, err := docx.ParseDocx(docxPath)
+		if err != nil {
+			log.Printf("  Parse error %s: %v", filepath.Base(docxPath), err)
+			continue
+		}
+
+		// Optionally convert EMF/WMF images to PNG via LibreOffice
+		if p.ConvertImage {
+			if n := docx.ConvertResultImages(ctx, parseResult); n > 0 {
+				log.Printf("  %s: converted %d images to PNG", spec.SpecID, n)
+				docx.UpdateImagePlaceholders(parseResult)
+			}
+		}
+
+		dbSpec, dbSections, dbImages := convertToDBRecords(parseResult)
+		// The archive entry knows the release and version of the file we asked
+		// for, so it wins over anything scraped out of the document.
+		applyArchiveVersion(&dbSpec, dbSections, spec)
+		if dt := parseResult.Metadata.DocType; dt != "" {
+			docType = dt
+		}
+		parsedFiles = append(parsedFiles, parsedDocx{dbSpec, dbSections, dbImages})
+
+		// Delete the docx file immediately to save disk space
+		if err := os.Remove(docxPath); err != nil {
+			log.Printf("  warning: failed to remove %s: %v", filepath.Base(docxPath), err)
+		}
+	}
+
+	if len(result.DocxFiles) > 0 && len(parsedFiles) == 0 {
+		return "FAILED", fmt.Errorf("all %d docx files failed to parse", len(result.DocxFiles))
+	}
+
+	// Store in DB (serialized), with every file under the same document type.
+	for _, pf := range parsedFiles {
+		applyDocType(&pf.spec, pf.sections, pf.images, docType)
+		if err := p.DB.InsertSpecWithSectionsAndImages(pf.spec, pf.sections, pf.images); err != nil {
+			return "FAILED", fmt.Errorf("db insert: %w", err)
+		}
+	}
+
+	// Import YAML files if present
+	p.importYAML(tmpDir)
+
+	return "OK", nil
+}
+
+// importYAML upserts every OpenAPI YAML file extracted into tmpDir/_yaml.
+func (p *Pipeline) importYAML(tmpDir string) {
+	yamlDir := filepath.Join(tmpDir, "_yaml")
+	entries, err := os.ReadDir(yamlDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		match := yamlFilenameRE.FindStringSubmatch(entry.Name())
+		if match == nil {
+			continue
+		}
+		series, num, apiName := match[1], match[2], match[3]
+		specID := fmt.Sprintf("TS %s.%s", series, num)
+
+		content, err := os.ReadFile(filepath.Join(yamlDir, entry.Name()))
+		if err != nil {
+			log.Printf("  %s: failed to read YAML %s: %v", specID, entry.Name(), err)
+			continue
+		}
+
+		var version string
+		if verMatch := yamlVersionRE.FindSubmatch(content); verMatch != nil {
+			version = strings.TrimSpace(string(verMatch[1]))
+		}
+
+		if err := p.DB.UpsertOpenAPI(specID, apiName, version, entry.Name(), string(content)); err != nil {
+			log.Printf("  OpenAPI import error %s: %v", entry.Name(), err)
+		}
+	}
+}
+
+// docTypeID replaces the "TS "/"TR " document-type prefix of a spec ID with
+// docType. An empty docType, or an ID without a type prefix (a fallback to
+// the raw filename stem), leaves the ID unchanged.
+func docTypeID(id, docType string) string {
+	if docType == "" {
+		return id
+	}
+	rest, ok := strings.CutPrefix(id, "TS ")
+	if !ok {
+		rest, ok = strings.CutPrefix(id, "TR ")
+	}
+	if !ok {
+		return id
+	}
+	return docType + " " + rest
+}
+
+// applyDocType rewrites the document-type prefix of a parsed file's records.
+// It exists because only the file that carries the cover page knows whether
+// the spec is a TS or a TR, and every file of a split spec must store its
+// records under the same ID.
+func applyDocType(spec *db.Spec, sections []db.Section, images []db.Image, docType string) {
+	id := docTypeID(spec.ID, docType)
+	if id == spec.ID {
+		return
+	}
+	spec.ID = id
+	for i := range sections {
+		sections[i].SpecID = id
+	}
+	for i := range images {
+		images[i].SpecID = id
+	}
+}
+
+// applyArchiveVersion overwrites the version and release of records parsed out
+// of a document with what the archive entry says. The entry names the exact
+// file that was downloaded, so it is authoritative; document metadata is a
+// best-effort scrape that legacy specs frequently get wrong or omit.
+func applyArchiveVersion(spec *db.Spec, sections []db.Section, sv *SpecVersion) {
+	if sv.Version != "" {
+		spec.VersionToken = sv.Version
+		if dotted, ok := specver.TokenToDotted(sv.Version); ok {
+			spec.Version = dotted
+		} else {
+			// A token TokenToDotted cannot expand (it requires exactly three
+			// base-36 digits) must still win over the document metadata:
+			// leaving the cover-page version behind an archive token would
+			// store a row whose Version and VersionToken disagree. Fall back
+			// to the raw token, matching displayVersion.
+			spec.Version = sv.Version
+		}
+	}
+	if sv.Release != 0 {
+		spec.Release = strconv.Itoa(sv.Release)
+	}
+	for i := range sections {
+		sections[i].Version = spec.Version
+	}
+}
+
+// convertToDBRecords converts parsed docx results into DB records.
+func convertToDBRecords(result *docx.ParseResult) (db.Spec, []db.Section, []db.Image) {
+	metadata := result.Metadata
+	dbSpec := db.Spec{
+		ID:           metadata.SpecID,
+		Title:        metadata.Title,
+		Version:      metadata.Version,
+		VersionToken: metadata.VersionToken,
+		Release:      metadata.Release,
+		Series:       metadata.Series(),
+	}
+
+	var dbSections []db.Section
+	for _, s := range result.Sections {
+		dbSections = append(dbSections, db.Section{
+			SpecID:       metadata.SpecID,
+			Version:      metadata.Version,
+			Number:       s.Number,
+			Title:        s.Title,
+			Level:        s.Level,
+			ParentNumber: s.ParentNumber,
+			Content:      docx.SectionToMarkdown(s),
+		})
+	}
+
+	var dbImages []db.Image
+	for _, img := range result.Images {
+		dbImages = append(dbImages, db.Image{
+			SpecID:      metadata.SpecID,
+			Version:     metadata.Version,
+			Name:        img.Name,
+			MIMEType:    img.MIMEType,
+			Data:        img.Data,
+			LLMReadable: img.LLMReadable,
+		})
+	}
+
+	return dbSpec, dbSections, dbImages
+}
+
+// sortCoverLast sorts file paths so that _cover files come last.
+func sortCoverLast(files []string) {
+	sort.Slice(files, func(i, j int) bool {
+		iCover := strings.Contains(filepath.Base(files[i]), "_cover")
+		jCover := strings.Contains(filepath.Base(files[j]), "_cover")
+		if iCover != jCover {
+			return !iCover
+		}
+		return filepath.Base(files[i]) < filepath.Base(files[j])
+	})
+}
+
+// ConvertSingleFile parses a single docx file and stores it in the database.
+func ConvertSingleFile(ctx context.Context, d *db.DB, docxPath string, convertImage bool) error {
+	result, err := docx.ParseDocx(docxPath)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", docxPath, err)
+	}
+
+	if convertImage {
+		if n := docx.ConvertResultImages(ctx, result); n > 0 {
+			docx.UpdateImagePlaceholders(result)
+		}
+	}
+
+	dbSpec, dbSections, dbImages := convertToDBRecords(result)
+	if r := releaseFromDocxFilename(filepath.Base(docxPath)); r != 0 {
+		dbSpec.Release = strconv.Itoa(r)
+	}
+	return d.InsertSpecWithSectionsAndImages(dbSpec, dbSections, dbImages)
+}
+
+// ConvertDir converts all .docx files in a directory and stores them in the database.
+// If convertDoc is true, any .doc files in dirPath are first converted to .docx
+// (written alongside the originals) using LibreOffice before the directory is scanned.
+func ConvertDir(ctx context.Context, d *db.DB, dirPath string, workers int, convertDoc, convertImage bool) error {
+	var docConvertErr error
+	if convertDoc {
+		n, err := ConvertDocFiles(ctx, dirPath, dirPath)
+		if n > 0 {
+			log.Printf("Converted %d .doc file(s) to .docx", n)
+		}
+		if err != nil {
+			log.Printf("doc conversion: %v", err)
+			docConvertErr = fmt.Errorf("convert .doc files: %w", err)
+		}
+	}
+
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return err
+	}
+
+	var files []string
+	for _, e := range entries {
+		if strings.HasSuffix(strings.ToLower(e.Name()), ".docx") && !strings.HasPrefix(e.Name(), ".") {
+			files = append(files, filepath.Join(dirPath, e.Name()))
+		}
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("no .docx files found in %s", dirPath)
+	}
+
+	sortCoverLast(files)
+	log.Printf("Found %d .docx files", len(files))
+
+	if workers <= 0 {
+		workers = runtime.NumCPU()
+	}
+
+	type result struct {
+		path     string
+		spec     db.Spec
+		sections []db.Section
+		images   []db.Image
+		docType  string
+		err      error
+	}
+
+	results := make(chan result, len(files))
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+
+	for _, f := range files {
+		f := f
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				results <- result{path: f, err: ctx.Err()}
+				return
+			}
+			defer func() { <-sem }()
+
+			parseResult, err := docx.ParseDocx(f)
+			if err != nil {
+				results <- result{path: f, err: err}
+				return
+			}
+
+			if convertImage {
+				if n := docx.ConvertResultImages(ctx, parseResult); n > 0 {
+					docx.UpdateImagePlaceholders(parseResult)
+				}
+			}
+
+			dbSpec, dbSections, dbImages := convertToDBRecords(parseResult)
+			if r := releaseFromDocxFilename(filepath.Base(f)); r != 0 {
+				dbSpec.Release = strconv.Itoa(r)
+			}
+
+			results <- result{path: f, spec: dbSpec, sections: dbSections, images: dbImages, docType: parseResult.Metadata.DocType}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results
+	parsed := make(map[string]result)
+	var parseErrors int
+	for r := range results {
+		if r.err != nil {
+			log.Printf("  ERROR: %s: %v", filepath.Base(r.path), r.err)
+			parseErrors++
+		} else {
+			log.Printf("  %s: %s (%d sections, %d images)", filepath.Base(r.path), r.spec.ID, len(r.sections), len(r.images))
+			parsed[r.path] = r
+		}
+	}
+
+	if len(parsed) == 0 {
+		return fmt.Errorf("all %d files failed to parse", len(files))
+	}
+
+	// The part files of a split spec carry no cover page and cannot tell a
+	// TS from a TR, so the file that does know decides for every file of the
+	// same spec and version — iterated in cover-last order, so the cover
+	// wins — or a TR would end up split across a "TS x" and a "TR x" row.
+	specKey := func(s db.Spec) string {
+		return docTypeID(s.ID, "TS") + "@" + s.Version
+	}
+	docTypes := make(map[string]string)
+	for _, f := range files {
+		if r, ok := parsed[f]; ok && r.docType != "" {
+			docTypes[specKey(r.spec)] = r.docType
+		}
+	}
+	for f, r := range parsed {
+		if dt := docTypes[specKey(r.spec)]; dt != "" {
+			applyDocType(&r.spec, r.sections, r.images, dt)
+			parsed[f] = r
+		}
+	}
+
+	// Write to DB in cover-last order. A failing file does not abort the rest,
+	// but the caller has to hear about it: a silently empty database must not
+	// look like a successful import to cron/CI.
+	var dbErr error
+	dbErrors := 0
+	for _, f := range files {
+		if r, ok := parsed[f]; ok {
+			if err := d.InsertSpecWithSectionsAndImages(r.spec, r.sections, r.images); err != nil {
+				log.Printf("  DB error for %s: %v", r.spec.ID, err)
+				dbErrors++
+				if dbErr == nil {
+					dbErr = fmt.Errorf("store %s: %w", r.spec.ID, err)
+				}
+			}
+		}
+	}
+
+	if parseErrors > 0 {
+		log.Printf("  %d of %d files failed to parse", parseErrors, len(files))
+	}
+	if dbErrors > 0 {
+		return fmt.Errorf("%d of %d files failed to store: %w", dbErrors, len(parsed), dbErr)
+	}
+
+	return docConvertErr
+}
