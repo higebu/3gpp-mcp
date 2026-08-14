@@ -557,10 +557,12 @@ const listingFetchAttempts = 3
 // listingRetryBackoff returns the initial delay between listing fetch
 // attempts; the delay doubles after every failure. Overridable via the
 // THREEGPP_LISTING_RETRY_MS environment variable — tests across packages set
-// it to 0, which is why this is read per call rather than at init.
+// it to 0, which is why this is read per call rather than at init. The upper
+// bound keeps the doubling from overflowing into a negative delay that would
+// silently disable the pacing.
 func listingRetryBackoff() time.Duration {
 	if v := os.Getenv("THREEGPP_LISTING_RETRY_MS"); v != "" {
-		if ms, err := strconv.Atoi(v); err == nil && ms >= 0 {
+		if ms, err := strconv.Atoi(v); err == nil && ms >= 0 && ms <= 10*60*1000 {
 			return time.Duration(ms) * time.Millisecond
 		}
 	}
