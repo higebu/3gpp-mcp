@@ -1534,6 +1534,20 @@ const spPlus = `(?:` + sp + `+(?:` + lineBreak + sp + `*)?|` + lineBreak + sp + 
 
 const spStar = `(?:` + spPlus + `)?`
 
+// specDesig matches a TS/TR spec designator with optional 3GPP prefix. The
+// separator after the keyword is optional so the no-separator form TR36.873
+// matches (issue #205); the \b rejects a designator glued to a preceding word
+// character (PARTS23.501, 5TS 23.501) — the same trade-off as specPatternRE
+// in converter/docx/metadata.go, which also shares the lack of a trailing
+// boundary: a spec-like prefix of a longer token (TR 38.5MHz) matched before
+// this form existed and still does. The \b sits before the optional 3GPP
+// group so the glued 3GPPTS form still matches.
+// Two capture groups: (TS|TR), (\d+\.\d+).
+const specDesig = `\b(?:3GPP` + spStar + `)?(TS|TR)` + spStar + `(\d+\.\d+)`
+
+// specDesigRaw is specDesig without capture groups, for the context gates.
+const specDesigRaw = `\b(?:3GPP` + spStar + `)?(?:TS|TR)` + spStar + `\d+\.\d+`
+
 // spGapStar returns a possibly-empty separator run holding one optional
 // punctuation character from punct ("TS 23.501, clause 5.1" as well as
 // "TS 23.501 clause 5.1"), still carrying at most one line break in the whole
@@ -1572,13 +1586,13 @@ const bareRefChain = `(?:` + spStar + `(?:[,;]` + spStar + `(?:(?:and|or)` + spS
 
 var (
 	// "TS 23.501 clause 5.1" or "3GPP TS 33.203 Annex H"
-	tsRefRE = regexp.MustCompile(`(?:3GPP` + spPlus + `)?(TS|TR)` + spPlus + `(\d+\.\d+)(?:` + spGapStar(`,;`) + `(?:clauses?|sections?|subclauses?|[Aa]nnexe?s?)` + spPlus + secNum + `)?`)
+	tsRefRE = regexp.MustCompile(specDesig + `(?:` + spGapStar(`,;`) + `(?:clauses?|sections?|subclauses?|[Aa]nnexe?s?)` + spPlus + secNum + `)?`)
 	// "Annex H of 3GPP TS 33.203" or "subclause 5.1 of TS 23.228"
-	tsPrefixRefRE = regexp.MustCompile(`(?:clause|section|subclause|[Aa]nnex)` + spPlus + secNum + spPlus + `of` + spPlus + `(?:3GPP` + spPlus + `)?(TS|TR)` + spPlus + `(\d+\.\d+)`)
+	tsPrefixRefRE = regexp.MustCompile(`(?:clause|section|subclause|[Aa]nnex)` + spPlus + secNum + spPlus + `of` + spPlus + specDesig)
 	rfcRefRE      = regexp.MustCompile(`(?:IETF` + spPlus + `)?RFC` + spPlus + `(\d+)(?:` + spGapStar(`,;`) + `(?:section|clause)` + spPlus + `(\d+(?:\.\d+)*))?`)
 
 	// bracketMapRE extracts [N] -> TS/TR XX.YYY mappings from the References section.
-	bracketMapRE = regexp.MustCompile(`\[(\d+[A-Za-z]*)\]` + spPlus + `(?:3GPP` + spPlus + `)?(TS|TR)` + spPlus + `(\d+\.\d+)`)
+	bracketMapRE = regexp.MustCompile(`\[(\d+[A-Za-z]*)\]` + spPlus + specDesig)
 	// bracketRefRE matches "[N] clause/section/subclause/annex X" patterns.
 	bracketRefRE = regexp.MustCompile(`\[(\d+[A-Za-z]*)\]` + spStar + `(?:,` + spStar + `)?(?:clause|section|subclause|[Aa]nnex)` + spPlus + secNum)
 
@@ -1587,13 +1601,13 @@ var (
 	tsMultiPrefixRefRE = regexp.MustCompile(
 		`(clauses?|subclauses?|sections?|[Aa]nnexe?s?)` + spPlus +
 			`(` + secNumRaw + `(?:(?:,` + spStar + secNumRaw + `)*` + spPlus + `and` + spPlus + secNumRaw + `))\b` + spPlus +
-			`of` + spPlus + `(?:3GPP` + spPlus + `)?(TS|TR)` + spPlus + `(\d+\.\d+)` +
+			`of` + spPlus + specDesig +
 			`(?:` + spStar + `\[(\d+[A-Za-z]*)\])?`)
 
 	// tsMultiRefRE matches "TS 23.402 clauses 8.2 and 16.11" (spec before multi-section list).
 	// Groups: 1=TS|TR, 2=spec-number, 3=keyword, 4=section-list.
 	tsMultiRefRE = regexp.MustCompile(
-		`(?:3GPP` + spPlus + `)?(TS|TR)` + spPlus + `(\d+\.\d+)` + spPlus +
+		specDesig + spPlus +
 			`(clauses?|subclauses?|sections?|[Aa]nnexe?s?)` + spPlus +
 			`(` + secNumRaw + `(?:(?:,` + spStar + secNumRaw + `)*` + spPlus + `and` + spPlus + secNumRaw + `))\b`)
 
@@ -1608,7 +1622,7 @@ var (
 	tsCoordPrefixRefRE = regexp.MustCompile(
 		`((?:[Cc]lauses?|[Ss]ubclauses?|[Ss]ections?|[Aa]nnexe?s?)` + spPlus + secNumRaw +
 			`(?:` + spStar + `(?:,|and|or)` + spStar + coordElemTail + `)+)` +
-			spPlus + `(?:of|in)` + spPlus + `(?:3GPP` + spPlus + `)?(TS|TR)` + spPlus + `(\d+\.\d+)`)
+			spPlus + `(?:of|in)` + spPlus + specDesig)
 
 	// secNumListRE extracts individual section numbers from a comma/and-separated list.
 	secNumListRE = regexp.MustCompile(secNumRaw)
@@ -1649,8 +1663,8 @@ var (
 
 	// bareTrailingParenSpecRE matches a parenthesized designator right after a
 	// bare reference ("clause 4.2 (TS 23.402)"), tying it to that document.
-	bareTrailingParenSpecRE = regexp.MustCompile(`^` + spStar + `\(` + spStar + `(?:3GPP` + spPlus +
-		`)?(?:(?:TS|TR)` + spPlus + `\d+\.\d+|RFC` + spPlus + `\d+|\[\d+[A-Za-z]*\])`)
+	bareTrailingParenSpecRE = regexp.MustCompile(`^` + spStar + `\(` + spStar +
+		`(?:` + specDesigRaw + `|RFC` + spPlus + `\d+|\[\d+[A-Za-z]*\])`)
 
 	// bareLeadingSpecRE matches a spec designator or bracket reference before
 	// a bare reference — directly ("TS 23.402 Clause 5.1", "RFC 3748
@@ -1659,7 +1673,7 @@ var (
 	// the lowercase-only qualified patterns (and thus the overlap gate) do
 	// not cover the element itself.
 	bareLeadingSpecRE = regexp.MustCompile(
-		`(?:(?:TS|TR)` + spPlus + `\d+\.\d+|RFC` + spPlus + `\d+|\[\d+[A-Za-z]*\])` +
+		`(?:` + specDesigRaw + `|RFC` + spPlus + `\d+|\[\d+[A-Za-z]*\])` +
 			`(?:` + spPlus + `(?:(?:[Cc]lauses?|[Ss]ections?|[Ss]ubclauses?|[Aa]nnexe?s?)` + spPlus + `)?` + secNumRaw + bareRefChain + `)?` +
 			spGapStar(`,;:`) + `(?:(?:and|or)` + spPlus + `)?$`)
 )

@@ -2520,6 +2520,124 @@ func TestExtractReferences_CoordinatedList(t *testing.T) {
 	}
 }
 
+// Regression test for #205: a reference written without a separator between
+// the TS/TR keyword and the spec number (TR36.873) must still produce an edge.
+func TestExtractReferences_NoSeparator(t *testing.T) {
+	content := "Channel models are described in TR36.873 [14] and evaluated further."
+
+	refs := ExtractReferences("TR 38.843", "6.2.1", content, nil)
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 reference, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].TargetSpec != "TR 36.873" || refs[0].TargetSection != "" {
+		t.Errorf("expected a section-less reference to TR 36.873, got %+v", refs[0])
+	}
+}
+
+func TestExtractReferences_NoSeparatorWithClause(t *testing.T) {
+	content := "The procedures are described in TS23.501 clause 5.1."
+
+	refs := ExtractReferences("TS 24.229", "5.1", content, nil)
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 reference, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].TargetSpec != "TS 23.501" || refs[0].TargetSection != "5.1" {
+		t.Errorf("expected TS 23.501 section 5.1, got %+v", refs[0])
+	}
+}
+
+func TestExtractReferences_NoSeparatorPrefixForm(t *testing.T) {
+	// Like TestExtractReferences_PrefixPattern, only the sectioned reference
+	// is asserted: the prefix form also emits a whole-spec reference from
+	// tsRefRE, with or without a separator.
+	content := "As specified in clause 7.2 of TR36.873."
+
+	refs := ExtractReferences("TR 38.843", "6.2.1", content, nil)
+	found := false
+	for _, r := range refs {
+		if r.TargetSpec == "TR 36.873" && r.TargetSection == "7.2" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected reference to TR 36.873 section 7.2, got refs: %+v", refs)
+	}
+}
+
+func TestExtractReferences_NoSeparatorMultiSection(t *testing.T) {
+	content := "See TR36.873 clauses 5.1 and 5.2 for details."
+
+	refs := ExtractReferences("TR 38.843", "6.2.1", content, nil)
+	if len(refs) != 2 {
+		t.Fatalf("expected 2 references, got %d: %+v", len(refs), refs)
+	}
+	for _, want := range []string{"5.1", "5.2"} {
+		found := false
+		for _, r := range refs {
+			if r.TargetSpec == "TR 36.873" && r.TargetSection == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected reference to TR 36.873 section %s, got refs: %+v", want, refs)
+		}
+	}
+	for _, r := range refs {
+		if r.TargetSection == "" {
+			t.Errorf("unexpected reference with empty TargetSection: %+v", r)
+		}
+	}
+}
+
+// The \b guard that pays for the optional separator: a TS/TR glued to a
+// preceding word character (letter, digit or underscore) is an identifier,
+// not a reference. "PARTS 23.501" and "5TS 23.501" matched before #205; the
+// guard drops them deliberately.
+func TestExtractReferences_GluedPrefixRejected(t *testing.T) {
+	content := "The variable PARTS23.501, the token NRTR38.331, the field _TS 23.501 and " +
+		"the label 5TS 23.501 are identifiers, and PARTS 23.501 is not a spec."
+
+	refs := ExtractReferences("TS 24.229", "5.1", content, nil)
+	if len(refs) != 0 {
+		t.Fatalf("expected 0 references, got %d: %+v", len(refs), refs)
+	}
+}
+
+// A glued 3GPP prefix (3GPPTS 23.501) matched before #205 because nothing
+// guarded the keyword's left side; the \b sits before the optional 3GPP group
+// so both the old glued form and the fully glued form keep matching.
+func TestExtractReferences_GluedGPPPrefix(t *testing.T) {
+	content := "See 3GPPTS 23.501 and 3GPPTS23.502 for details."
+
+	refs := ExtractReferences("TS 24.229", "5.1", content, nil)
+	if len(refs) != 2 {
+		t.Fatalf("expected 2 references, got %d: %+v", len(refs), refs)
+	}
+	specSet := make(map[string]bool)
+	for _, r := range refs {
+		specSet[r.TargetSpec] = true
+	}
+	if !specSet["TS 23.501"] {
+		t.Error("expected reference to TS 23.501 (glued 3GPP prefix)")
+	}
+	if !specSet["TS 23.502"] {
+		t.Error("expected reference to TS 23.502 (fully glued designator)")
+	}
+}
+
+func TestParseBracketedRefMap_NoSeparator(t *testing.T) {
+	content := "[14]\t3GPP TR36.873: \"Study on 3D channel model for LTE\""
+	m := ParseBracketedRefMap(content)
+	if m == nil {
+		t.Fatal("expected non-nil map")
+	}
+	if m["14"] != "TR 36.873" {
+		t.Errorf("expected TR 36.873, got %q", m["14"])
+	}
+}
+
 // TestSanitizeFTS5Query_CaretKeepsAnchor verifies the initial-token anchor
 // still anchors after sanitizing: quoting the caret into the string would
 // silently turn "^scope" into a match-anywhere query.

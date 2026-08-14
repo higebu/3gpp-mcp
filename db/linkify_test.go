@@ -618,6 +618,51 @@ func TestLinkifyRefs_BareRefs(t *testing.T) {
 	}
 }
 
+// Regression tests for #205: designators written without a separator
+// (TR36.873) are linkified, and the context gates recognize them as qualified
+// territory so no spurious same-document link appears next to them.
+func TestLinkifyRefs_NoSeparator(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "no-separator TR ref",
+			input: "Channel models are given in TR36.873 [14].",
+			want:  "Channel models are given in [TR36.873](/specs/TR 36.873) [14].",
+		},
+		{
+			name:  "no-separator TS ref with clause",
+			input: "See TS23.402 clause 5.1 for details.",
+			want:  "See [TS23.402 clause 5.1](/specs/TS 23.402/sections/5.1) for details.",
+		},
+		{
+			name:  "capitalized after no-separator spec not linked bare",
+			input: "See TR36.873 Clause 5.1.",
+			want:  "See [TR36.873](/specs/TR 36.873) Clause 5.1.",
+		},
+		{
+			name:  "parenthesized no-separator designator not linked bare",
+			input: "See clause 4.2 (TR36.873).",
+			want:  "See clause 4.2 ([TR36.873](/specs/TR 36.873)).",
+		},
+		{
+			name:  "letter-glued designator stays plain",
+			input: "the identifier PARTS23.501 stays plain",
+			want:  "the identifier PARTS23.501 stays plain",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LinkifyRefs(tt.input, LinkifyRefsOpts{URLFor: bareURLFor, SectionExists: bareSectionSet})
+			if got != tt.want {
+				t.Errorf("LinkifyRefs(%q)\n got:  %q\n want: %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLinkifyRefs_BareRefsWithBracketMap(t *testing.T) {
 	bracketMap := map[string]string{"19": "TS 33.203"}
 	tests := []struct {
