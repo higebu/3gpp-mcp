@@ -11,7 +11,9 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -269,12 +271,18 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 
 	// Level 1: Get series directories
 	log.Println("Fetching series list...")
-	html, err := fetchPage(ctx, client, baseURL)
+	html, err := fetchPageRetry(ctx, client, baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("fetch archive root: %w", err)
 	}
 
 	seriesDirs := extractLinks(html)
+	// The archive root always lists the *_series directories; a page without
+	// any is an unusable response (an error page served as 200), not an
+	// empty archive.
+	if !slices.ContainsFunc(seriesDirs, seriesDirRE.MatchString) {
+		return nil, fmt.Errorf("archive root listing contains no *_series directories: unusable response from %s", baseURL)
+	}
 	var filtered []string
 	for _, name := range seriesDirs {
 		if !seriesDirRE.MatchString(name) {
@@ -310,20 +318,31 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			html, err := fetchPage(ctx, client, baseURL+sd+"/")
+			html, err := fetchPageRetry(ctx, client, baseURL+sd+"/")
 			if err != nil {
 				log.Printf("Failed to fetch %s: %v", sd, err)
 				fetchFailures.Add(1)
 				return
 			}
 			links := extractLinks(html)
-			mu.Lock()
+			var specDirs []string
 			for _, name := range links {
 				if specDirRE.MatchString(name) {
-					allSpecPairs = append(allSpecPairs, specPair{sd, name})
+					specDirs = append(specDirs, name)
 				}
 			}
-			log.Printf("%s: %d specs", sd, len(links))
+			// Every series directory holds spec directories; none means the
+			// response was unusable, same as a failed fetch.
+			if len(specDirs) == 0 {
+				log.Printf("warning: no spec directories found in %s; treating the listing as failed", sd)
+				fetchFailures.Add(1)
+				return
+			}
+			mu.Lock()
+			for _, name := range specDirs {
+				allSpecPairs = append(allSpecPairs, specPair{sd, name})
+			}
+			log.Printf("%s: %d specs", sd, len(specDirs))
 			mu.Unlock()
 		}()
 	}
@@ -341,19 +360,29 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			html, err := fetchPage(ctx, client, baseURL+pair.seriesDir+"/"+pair.specDir+"/")
+			html, err := fetchPageRetry(ctx, client, baseURL+pair.seriesDir+"/"+pair.specDir+"/")
 			if err != nil {
 				log.Printf("Failed to fetch %s/%s: %v", pair.seriesDir, pair.specDir, err)
 				fetchFailures.Add(1)
 				return
 			}
 			links := extractLinks(html)
-			mu.Lock()
+			var zips []string
 			for _, name := range links {
 				if strings.HasSuffix(name, ".zip") {
-					entries = append(entries, pair.seriesDir+"/"+pair.specDir+"/"+name)
+					zips = append(zips, pair.seriesDir+"/"+pair.specDir+"/"+name)
 				}
 			}
+			// Every spec directory in the archive holds at least one version
+			// (FetchSpecZips relies on the same invariant), so a page with no
+			// .zip links is an unusable response, same as a failed fetch.
+			if len(zips) == 0 {
+				log.Printf("warning: no .zip entries found in %s/%s; treating the listing as failed", pair.seriesDir, pair.specDir)
+				fetchFailures.Add(1)
+				return
+			}
+			mu.Lock()
+			entries = append(entries, zips...)
 			mu.Unlock()
 		}()
 	}
@@ -495,11 +524,66 @@ func fetchPage(ctx context.Context, client *http.Client, url string) (string, er
 		return "", fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPageSize))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPageSize+1))
 	if err != nil {
 		return "", err
 	}
+	if len(body) > maxPageSize {
+		return "", fmt.Errorf("listing page %s exceeds %d bytes; refusing truncated body", url, maxPageSize)
+	}
+	// A listing that opens an <html> document but never closes it lost its
+	// tail somewhere along the way. Directory listings are sorted by name, so
+	// a truncated body keeps only the oldest versions and would otherwise be
+	// accepted as a complete, much shorter listing (issue #206). Bodies
+	// without an <html> tag are left alone: extractLinks only needs anchors.
+	lower := strings.ToLower(string(body))
+	if strings.Contains(lower, "<html") && !strings.Contains(lower, "</html>") {
+		return "", fmt.Errorf("listing page %s appears truncated: response opens an <html> document but never closes it", url)
+	}
 	return string(body), nil
+}
+
+const listingFetchAttempts = 3
+
+// listingRetryBackoff returns the initial delay between listing fetch
+// attempts; the delay doubles after every failure. Overridable via the
+// THREEGPP_LISTING_RETRY_MS environment variable — tests across packages set
+// it to 0, which is why this is read per call rather than at init.
+func listingRetryBackoff() time.Duration {
+	if v := os.Getenv("THREEGPP_LISTING_RETRY_MS"); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms >= 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	return time.Second
+}
+
+// fetchPageRetry fetches a listing page, retrying transient failures with
+// exponential backoff. It is used by the full archive scrape, where a single
+// flaky listing among thousands would otherwise abort the whole build;
+// single-spec fetches stay single-shot so interactive tools fail fast.
+func fetchPageRetry(ctx context.Context, client *http.Client, url string) (string, error) {
+	var lastErr error
+	backoff := listingRetryBackoff()
+	for attempt := 0; attempt < listingFetchAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+		}
+		html, err := fetchPage(ctx, client, url)
+		if err == nil {
+			return html, nil
+		}
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		lastErr = err
+	}
+	return "", fmt.Errorf("after %d attempts: %w", listingFetchAttempts, lastErr)
 }
 
 func extractLinks(html string) []string {

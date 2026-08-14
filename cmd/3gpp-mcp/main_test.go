@@ -878,6 +878,8 @@ func TestCmdUpdate_MaxReleaseRemovesAboveCap(t *testing.T) {
 // fails, so a full scrape assembles a partial spec list.
 func partialArchive(t *testing.T, healthyZip string) *httptest.Server {
 	t.Helper()
+	// The failing 23.502 listing would otherwise be retried with backoff.
+	t.Setenv("THREEGPP_LISTING_RETRY_MS", "0")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ftp/Specs/archive/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ftp/Specs/archive/" {
