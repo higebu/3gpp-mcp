@@ -343,6 +343,13 @@ func applyArchiveVersion(spec *db.Spec, sections []db.Section, sv *SpecVersion) 
 		spec.VersionToken = sv.Version
 		if dotted, ok := specver.TokenToDotted(sv.Version); ok {
 			spec.Version = dotted
+		} else {
+			// A token TokenToDotted cannot expand (it requires exactly three
+			// base-36 digits) must still win over the document metadata:
+			// leaving the cover-page version behind an archive token would
+			// store a row whose Version and VersionToken disagree. Fall back
+			// to the raw token, matching displayVersion.
+			spec.Version = sv.Version
 		}
 	}
 	if sv.Release != 0 {

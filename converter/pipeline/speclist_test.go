@@ -59,30 +59,40 @@ func TestParseSpecEntry(t *testing.T) {
 	}
 }
 
-func TestIsNewerVersion(t *testing.T) {
-	tests := []struct {
-		newVer, oldVer string
-		want           bool
-	}{
-		{"k10", "j60", true},
-		{"j60", "k10", false},
-		{"k10", "k10", false},
-		{"k20", "k10", true},
-		{"a01", "", true},
-		{"", "", true}, // oldVer=="" always returns true
-		{"300", "200", true},
-		{"200", "300", false},
-		// Base-36 versions: "fa0" (technical=10) is newer than "f20".
-		{"fa0", "f20", true},
-		{"f20", "fa0", false},
-		{"j50", "j40", true},
+func TestCompareVersions(t *testing.T) {
+	entry := func(t *testing.T, e string) *SpecVersion {
+		t.Helper()
+		sv := ParseSpecEntry(e)
+		if sv == nil {
+			t.Fatalf("ParseSpecEntry(%q) = nil", e)
+		}
+		return sv
 	}
-
+	tests := []struct {
+		name string
+		a, b string // archive entries
+		want int    // sign of compareVersions(a, b)
+	}{
+		{"newer release wins", "23_series/23.501/23501-k10.zip", "23_series/23.501/23501-j60.zip", 1},
+		{"older release loses", "23_series/23.501/23501-j60.zip", "23_series/23.501/23501-k10.zip", -1},
+		{"same version ties", "23_series/23.501/23501-k10.zip", "23_series/23.501/23501-k10.zip", 0},
+		{"minor decides within release", "23_series/23.501/23501-k20.zip", "23_series/23.501/23501-k10.zip", 1},
+		{"legacy vs letter era", "37_series/37.571-5/37571-5-j10.zip", "37_series/37.571-5/37571-5-100.zip", 1},
+		{"base36 minor", "34_series/34.108/34108-fa0.zip", "34_series/34.108/34108-f20.zip", 1},
+		// A long token's remainder must stay inside the minor component
+		// instead of bleeding into the release comparison: release 18 with a
+		// huge minor ("izzz") still loses to release 20 ("k00").
+		{"long token cannot outrank a newer release", "23_series/23.501/23501-izzz.zip", "23_series/23.501/23501-k00.zip", -1},
+		// A remainder long enough to saturate versionValue must still order
+		// by release rather than overflow.
+		{"saturating token stays within its release", "23_series/23.501/23501-jzzzzzzzzzzzzzz.zip", "23_series/23.501/23501-k00.zip", -1},
+	}
 	for _, tt := range tests {
-		t.Run(tt.newVer+"_vs_"+tt.oldVer, func(t *testing.T) {
-			got := IsNewerVersion(tt.newVer, tt.oldVer)
-			if got != tt.want {
-				t.Errorf("IsNewerVersion(%q, %q) = %v, want %v", tt.newVer, tt.oldVer, got, tt.want)
+		t.Run(tt.name, func(t *testing.T) {
+			got := compareVersions(entry(t, tt.a), entry(t, tt.b))
+			switch {
+			case tt.want > 0 && got <= 0, tt.want < 0 && got >= 0, tt.want == 0 && got != 0:
+				t.Errorf("compareVersions = %d, want sign %d", got, tt.want)
 			}
 		})
 	}
@@ -471,6 +481,7 @@ func TestFetchSpecList_Race(t *testing.T) {
 func TestFetchSpecList_PartialNotCached(t *testing.T) {
 	cacheHome := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", cacheHome)
+	t.Setenv("THREEGPP_LISTING_RETRY_MS", "0")
 
 	archivePath := "/ftp/Specs/archive/"
 	mux := http.NewServeMux()
@@ -590,5 +601,303 @@ func TestFetchSpecList_CancelReturnsContextError(t *testing.T) {
 
 	if _, err := FetchSpecList(ctx, client, nil, false, 1); !errors.Is(err, context.Canceled) {
 		t.Fatalf("FetchSpecList err = %v, want context.Canceled", err)
+	}
+}
+
+// issueArchive serves a mock archive shaped like the TS 37.571-5 incident
+// (issue #206): one healthy spec directory and one whose listing the given
+// handler controls.
+func issueArchive(t *testing.T, spec5 http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	archivePath := "/ftp/Specs/archive/"
+	mux := http.NewServeMux()
+	mux.HandleFunc(archivePath, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != archivePath {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `<a href="37_series/">37_series</a>`+"\n")
+	})
+	mux.HandleFunc(archivePath+"37_series/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="37.571-1/">37.571-1</a>`+"\n"+`<a href="37.571-5/">37.571-5</a>`+"\n")
+	})
+	mux.HandleFunc(archivePath+"37_series/37.571-1/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="37571-1-j10.zip">37571-1-j10.zip</a>`+"\n")
+	})
+	mux.HandleFunc(archivePath+"37_series/37.571-5/", spec5)
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// TestFetchSpecList_TruncatedListingIsFailure reproduces issue #206: a spec
+// directory listing that lost its tail mid-transfer keeps only the
+// name-ascending first zip — the spec's oldest version. Such a body must be
+// treated like a failed fetch, not accepted as a complete one-version listing
+// and cached for the TTL.
+func TestFetchSpecList_TruncatedListingIsFailure(t *testing.T) {
+	cacheHome := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+	t.Setenv("THREEGPP_LISTING_RETRY_MS", "0")
+
+	ts := issueArchive(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body><table><a href="37571-5-100.zip">37571-5-100.zip</a>`)
+	})
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	entries, err := FetchSpecList(context.Background(), client, nil, true, 2)
+	var partial *PartialSpecListError
+	if !errors.As(err, &partial) {
+		t.Fatalf("FetchSpecList err = %v, want *PartialSpecListError", err)
+	}
+	if partial.FailedListings != 1 {
+		t.Errorf("FailedListings = %d, want 1", partial.FailedListings)
+	}
+	for _, e := range entries {
+		if strings.Contains(e, "37571-5-100.zip") {
+			t.Errorf("truncated listing leaked its oldest version into the result: %v", entries)
+		}
+	}
+	cachePath := filepath.Join(cacheHome, "3gpp-mcp", CacheKey("speclist"))
+	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
+		t.Errorf("partial spec list must not be cached; stat err = %v", err)
+	}
+}
+
+// TestFetchSpecList_TruncatedListingRetrySucceeds verifies that a transient
+// truncation is healed by the retry: the second, complete listing is used, the
+// list is cached, and latest-only selection picks the newest version across
+// the legacy digit and letter token eras.
+func TestFetchSpecList_TruncatedListingRetrySucceeds(t *testing.T) {
+	cacheHome := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+	t.Setenv("THREEGPP_LISTING_RETRY_MS", "0")
+
+	var calls int
+	ts := issueArchive(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			fmt.Fprint(w, `<html><body><table><a href="37571-5-100.zip">37571-5-100.zip</a>`)
+			return
+		}
+		for _, v := range []string{"100", "200", "g50", "i10", "j10"} {
+			fmt.Fprintf(w, `<a href="37571-5-%s.zip">37571-5-%s.zip</a>`+"\n", v, v)
+		}
+	})
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	entries, err := FetchSpecList(context.Background(), client, nil, true, 2)
+	if err != nil {
+		t.Fatalf("FetchSpecList: %v", err)
+	}
+	if len(entries) != 6 {
+		t.Fatalf("expected 6 entries (1 + 5), got %d: %v", len(entries), entries)
+	}
+
+	var specs []*SpecVersion
+	for _, e := range entries {
+		if sv := ParseSpecEntry(e); sv != nil {
+			specs = append(specs, sv)
+		}
+	}
+	latest := FilterSpecs(specs, SpecFilter{LatestOnly: true})
+	var got string
+	for _, s := range latest {
+		if s.SpecID == "37.571-5" {
+			got = s.Version
+		}
+	}
+	if got != "j10" {
+		t.Errorf("latest version for 37.571-5 = %q, want %q", got, "j10")
+	}
+
+	cachePath := filepath.Join(cacheHome, "3gpp-mcp", CacheKey("speclist"))
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Errorf("recovered complete spec list should be cached; stat err = %v", err)
+	}
+}
+
+// TestFetchSpecList_ZeroZipListingIsFailure verifies that a well-formed page
+// with no .zip links at all — a WAF block page or error page served as 200 —
+// counts as a failed listing. Every spec directory in the archive holds at
+// least one version, so "no versions" is never a real answer.
+func TestFetchSpecList_ZeroZipListingIsFailure(t *testing.T) {
+	cacheHome := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+	t.Setenv("THREEGPP_LISTING_RETRY_MS", "0")
+
+	ts := issueArchive(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>This transfer is blocked.</body></html>`)
+	})
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	_, err := FetchSpecList(context.Background(), client, nil, true, 2)
+	var partial *PartialSpecListError
+	if !errors.As(err, &partial) {
+		t.Fatalf("FetchSpecList err = %v, want *PartialSpecListError", err)
+	}
+	cachePath := filepath.Join(cacheHome, "3gpp-mcp", CacheKey("speclist"))
+	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
+		t.Errorf("partial spec list must not be cached; stat err = %v", err)
+	}
+}
+
+// TestFetchSpecList_ZeroZipListingRetrySucceeds verifies that a transient
+// WAF block page is healed by the retry: the validation failure counts as a
+// failed attempt, so the next attempt sees the real listing.
+func TestFetchSpecList_ZeroZipListingRetrySucceeds(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("THREEGPP_LISTING_RETRY_MS", "0")
+
+	var calls int
+	ts := issueArchive(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			fmt.Fprint(w, `<html><body>This transfer is blocked.</body></html>`)
+			return
+		}
+		fmt.Fprint(w, `<a href="37571-5-j10.zip">37571-5-j10.zip</a>`+"\n")
+	})
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	entries, err := FetchSpecList(context.Background(), client, nil, false, 2)
+	if err != nil {
+		t.Fatalf("FetchSpecList: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %v", len(entries), entries)
+	}
+}
+
+// TestFetchSpecList_EmptySeriesListingIsFailure verifies that a series page
+// listing no spec directories is treated as a failed listing rather than a
+// series that silently contributes nothing.
+func TestFetchSpecList_EmptySeriesListingIsFailure(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("THREEGPP_LISTING_RETRY_MS", "0")
+
+	archivePath := "/ftp/Specs/archive/"
+	mux := http.NewServeMux()
+	mux.HandleFunc(archivePath, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != archivePath {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `<a href="23_series/">23_series</a>`+"\n")
+	})
+	mux.HandleFunc(archivePath+"23_series/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>This transfer is blocked.</body></html>`)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	_, err := FetchSpecList(context.Background(), client, nil, false, 2)
+	var partial *PartialSpecListError
+	if !errors.As(err, &partial) {
+		t.Fatalf("FetchSpecList err = %v, want *PartialSpecListError", err)
+	}
+}
+
+// TestFetchSpecList_EmptyRootFails verifies that an archive root listing
+// without any *_series directory is a hard error: there is nothing usable to
+// scrape, partial or otherwise.
+func TestFetchSpecList_EmptyRootFails(t *testing.T) {
+	t.Setenv("THREEGPP_LISTING_RETRY_MS", "0")
+
+	archivePath := "/ftp/Specs/archive/"
+	mux := http.NewServeMux()
+	mux.HandleFunc(archivePath, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>This transfer is blocked.</body></html>`)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	_, err := FetchSpecList(context.Background(), client, nil, false, 2)
+	if err == nil {
+		t.Fatal("expected error for a root listing with no series directories")
+	}
+	var partial *PartialSpecListError
+	if errors.As(err, &partial) {
+		t.Fatalf("err = %v; an unusable root is a hard error, not a partial list", err)
+	}
+}
+
+// TestFetchSpecZips_TruncatedListingFails verifies the single-spec listing
+// path rejects a truncated body instead of returning the few entries that
+// survived the cut.
+func TestFetchSpecZips_TruncatedListingFails(t *testing.T) {
+	cacheHome := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/37_series/37.571-5/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body><table><a href="37571-5-100.zip">37571-5-100.zip</a>`)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	if _, err := FetchSpecZips(context.Background(), client, "37.571-5", true); err == nil {
+		t.Fatal("expected error for a truncated listing")
+	}
+	if names, _ := filepath.Glob(filepath.Join(cacheHome, "3gpp-mcp", "*")); len(names) != 0 {
+		t.Errorf("nothing should be cached for a truncated listing, found %v", names)
+	}
+}
+
+// TestFilterSpecs_LatestAcrossTokenEras pits legacy all-digit tokens against
+// letter-era tokens through the real parser, in several input orders: the
+// newest version must win regardless of how the archive listed the files.
+func TestFilterSpecs_LatestAcrossTokenEras(t *testing.T) {
+	entries := []string{
+		"37_series/37.571-5/37571-5-100.zip",
+		"37_series/37.571-5/37571-5-200.zip",
+		"37_series/37.571-5/37571-5-g50.zip",
+		"37_series/37.571-5/37571-5-i10.zip",
+		"37_series/37.571-5/37571-5-j10.zip",
+	}
+	orders := [][]int{
+		{0, 1, 2, 3, 4},
+		{4, 3, 2, 1, 0},
+		{2, 4, 0, 3, 1},
+	}
+	for _, order := range orders {
+		var specs []*SpecVersion
+		for _, i := range order {
+			sv := ParseSpecEntry(entries[i])
+			if sv == nil {
+				t.Fatalf("ParseSpecEntry(%q) = nil", entries[i])
+			}
+			specs = append(specs, sv)
+		}
+		got := FilterSpecs(specs, SpecFilter{LatestOnly: true})
+		if len(got) != 1 {
+			t.Fatalf("order %v: expected 1 spec, got %d", order, len(got))
+		}
+		if got[0].Version != "j10" {
+			t.Errorf("order %v: latest = %q, want %q", order, got[0].Version, "j10")
+		}
+	}
+}
+
+// TestFetchPage_BodyAtLimitFails verifies that a listing body reaching
+// maxPageSize is rejected: the limit reader would silently drop the tail, so
+// hitting it means the listing cannot be trusted.
+func TestFetchPage_BodyAtLimitFails(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		chunk := strings.Repeat("x", 1<<20)
+		for written := 0; written <= maxPageSize; written += len(chunk) {
+			if _, err := w.Write([]byte(chunk)); err != nil {
+				return
+			}
+		}
+	}))
+	defer ts.Close()
+
+	_, err := fetchPage(context.Background(), http.DefaultClient, ts.URL)
+	if err == nil || !strings.Contains(err.Error(), "refusing truncated body") {
+		t.Fatalf("err = %v, want the over-limit refusal", err)
 	}
 }

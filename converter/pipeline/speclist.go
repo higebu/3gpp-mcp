@@ -2,15 +2,19 @@ package pipeline
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -74,16 +78,24 @@ func base36Digit(c byte) int {
 }
 
 // versionValue converts a base-36 version token into a comparable integer.
-// Returns 0 if the token contains an invalid character.
+// Returns -1 if the token contains an invalid character, so garbage never
+// compares equal to a legitimate all-zero token. The value saturates at
+// math.MaxInt32: versionTokenRE puts no upper bound on token length, so an
+// absurdly long token must neither overflow int64 here nor truncate when the
+// caller narrows to int on a 32-bit platform. Saturated tokens tie, and
+// compareVersions resolves the tie on the raw token.
 func versionValue(v string) int64 {
 	v = strings.ToLower(strings.TrimSpace(v))
 	var n int64
 	for i := 0; i < len(v); i++ {
 		d := base36Digit(v[i])
 		if d < 0 {
-			return 0
+			return -1
 		}
 		n = n*36 + int64(d)
+		if n > math.MaxInt32 {
+			return math.MaxInt32
+		}
 	}
 	return n
 }
@@ -146,14 +158,6 @@ func ParseSpecEntry(entry string) *SpecVersion {
 		Release:       base36Digit(token[0]),
 		URL:           baseURL + entry,
 	}
-}
-
-// IsNewerVersion compares version strings (e.g., "k10" vs "j60").
-func IsNewerVersion(newVer, oldVer string) bool {
-	if oldVer == "" {
-		return true
-	}
-	return versionValue(newVer) > versionValue(oldVer)
 }
 
 // FetchSpecZips fetches zip file entries for a single spec directly,
@@ -273,9 +277,16 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 		}
 	}
 
-	// Level 1: Get series directories
+	// Level 1: Get series directories. The archive root always lists the
+	// *_series directories; a page without any is an unusable response (an
+	// error page served as 200), not an empty archive.
 	log.Println("Fetching series list...")
-	html, err := fetchPage(ctx, client, baseURL)
+	html, err := fetchPageRetry(ctx, client, baseURL, func(html string) error {
+		if !slices.ContainsFunc(extractLinks(html), seriesDirRE.MatchString) {
+			return fmt.Errorf("listing contains no *_series directories")
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("fetch archive root: %w", err)
 	}
@@ -316,20 +327,30 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			html, err := fetchPage(ctx, client, baseURL+sd+"/")
+			// Every series directory holds spec directories; none means the
+			// response was unusable, same as a failed fetch.
+			html, err := fetchPageRetry(ctx, client, baseURL+sd+"/", func(html string) error {
+				if !slices.ContainsFunc(extractLinks(html), specDirRE.MatchString) {
+					return fmt.Errorf("listing contains no spec directories")
+				}
+				return nil
+			})
 			if err != nil {
 				log.Printf("Failed to fetch %s: %v", sd, err)
 				fetchFailures.Add(1)
 				return
 			}
-			links := extractLinks(html)
-			mu.Lock()
-			for _, name := range links {
+			var specDirs []string
+			for _, name := range extractLinks(html) {
 				if specDirRE.MatchString(name) {
-					allSpecPairs = append(allSpecPairs, specPair{sd, name})
+					specDirs = append(specDirs, name)
 				}
 			}
-			log.Printf("%s: %d specs", sd, len(links))
+			mu.Lock()
+			for _, name := range specDirs {
+				allSpecPairs = append(allSpecPairs, specPair{sd, name})
+			}
+			log.Printf("%s: %d specs", sd, len(specDirs))
 			mu.Unlock()
 		}()
 	}
@@ -347,19 +368,30 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			html, err := fetchPage(ctx, client, baseURL+pair.seriesDir+"/"+pair.specDir+"/")
+			// Every spec directory in the archive holds at least one version
+			// (FetchSpecZips relies on the same invariant), so a page with no
+			// .zip links is an unusable response, same as a failed fetch.
+			html, err := fetchPageRetry(ctx, client, baseURL+pair.seriesDir+"/"+pair.specDir+"/", func(html string) error {
+				if !slices.ContainsFunc(extractLinks(html), func(name string) bool {
+					return strings.HasSuffix(name, ".zip")
+				}) {
+					return fmt.Errorf("listing contains no .zip entries")
+				}
+				return nil
+			})
 			if err != nil {
 				log.Printf("Failed to fetch %s/%s: %v", pair.seriesDir, pair.specDir, err)
 				fetchFailures.Add(1)
 				return
 			}
-			links := extractLinks(html)
-			mu.Lock()
-			for _, name := range links {
+			var zips []string
+			for _, name := range extractLinks(html) {
 				if strings.HasSuffix(name, ".zip") {
-					entries = append(entries, pair.seriesDir+"/"+pair.specDir+"/"+name)
+					zips = append(zips, pair.seriesDir+"/"+pair.specDir+"/"+name)
 				}
 			}
+			mu.Lock()
+			entries = append(entries, zips...)
 			mu.Unlock()
 		}()
 	}
@@ -451,7 +483,7 @@ func FilterSpecs(specs []*SpecVersion, f SpecFilter) []*SpecVersion {
 		best := make(map[string]*SpecVersion)
 		for _, s := range filtered {
 			key := s.SpecID
-			if existing, ok := best[key]; !ok || versionKey(s) > versionKey(existing) {
+			if existing, ok := best[key]; !ok || compareVersions(s, existing) > 0 {
 				best[key] = s
 			}
 		}
@@ -468,8 +500,20 @@ func FilterSpecs(specs []*SpecVersion, f SpecFilter) []*SpecVersion {
 	return filtered
 }
 
-func versionKey(s *SpecVersion) int64 {
-	return int64(s.Release)*10000 + int64(s.VersionMinor)
+// compareVersions orders two versions of the same spec: release first, then
+// the base-36 value of the token's remainder. Comparing the components keeps
+// a large VersionMinor — possible because versionTokenRE puts no upper bound
+// on token length — from bleeding into the release, which the previous
+// Release*10000+VersionMinor key allowed. The raw token is the final
+// tie-break so ties resolve deterministically regardless of input order.
+func compareVersions(a, b *SpecVersion) int {
+	if c := cmp.Compare(a.Release, b.Release); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.VersionMinor, b.VersionMinor); c != 0 {
+		return c
+	}
+	return strings.Compare(a.Version, b.Version)
 }
 
 func fetchPage(ctx context.Context, client *http.Client, url string) (string, error) {
@@ -489,11 +533,76 @@ func fetchPage(ctx context.Context, client *http.Client, url string) (string, er
 		return "", fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPageSize))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPageSize+1))
 	if err != nil {
 		return "", err
 	}
+	if len(body) > maxPageSize {
+		return "", fmt.Errorf("listing page %s exceeds %d bytes; refusing truncated body", url, maxPageSize)
+	}
+	// A listing that opens an <html> document but never closes it lost its
+	// tail somewhere along the way. Directory listings are sorted by name, so
+	// a truncated body keeps only the oldest versions and would otherwise be
+	// accepted as a complete, much shorter listing (issue #206). Bodies
+	// without an <html> tag are left alone: extractLinks only needs anchors.
+	lower := strings.ToLower(string(body))
+	if strings.Contains(lower, "<html") && !strings.Contains(lower, "</html>") {
+		return "", fmt.Errorf("listing page %s appears truncated: response opens an <html> document but never closes it", url)
+	}
 	return string(body), nil
+}
+
+const listingFetchAttempts = 3
+
+// listingRetryBackoff returns the initial delay between listing fetch
+// attempts; the delay doubles after every failure. Overridable via the
+// THREEGPP_LISTING_RETRY_MS environment variable — tests across packages set
+// it to 0, which is why this is read per call rather than at init. The upper
+// bound keeps the doubling from overflowing into a negative delay that would
+// silently disable the pacing.
+func listingRetryBackoff() time.Duration {
+	if v := os.Getenv("THREEGPP_LISTING_RETRY_MS"); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms >= 0 && ms <= 10*60*1000 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	return time.Second
+}
+
+// fetchPageRetry fetches a listing page, retrying transient failures with
+// exponential backoff. A non-nil validate runs on each successful fetch and
+// its error counts as a failed attempt, so a transiently unusable body — a
+// WAF block page served as a complete 200 — is retried like a transport
+// error. It is used by the full archive scrape, where a single flaky listing
+// among thousands would otherwise abort the whole build; single-spec fetches
+// stay single-shot so interactive tools fail fast.
+func fetchPageRetry(ctx context.Context, client *http.Client, url string, validate func(html string) error) (string, error) {
+	var lastErr error
+	backoff := listingRetryBackoff()
+	for attempt := 0; attempt < listingFetchAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+		}
+		html, err := fetchPage(ctx, client, url)
+		if err == nil {
+			if validate == nil {
+				return html, nil
+			}
+			if err = validate(html); err == nil {
+				return html, nil
+			}
+		}
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		lastErr = err
+	}
+	return "", fmt.Errorf("after %d attempts: %w", listingFetchAttempts, lastErr)
 }
 
 func extractLinks(html string) []string {
