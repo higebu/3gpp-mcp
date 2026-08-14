@@ -1259,14 +1259,17 @@ See also 3GPP TS 23.228 annex A.1 for further details.`
 func TestExtractReferences_PrefixPattern(t *testing.T) {
 	// "keyword Y of TS X" pattern (keyword before spec ID)
 	content := `The mode is described in Annex H of 3GPP TS 33.203.
-See subclause 11.9 of TS 29.061 and clause B.1.1 of 3GPP TS 24.186.`
+See subclause 11.9 of TS 29.061 and clause B.1.1 of 3GPP TS 24.186.
+Same as subclause 5.5.4.2 of TS 36.521-1 and clause 6.2 of 3GPP TS 29.198-04.`
 
 	refs := ExtractReferences("TS 24.229", "5.2.2.1", content, nil)
 
 	expect := map[string]string{
-		"TS 33.203": "H",
-		"TS 29.061": "11.9",
-		"TS 24.186": "B.1.1",
+		"TS 33.203":    "H",
+		"TS 29.061":    "11.9",
+		"TS 24.186":    "B.1.1",
+		"TS 36.521-1":  "5.5.4.2",
+		"TS 29.198-04": "6.2",
 	}
 	for spec, section := range expect {
 		found := false
@@ -1279,6 +1282,92 @@ See subclause 11.9 of TS 29.061 and clause B.1.1 of 3GPP TS 24.186.`
 		if !found {
 			t.Errorf("expected reference to %s section %s, got refs: %+v", spec, section, refs)
 		}
+	}
+}
+
+func TestExtractReferences_MultiPartSuffix(t *testing.T) {
+	// Multi-part specs keep their part suffix (#204): before the fix the
+	// suffix was dropped, producing targets like "TS 37.579" that name no
+	// document, and the leftover "-1" blocked tsRefRE's clause tail so the
+	// target section was lost as well.
+	content := `Single cell configuration according to TS 37.579-1 clause 5.2.2.2.1.
+See TS 38.101-2.
+The requirements are defined in 3GPP TS 36.521-3 Annex F.`
+
+	refs := ExtractReferences("TS 37.579-7", "5.1", content, nil)
+	if len(refs) != 3 {
+		t.Fatalf("expected 3 references, got %d: %+v", len(refs), refs)
+	}
+	expect := map[string]string{
+		"TS 37.579-1": "5.2.2.2.1",
+		"TS 38.101-2": "",
+		"TS 36.521-3": "F",
+	}
+	for spec, section := range expect {
+		found := false
+		for _, r := range refs {
+			if r.TargetSpec == spec && r.TargetSection == section {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected reference to %s section %q, got refs: %+v", spec, section, refs)
+		}
+	}
+}
+
+func TestExtractReferences_MultiPartSelfRef(t *testing.T) {
+	// The self-reference exclusion compares full suffixed IDs: a citation of
+	// the source part is excluded, a citation of a sibling part is kept —
+	// it names a different document.
+	content := `See TS 37.579-4 clause 5.1 and TS 37.579-1 clause 5.2.`
+
+	refs := ExtractReferences("TS 37.579-4", "6.2", content, nil)
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 reference, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].TargetSpec != "TS 37.579-1" || refs[0].TargetSection != "5.2" {
+		t.Errorf("expected TS 37.579-1 clause 5.2, got %+v", refs[0])
+	}
+}
+
+func TestExtractReferences_MultiPartDedup(t *testing.T) {
+	// Repeated citations of one part deduplicate; citations of two parts of
+	// the same family stay distinct.
+	content := `See TS 37.579-1 clause 5.2. As specified in TS 37.579-1 clause 5.2.
+See also TS 37.579-2 clause 5.2.`
+
+	refs := ExtractReferences("TS 37.579-7", "5.1", content, nil)
+	if len(refs) != 2 {
+		t.Fatalf("expected 2 references, got %d: %+v", len(refs), refs)
+	}
+	for _, spec := range []string{"TS 37.579-1", "TS 37.579-2"} {
+		found := false
+		for _, r := range refs {
+			if r.TargetSpec == spec && r.TargetSection == "5.2" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected reference to %s clause 5.2, got refs: %+v", spec, refs)
+		}
+	}
+}
+
+func TestExtractReferences_SuffixTooLong(t *testing.T) {
+	// A hyphen followed by more than two digits is not a part suffix: the \b
+	// in specNum rejects a partial take of the digit run and the match falls
+	// back to the family number.
+	content := "See TS 23.501-123 for details."
+
+	refs := ExtractReferences("TS 24.229", "5.1", content, nil)
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 reference, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].TargetSpec != "TS 23.501" || refs[0].TargetSection != "" {
+		t.Errorf("expected section-less reference to TS 23.501, got %+v", refs[0])
 	}
 }
 
@@ -1508,14 +1597,15 @@ func TestParseBracketedRefMap(t *testing.T) {
 [1]	3GPP TR 21.905: "Vocabulary for 3GPP Specifications"
 [2]	3GPP TS 23.228: "IP Multimedia Subsystem (IMS)"
 [19]	3GPP TS 33.203: "Access security for IP-based services"
-[13D]	TS 29.214: "Policy and Charging Control"`
+[13D]	TS 29.214: "Policy and Charging Control"
+[45]	3GPP TS 37.579-1: "Mission Critical (MC) services over LTE; Part 1"`
 
 	m := ParseBracketedRefMap(content)
 	if m == nil {
 		t.Fatal("expected non-nil map")
 	}
-	if len(m) != 4 {
-		t.Fatalf("expected 4 mappings, got %d: %v", len(m), m)
+	if len(m) != 5 {
+		t.Fatalf("expected 5 mappings, got %d: %v", len(m), m)
 	}
 
 	expect := map[string]string{
@@ -1523,6 +1613,7 @@ func TestParseBracketedRefMap(t *testing.T) {
 		"2":   "TS 23.228",
 		"19":  "TS 33.203",
 		"13D": "TS 29.214",
+		"45":  "TS 37.579-1",
 	}
 	for k, v := range expect {
 		if m[k] != v {
@@ -1607,6 +1698,23 @@ func TestExtractReferences_BracketedSelfRef(t *testing.T) {
 	refs := ExtractReferences("TS 24.229", "3", content, bracketMap)
 	if len(refs) != 0 {
 		t.Errorf("expected 0 refs (self-reference excluded), got %d: %+v", len(refs), refs)
+	}
+}
+
+func TestExtractReferences_BracketedMultiPart(t *testing.T) {
+	// Bracket entries resolve to suffixed part IDs: a bracket naming the
+	// source part is a self-reference, a sibling part is kept.
+	content := `See [2] clause 5.2 and [3] clause 6.1.`
+	bracketMap := map[string]string{
+		"2": "TS 37.579-1",
+		"3": "TS 37.579-2",
+	}
+	refs := ExtractReferences("TS 37.579-2", "5.1", content, bracketMap)
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 reference, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].TargetSpec != "TS 37.579-1" || refs[0].TargetSection != "5.2" {
+		t.Errorf("expected TS 37.579-1 clause 5.2, got %+v", refs[0])
 	}
 }
 
@@ -2517,6 +2625,53 @@ func TestExtractReferences_CoordinatedList(t *testing.T) {
 		if !found {
 			t.Errorf("expected reference to TS 23.502 section %s, got refs: %+v", want, refs)
 		}
+	}
+}
+
+func TestExtractReferences_MultiPartMultiSection(t *testing.T) {
+	// The three multi-section patterns keep the part suffix too.
+	cases := []struct {
+		name    string
+		content string
+		wants   []string
+	}{
+		{
+			name:    "prefix list",
+			content: "as defined in clauses 8.2 and 16.11 of TS 38.101-1 [45].",
+			wants:   []string{"8.2", "16.11"},
+		},
+		{
+			name:    "spec-first list",
+			content: "See TS 38.101-1 clauses 8.2 and 16.11 for details.",
+			wants:   []string{"8.2", "16.11"},
+		},
+		{
+			name:    "coordinated list",
+			content: "described in clause 4.12.2 and in clause 4.12.2a of TS 38.101-1, respectively.",
+			wants:   []string{"4.12.2", "4.12.2a"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			refs := ExtractReferences("TS 24.229", "5.1", tc.content, nil)
+			for _, want := range tc.wants {
+				found := false
+				for _, r := range refs {
+					if r.TargetSpec == "TS 38.101-1" && r.TargetSection == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected reference to TS 38.101-1 section %s, got refs: %+v", want, refs)
+				}
+			}
+			for _, r := range refs {
+				if r.TargetSpec != "TS 38.101-1" {
+					t.Errorf("unexpected target spec %q (part suffix dropped?): %+v", r.TargetSpec, r)
+				}
+			}
+		})
 	}
 }
 

@@ -70,6 +70,21 @@ func TestLinkifyRefs_TS(t *testing.T) {
 			input: "See clause 4.2.2.2A.1 of TS 24.502.",
 			want:  "See [clause 4.2.2.2A.1 of TS 24.502](/specs/TS 24.502/sections/4.2.2.2A.1).",
 		},
+		{
+			name:  "multi-part spec with clause",
+			input: "See TS 38.101-1 clause 5.2 for details.",
+			want:  "See [TS 38.101-1 clause 5.2](/specs/TS 38.101-1/sections/5.2) for details.",
+		},
+		{
+			name:  "multi-part spec sentence-final",
+			input: "as specified in TS 36.521-1.",
+			want:  "as specified in [TS 36.521-1](/specs/TS 36.521-1).",
+		},
+		{
+			name:  "clause before multi-part spec",
+			input: "Same as subclause 5.5.4.2 of TS 36.521-1.",
+			want:  "Same as [subclause 5.5.4.2 of TS 36.521-1](/specs/TS 36.521-1/sections/5.5.4.2).",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -118,6 +133,7 @@ func TestLinkifyRefs_Bracket(t *testing.T) {
 		"19":  "TS 33.203",
 		"2":   "TS 23.228",
 		"13D": "TS 29.214",
+		"45":  "TS 37.579-1",
 	}
 
 	tests := []struct {
@@ -144,6 +160,11 @@ func TestLinkifyRefs_Bracket(t *testing.T) {
 			name:  "unknown bracket ref ignored",
 			input: "See [99] clause 3.",
 			want:  "See [99] clause 3.",
+		},
+		{
+			name:  "bracket ref to multi-part spec",
+			input: "See [45] clause 5.2.",
+			want:  "See [[45] clause 5.2](/specs/TS 37.579-1/sections/5.2).",
 		},
 	}
 	for _, tt := range tests {
@@ -206,6 +227,11 @@ func TestLinkifyRefs_MultiSection(t *testing.T) {
 			name:  "single clause still uses existing pattern",
 			input: "clause 5.1 of TS 23.501",
 			want:  "[clause 5.1 of TS 23.501](/specs/TS 23.501/sections/5.1)",
+		},
+		{
+			name:  "spec-first multi-section with part suffix",
+			input: "TS 38.101-1 clauses 8.2 and 16.11",
+			want:  "[TS 38.101-1](/specs/TS 38.101-1) clauses [8.2](/specs/TS 38.101-1/sections/8.2) and [16.11](/specs/TS 38.101-1/sections/16.11)",
 		},
 	}
 	for _, tt := range tests {
@@ -538,6 +564,16 @@ func TestLinkifyRefs_BareRefs(t *testing.T) {
 			want:  "See clause 4.2 ([TS 23.402](/specs/TS 23.402)).",
 		},
 		{
+			name:  "capitalized after multi-part spec not linked bare",
+			input: "See TS 38.101-1 Clause 5.1.",
+			want:  "See [TS 38.101-1](/specs/TS 38.101-1) Clause 5.1.",
+		},
+		{
+			name:  "parenthesized multi-part designator not linked bare",
+			input: "See clause 4.2 (TS 38.101-1).",
+			want:  "See clause 4.2 ([TS 38.101-1](/specs/TS 38.101-1)).",
+		},
+		{
 			name:  "colon after spec not linked bare",
 			input: "See TS 23.402: Clause 5.1.",
 			want:  "See [TS 23.402](/specs/TS 23.402): Clause 5.1.",
@@ -661,13 +697,16 @@ func TestLinkifyRefs_BareRefsNilGate(t *testing.T) {
 }
 
 // stubTargetInfo validates cross-spec references: TS 23.502 has only 4.12.2,
-// TS 33.203 has only 6; other specs cannot be validated.
+// TS 33.203 has only 6, TS 36.521-1 has only 5.5.4.2; other specs cannot be
+// validated.
 func stubTargetInfo(spec, section string) (bool, string, bool) {
 	switch spec {
 	case "TS 23.502":
 		return section == "4.12.2", "20.2.0", true
 	case "TS 33.203":
 		return section == "6", "18.0.0", true
+	case "TS 36.521-1":
+		return section == "5.5.4.2", "18.5.0", true
 	}
 	return false, "", false
 }
@@ -720,6 +759,11 @@ func TestLinkifyRefs_TargetValidation(t *testing.T) {
 			name:  "RFC references are never validated",
 			input: "See RFC 3748 section 99.9.",
 			want:  "See [RFC 3748 section 99.9](https://www.rfc-editor.org/rfc/rfc3748#section-99.9).",
+		},
+		{
+			name:  "multi-part spec validates against the suffixed ID",
+			input: "See TS 36.521-1 clause 5.5.4.2.",
+			want:  "See [TS 36.521-1 clause 5.5.4.2](/specs/TS 36.521-1/sections/5.5.4.2).",
 		},
 	}
 	for _, tt := range tests {
