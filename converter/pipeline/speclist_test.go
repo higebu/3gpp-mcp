@@ -30,6 +30,10 @@ func TestParseSpecEntry(t *testing.T) {
 		// Base-36 versions with letters in the 2nd/3rd position must parse.
 		{"base36 digit-major", "34_series/34.108/34108-3a0.zip", "34.108", 3},
 		{"base36 letter-major", "34_series/34.108/34108-fb0.zip", "34.108", 15},
+		// Legacy directories mix case: 08_series/08.09 holds 0809-301.ZIP and
+		// 11_series/11.20 holds 1120-3J0.ZIP (issue #211).
+		{"uppercase extension", "08_series/08.09/0809-301.ZIP", "08.09", 3},
+		{"uppercase version token", "11_series/11.20/1120-3J0.ZIP", "11.20", 3},
 		{"empty string", "", "", 0},
 		{"no zip suffix", "23_series/23.501/23501-k10.docx", "", 0},
 		{"wrong parts count", "23501-k10.zip", "", 0},
@@ -899,5 +903,161 @@ func TestFetchPage_BodyAtLimitFails(t *testing.T) {
 	_, err := fetchPage(context.Background(), http.DefaultClient, ts.URL)
 	if err == nil || !strings.Contains(err.Error(), "refusing truncated body") {
 		t.Fatalf("err = %v, want the over-limit refusal", err)
+	}
+}
+
+// chromeOnly is what a real, complete archive listing looks like when the
+// directory is empty: the breadcrumb and sort anchors are always present, the
+// entries are simply absent. Verified against the live archive for issue #211
+// (00_series/00.02 and six more); the WAF block page by contrast carries no
+// anchors at all.
+const chromeOnly = `<html><body>` +
+	`<a href="https://www.3gpp.org/ftp/Specs/archive/">archive</a>` + "\n" +
+	`<a href="?sortby=name">Name</a>` + "\n" +
+	`<a href="?sortby=date">Date</a>` + "\n" +
+	`</body></html>`
+
+// TestFetchSpecList_EmptySpecDirSkipped verifies that a genuinely empty spec
+// directory — a complete listing page with its navigation anchors but no zip
+// entries — contributes nothing without failing the build, and that the
+// resulting list still counts as complete and is cached.
+func TestFetchSpecList_EmptySpecDirSkipped(t *testing.T) {
+	cacheHome := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+	t.Setenv("THREEGPP_LISTING_RETRY_MS", "0")
+
+	ts := issueArchive(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, chromeOnly)
+	})
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	entries, err := FetchSpecList(context.Background(), client, nil, true, 2)
+	if err != nil {
+		t.Fatalf("FetchSpecList: %v", err)
+	}
+	if len(entries) != 1 || !strings.Contains(entries[0], "37571-1-j10.zip") {
+		t.Fatalf("entries = %v, want only 37.571-1's zip", entries)
+	}
+	cachePath := filepath.Join(cacheHome, "3gpp-mcp", CacheKey("speclist"))
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Errorf("a list with a genuinely empty directory is complete and must be cached; stat err = %v", err)
+	}
+}
+
+// TestFetchSpecList_EmptySeriesDirSkipped verifies the same for a series
+// directory with no spec directories: 47_series exists in the archive and
+// holds nothing.
+func TestFetchSpecList_EmptySeriesDirSkipped(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("THREEGPP_LISTING_RETRY_MS", "0")
+
+	archivePath := "/ftp/Specs/archive/"
+	mux := http.NewServeMux()
+	mux.HandleFunc(archivePath, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != archivePath {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `<a href="23_series/">23_series</a>`+"\n"+`<a href="47_series/">47_series</a>`+"\n")
+	})
+	mux.HandleFunc(archivePath+"23_series/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="23.001/">23.001</a>`+"\n")
+	})
+	mux.HandleFunc(archivePath+"23_series/23.001/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="23001-a00.zip">23001-a00.zip</a>`+"\n")
+	})
+	mux.HandleFunc(archivePath+"47_series/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, chromeOnly)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	entries, err := FetchSpecList(context.Background(), client, nil, false, 2)
+	if err != nil {
+		t.Fatalf("FetchSpecList: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %v, want only 23.001's zip", entries)
+	}
+}
+
+// TestFetchSpecList_UppercaseZipIncluded verifies that entries with an
+// uppercase extension are collected: 08_series/08.09 writes its one version
+// as 0809-301.ZIP, and a case-sensitive match dropped such specs from every
+// build (issue #211).
+func TestFetchSpecList_UppercaseZipIncluded(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("THREEGPP_LISTING_RETRY_MS", "0")
+
+	ts := issueArchive(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="37571-5-3J0.ZIP">37571-5-3J0.ZIP</a>`+"\n")
+	})
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	entries, err := FetchSpecList(context.Background(), client, nil, false, 2)
+	if err != nil {
+		t.Fatalf("FetchSpecList: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries = %v, want 2 including the uppercase .ZIP", entries)
+	}
+	var upper string
+	for _, e := range entries {
+		if strings.Contains(e, "37571-5") {
+			upper = e
+		}
+	}
+	sv := ParseSpecEntry(upper)
+	if sv == nil {
+		t.Fatalf("ParseSpecEntry(%q) = nil", upper)
+	}
+	if sv.Version != "3j0" || sv.Release != 3 {
+		t.Errorf("Version = %q Release = %d, want 3j0 / 3", sv.Version, sv.Release)
+	}
+	if !strings.HasSuffix(sv.URL, "37571-5-3J0.ZIP") {
+		t.Errorf("URL = %q, want the original uppercase filename preserved", sv.URL)
+	}
+}
+
+// TestFetchSpecZips_UppercaseZipIncluded verifies the single-spec listing
+// path collects uppercase entries too.
+func TestFetchSpecZips_UppercaseZipIncluded(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ftp/Specs/archive/08_series/08.09/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="0809-301.ZIP">0809-301.ZIP</a>`+"\n")
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	entries, err := FetchSpecZips(context.Background(), client, "08.09", false)
+	if err != nil {
+		t.Fatalf("FetchSpecZips: %v", err)
+	}
+	if len(entries) != 1 || !strings.HasSuffix(entries[0], "0809-301.ZIP") {
+		t.Fatalf("entries = %v, want the uppercase .ZIP entry", entries)
+	}
+}
+
+// TestFetchSpecList_BlockPageWithLinksIsFailure verifies the empty-directory
+// classification requires the listing UI's own sort anchors: a block page
+// that happens to carry an unrelated link must still count as an unusable
+// response, not as a genuinely empty directory.
+func TestFetchSpecList_BlockPageWithLinksIsFailure(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("THREEGPP_LISTING_RETRY_MS", "0")
+
+	ts := issueArchive(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>Blocked. <a href="https://example.com/support">Contact support</a></body></html>`)
+	})
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	_, err := FetchSpecList(context.Background(), client, nil, false, 2)
+	var partial *PartialSpecListError
+	if !errors.As(err, &partial) {
+		t.Fatalf("FetchSpecList err = %v, want *PartialSpecListError", err)
 	}
 }
