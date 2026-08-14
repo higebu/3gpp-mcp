@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"regexp"
@@ -78,7 +79,11 @@ func base36Digit(c byte) int {
 
 // versionValue converts a base-36 version token into a comparable integer.
 // Returns -1 if the token contains an invalid character, so garbage never
-// compares equal to a legitimate all-zero token.
+// compares equal to a legitimate all-zero token. The value saturates at
+// math.MaxInt32: versionTokenRE puts no upper bound on token length, so an
+// absurdly long token must neither overflow int64 here nor truncate when the
+// caller narrows to int on a 32-bit platform. Saturated tokens tie, and
+// compareVersions resolves the tie on the raw token.
 func versionValue(v string) int64 {
 	v = strings.ToLower(strings.TrimSpace(v))
 	var n int64
@@ -88,6 +93,9 @@ func versionValue(v string) int64 {
 			return -1
 		}
 		n = n*36 + int64(d)
+		if n > math.MaxInt32 {
+			return math.MaxInt32
+		}
 	}
 	return n
 }
@@ -269,20 +277,21 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 		}
 	}
 
-	// Level 1: Get series directories
+	// Level 1: Get series directories. The archive root always lists the
+	// *_series directories; a page without any is an unusable response (an
+	// error page served as 200), not an empty archive.
 	log.Println("Fetching series list...")
-	html, err := fetchPageRetry(ctx, client, baseURL)
+	html, err := fetchPageRetry(ctx, client, baseURL, func(html string) error {
+		if !slices.ContainsFunc(extractLinks(html), seriesDirRE.MatchString) {
+			return fmt.Errorf("listing contains no *_series directories")
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("fetch archive root: %w", err)
 	}
 
 	seriesDirs := extractLinks(html)
-	// The archive root always lists the *_series directories; a page without
-	// any is an unusable response (an error page served as 200), not an
-	// empty archive.
-	if !slices.ContainsFunc(seriesDirs, seriesDirRE.MatchString) {
-		return nil, fmt.Errorf("archive root listing contains no *_series directories: unusable response from %s", baseURL)
-	}
 	var filtered []string
 	for _, name := range seriesDirs {
 		if !seriesDirRE.MatchString(name) {
@@ -318,25 +327,24 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			html, err := fetchPageRetry(ctx, client, baseURL+sd+"/")
+			// Every series directory holds spec directories; none means the
+			// response was unusable, same as a failed fetch.
+			html, err := fetchPageRetry(ctx, client, baseURL+sd+"/", func(html string) error {
+				if !slices.ContainsFunc(extractLinks(html), specDirRE.MatchString) {
+					return fmt.Errorf("listing contains no spec directories")
+				}
+				return nil
+			})
 			if err != nil {
 				log.Printf("Failed to fetch %s: %v", sd, err)
 				fetchFailures.Add(1)
 				return
 			}
-			links := extractLinks(html)
 			var specDirs []string
-			for _, name := range links {
+			for _, name := range extractLinks(html) {
 				if specDirRE.MatchString(name) {
 					specDirs = append(specDirs, name)
 				}
-			}
-			// Every series directory holds spec directories; none means the
-			// response was unusable, same as a failed fetch.
-			if len(specDirs) == 0 {
-				log.Printf("warning: no spec directories found in %s; treating the listing as failed", sd)
-				fetchFailures.Add(1)
-				return
 			}
 			mu.Lock()
 			for _, name := range specDirs {
@@ -360,26 +368,27 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			html, err := fetchPageRetry(ctx, client, baseURL+pair.seriesDir+"/"+pair.specDir+"/")
+			// Every spec directory in the archive holds at least one version
+			// (FetchSpecZips relies on the same invariant), so a page with no
+			// .zip links is an unusable response, same as a failed fetch.
+			html, err := fetchPageRetry(ctx, client, baseURL+pair.seriesDir+"/"+pair.specDir+"/", func(html string) error {
+				if !slices.ContainsFunc(extractLinks(html), func(name string) bool {
+					return strings.HasSuffix(name, ".zip")
+				}) {
+					return fmt.Errorf("listing contains no .zip entries")
+				}
+				return nil
+			})
 			if err != nil {
 				log.Printf("Failed to fetch %s/%s: %v", pair.seriesDir, pair.specDir, err)
 				fetchFailures.Add(1)
 				return
 			}
-			links := extractLinks(html)
 			var zips []string
-			for _, name := range links {
+			for _, name := range extractLinks(html) {
 				if strings.HasSuffix(name, ".zip") {
 					zips = append(zips, pair.seriesDir+"/"+pair.specDir+"/"+name)
 				}
-			}
-			// Every spec directory in the archive holds at least one version
-			// (FetchSpecZips relies on the same invariant), so a page with no
-			// .zip links is an unusable response, same as a failed fetch.
-			if len(zips) == 0 {
-				log.Printf("warning: no .zip entries found in %s/%s; treating the listing as failed", pair.seriesDir, pair.specDir)
-				fetchFailures.Add(1)
-				return
 			}
 			mu.Lock()
 			entries = append(entries, zips...)
@@ -559,10 +568,13 @@ func listingRetryBackoff() time.Duration {
 }
 
 // fetchPageRetry fetches a listing page, retrying transient failures with
-// exponential backoff. It is used by the full archive scrape, where a single
-// flaky listing among thousands would otherwise abort the whole build;
-// single-spec fetches stay single-shot so interactive tools fail fast.
-func fetchPageRetry(ctx context.Context, client *http.Client, url string) (string, error) {
+// exponential backoff. A non-nil validate runs on each successful fetch and
+// its error counts as a failed attempt, so a transiently unusable body — a
+// WAF block page served as a complete 200 — is retried like a transport
+// error. It is used by the full archive scrape, where a single flaky listing
+// among thousands would otherwise abort the whole build; single-spec fetches
+// stay single-shot so interactive tools fail fast.
+func fetchPageRetry(ctx context.Context, client *http.Client, url string, validate func(html string) error) (string, error) {
 	var lastErr error
 	backoff := listingRetryBackoff()
 	for attempt := 0; attempt < listingFetchAttempts; attempt++ {
@@ -576,7 +588,12 @@ func fetchPageRetry(ctx context.Context, client *http.Client, url string) (strin
 		}
 		html, err := fetchPage(ctx, client, url)
 		if err == nil {
-			return html, nil
+			if validate == nil {
+				return html, nil
+			}
+			if err = validate(html); err == nil {
+				return html, nil
+			}
 		}
 		if ctx.Err() != nil {
 			return "", ctx.Err()

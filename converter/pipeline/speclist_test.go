@@ -83,6 +83,9 @@ func TestCompareVersions(t *testing.T) {
 		// instead of bleeding into the release comparison: release 18 with a
 		// huge minor ("izzz") still loses to release 20 ("k00").
 		{"long token cannot outrank a newer release", "23_series/23.501/23501-izzz.zip", "23_series/23.501/23501-k00.zip", -1},
+		// A remainder long enough to saturate versionValue must still order
+		// by release rather than overflow.
+		{"saturating token stays within its release", "23_series/23.501/23501-jzzzzzzzzzzzzzz.zip", "23_series/23.501/23501-k00.zip", -1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -736,6 +739,33 @@ func TestFetchSpecList_ZeroZipListingIsFailure(t *testing.T) {
 	cachePath := filepath.Join(cacheHome, "3gpp-mcp", CacheKey("speclist"))
 	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
 		t.Errorf("partial spec list must not be cached; stat err = %v", err)
+	}
+}
+
+// TestFetchSpecList_ZeroZipListingRetrySucceeds verifies that a transient
+// WAF block page is healed by the retry: the validation failure counts as a
+// failed attempt, so the next attempt sees the real listing.
+func TestFetchSpecList_ZeroZipListingRetrySucceeds(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("THREEGPP_LISTING_RETRY_MS", "0")
+
+	var calls int
+	ts := issueArchive(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			fmt.Fprint(w, `<html><body>This transfer is blocked.</body></html>`)
+			return
+		}
+		fmt.Fprint(w, `<a href="37571-5-j10.zip">37571-5-j10.zip</a>`+"\n")
+	})
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	entries, err := FetchSpecList(context.Background(), client, nil, false, 2)
+	if err != nil {
+		t.Fatalf("FetchSpecList: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %v", len(entries), entries)
 	}
 }
 

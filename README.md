@@ -502,4 +502,5 @@ Conventions shared by all of them:
 | `THREEGPP_FETCH_BUDGET` | How long a tool call waits for an on-demand fetch (default `60s`) |
 | `THREEGPP_MAX_ZIP_SIZE_MB` | Max ZIP download size (default `512`) |
 | `THREEGPP_CACHE_TTL_HOURS` | Spec list cache TTL in hours (default `24`) |
+| `THREEGPP_LISTING_RETRY_MS` | Initial backoff between archive listing fetch attempts in ms (default `1000`) |
 | `XDG_CACHE_HOME` | Cache directory root, per the XDG Base Directory spec |
