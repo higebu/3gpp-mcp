@@ -1542,11 +1542,12 @@ const spStar = `(?:` + spPlus + `)?`
 // boundary: a spec-like prefix of a longer token (TR 38.5MHz) matched before
 // this form existed and still does. The \b sits before the optional 3GPP
 // group so the glued 3GPPTS form still matches.
-// Two capture groups: (TS|TR), (\d+\.\d+).
-const specDesig = `\b(?:3GPP` + spStar + `)?(TS|TR)` + spStar + `(\d+\.\d+)`
+// Two capture groups: (TS|TR) and the spec number (specNum, which keeps the
+// part suffix of a multi-part spec — issue #204).
+const specDesig = `\b(?:3GPP` + spStar + `)?(TS|TR)` + spStar + specNum
 
 // specDesigRaw is specDesig without capture groups, for the context gates.
-const specDesigRaw = `\b(?:3GPP` + spStar + `)?(?:TS|TR)` + spStar + `\d+\.\d+`
+const specDesigRaw = `\b(?:3GPP` + spStar + `)?(?:TS|TR)` + spStar + specNumRaw
 
 // spGapStar returns a possibly-empty separator run holding one optional
 // punctuation character from punct ("TS 23.501, clause 5.1" as well as
@@ -1567,6 +1568,20 @@ const secNum = `([A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
 
 // secNumRaw is secNum without capture group, used for multi-section list matching.
 const secNumRaw = `(?:[A-Z](?:\.\d+[A-Za-z]?)*|\d+[A-Za-z]?(?:\.\d+[A-Za-z]?)*)`
+
+// specNumRaw matches a 3GPP spec number including the part suffix of a split
+// multi-part spec: "23.501", "38.101-1", "36.521-1". The part is 1-2 digits,
+// mirroring the canonical spec IDs built from archive filenames
+// (converter/docx/metadata.go filenameRE). The \b keeps a longer digit run
+// from being half-consumed: for "23.501-123" the boundary fails inside the
+// run, the optional group drops, and the match captures the family number.
+// Known limitation: a hyphen-joined spec range ("TS 25.101-25.104") would
+// capture "25.101-25" — RE2 has no lookahead to reject a suffix followed by
+// ".digit" — but that notation does not occur in the corpus.
+const specNumRaw = `(?:\d+\.\d+(?:-\d{1,2}\b)?)`
+
+// specNum is specNumRaw as a capture group, for the extraction patterns.
+const specNum = `(` + specNumRaw + `)`
 
 // coordElemTail matches the reference part of one coordinated-list element:
 // an optional preposition-plus-keyword or bare keyword, then a section
