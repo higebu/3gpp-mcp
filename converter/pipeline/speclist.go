@@ -375,7 +375,17 @@ func FetchSpecList(ctx context.Context, client *http.Client, seriesFilter []stri
 				if !slices.ContainsFunc(extractLinks(html), func(name string) bool {
 					return strings.HasSuffix(name, ".zip")
 				}) {
-					return fmt.Errorf("listing contains no .zip entries")
+					links := extractLinks(html)
+					head := html
+					if len(head) > 1200 {
+						head = head[:1200]
+					}
+					tail := ""
+					if len(html) > 1200 {
+						tail = html[len(html)-400:]
+					}
+					return fmt.Errorf("listing contains no .zip entries (DEBUG bytes=%d anchors=%d links=%q head=%q tail=%q)",
+						len(html), len(links), links, head, tail)
 				}
 				return nil
 			})
