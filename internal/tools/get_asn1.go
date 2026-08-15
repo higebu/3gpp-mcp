@@ -122,10 +122,18 @@ func ExtractASN1(sections []db.Section) []ASN1Assignment {
 				}
 				end--
 			}
+			text := strings.Join(lines[start:end], "\n")
+			// Join's single-element fast path returns the split substring,
+			// which shares the whole section Content's backing array — and
+			// the corpus index keeps assignments for the process lifetime,
+			// so a one-line constant would pin its section's full text.
+			if end-start == 1 {
+				text = strings.Clone(text)
+			}
 			out = append(out, ASN1Assignment{
 				Section: meta,
 				Name:    name,
-				Text:    strings.Join(lines[start:end], "\n"),
+				Text:    text,
 			})
 			start = -1
 		}
@@ -266,10 +274,12 @@ func RenderASN1Definitions(matches []ASN1Assignment, archived bool) string {
 
 // RenderASN1Listing renders the assignment names grouped by defining section,
 // one name per line so a page stays scannable. A name defined twice in one
-// section is listed once. Shared with the CLI's get-asn1 command.
+// section is listed once, and the header counts what is listed, so a caller
+// counting lines against the total is never off. Shared with the CLI's
+// get-asn1 command.
 func RenderASN1Listing(assignments []ASN1Assignment) string {
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "%d ASN.1 assignments. Pass `name` to get one definition.\n", len(assignments))
+	var body strings.Builder
+	total := 0
 	section := ""
 	seen := make(map[string]bool)
 	for _, a := range assignments {
@@ -280,16 +290,17 @@ func RenderASN1Listing(assignments []ASN1Assignment) string {
 			if a.Section.Title != "" {
 				title = " — " + a.Section.Title
 			}
-			fmt.Fprintf(&sb, "\nSection %s%s:\n", section, title)
+			fmt.Fprintf(&body, "\nSection %s%s:\n", section, title)
 		}
 		if seen[a.Name] {
 			continue
 		}
 		seen[a.Name] = true
-		sb.WriteString(a.Name)
-		sb.WriteString("\n")
+		total++
+		body.WriteString(a.Name)
+		body.WriteString("\n")
 	}
-	return sb.String()
+	return fmt.Sprintf("%d ASN.1 assignments. Pass `name` to get one definition.\n", total) + body.String()
 }
 
 // ASN1DefiningSpecs names the specifications that define a name, deduplicated
@@ -345,6 +356,25 @@ func HandleGetASN1(src *Source) func(ctx context.Context, req *mcp.CallToolReque
 			return renderASN1Matches(matches, false, "the database", input), nil, nil
 		}
 
+		// The database version of a specification is answered from the corpus
+		// index, so repeated lookups do not re-read and re-parse a document
+		// that can run to tens of megabytes. A spec the index holds nothing
+		// for falls through to the full read, which also covers family IDs,
+		// missing specs, databases without FTS, and the no-ASN.1 error label.
+		if input.Version == "" {
+			if corpus, err := src.CorpusASN1(ctx); err == nil {
+				var assignments []ASN1Assignment
+				for _, a := range corpus {
+					if a.Section.SpecID == input.SpecID {
+						assignments = append(assignments, a)
+					}
+				}
+				if len(assignments) > 0 {
+					return answerASN1(ctx, src, input, assignments, specLabel(assignments[0].Section), false), nil, nil
+				}
+			}
+		}
+
 		sections, res, err := src.AllSections(ctx, input.SpecID, input.Version)
 		if err != nil {
 			return versionErrorResult(err, "failed to get ASN.1 definitions"), nil, nil
@@ -370,35 +400,42 @@ func HandleGetASN1(src *Source) func(ctx context.Context, req *mcp.CallToolReque
 			return errorResult(msg), nil, nil
 		}
 
-		if input.Name == "" {
-			result := paginateText(RenderASN1Listing(assignments), input.Offset, input.MaxLines, input.MaxChars)
-			header := fmt.Sprintf("[Source: %s]", label)
-			if res.Archived {
-				header = fmt.Sprintf("[Source: %s (archived version)]", label)
-			}
-			return prependLine(header, result), nil, nil
-		}
-
-		matches := MatchASN1(assignments, input.Name)
-		if len(matches) == 0 {
-			msg := fmt.Sprintf("ASN.1 assignment %q not found in %s.", input.Name, label)
-			suggestions := ASN1Suggestions(assignments, input.Name, 20)
-			if len(suggestions) > 0 {
-				msg += " Similar names: " + strings.Join(suggestions, ", ")
-			}
-			// A name aimed at the wrong specification is the common miss —
-			// the caller guessed RRC for an LPP type, say — so check where
-			// the name does live before answering a bare not-found.
-			hint := crossSpecHint(ctx, src, input.Name)
-			msg += hint
-			if len(suggestions) == 0 && hint == "" {
-				msg += " Call get_asn1 without `name` to list the assignment names."
-			}
-			return errorResult(msg), nil, nil
-		}
-
-		return renderASN1Matches(matches, res.Archived, label, input), nil, nil
+		return answerASN1(ctx, src, input, assignments, label, res.Archived), nil, nil
 	}
+}
+
+// answerASN1 is the per-spec tail shared by the corpus-index fast path and
+// the full read: list when no name was asked, resolve and render otherwise,
+// with suggestions and the cross-spec hint on a miss.
+func answerASN1(ctx context.Context, src *Source, input GetASN1Input, assignments []ASN1Assignment, label string, archived bool) *mcp.CallToolResult {
+	if input.Name == "" {
+		result := paginateText(RenderASN1Listing(assignments), input.Offset, input.MaxLines, input.MaxChars)
+		header := fmt.Sprintf("[Source: %s]", label)
+		if archived {
+			header = fmt.Sprintf("[Source: %s (archived version)]", label)
+		}
+		return prependLine(header, result)
+	}
+
+	matches := MatchASN1(assignments, input.Name)
+	if len(matches) == 0 {
+		msg := fmt.Sprintf("ASN.1 assignment %q not found in %s.", input.Name, label)
+		suggestions := ASN1Suggestions(assignments, input.Name, 20)
+		if len(suggestions) > 0 {
+			msg += " Similar names: " + strings.Join(suggestions, ", ")
+		}
+		// A name aimed at the wrong specification is the common miss — the
+		// caller guessed RRC for an LPP type, say — so check where the name
+		// does live before answering a bare not-found.
+		hint := crossSpecHint(ctx, src, input.Name)
+		msg += hint
+		if len(suggestions) == 0 && hint == "" {
+			msg += " Call get_asn1 without `name` to list the assignment names."
+		}
+		return errorResult(msg)
+	}
+
+	return renderASN1Matches(matches, archived, label, input)
 }
 
 // crossSpecHint reports where a name that missed in one specification is

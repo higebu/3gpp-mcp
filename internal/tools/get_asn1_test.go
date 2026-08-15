@@ -275,6 +275,23 @@ func TestMatchASN1(t *testing.T) {
 	})
 }
 
+func TestRenderASN1ListingCountsListedNames(t *testing.T) {
+	// A name defined twice in one section is listed once; the header must
+	// count the listed lines, not the raw assignments.
+	sections := []db.Section{{
+		SpecID:  "TS 38.331",
+		Number:  "6.3",
+		Content: "```asn1\n-- ASN1START\nDup ::= INTEGER (0..1)\n\nDup ::= INTEGER (0..2)\n\nOther ::= INTEGER\n-- ASN1STOP\n```",
+	}}
+	got := RenderASN1Listing(ExtractASN1(sections))
+	if !strings.HasPrefix(got, "2 ASN.1 assignments") {
+		t.Errorf("header should count listed names, got:\n%s", got)
+	}
+	if strings.Count(got, "\nDup\n") != 1 {
+		t.Errorf("duplicate name listed more than once:\n%s", got)
+	}
+}
+
 func TestASN1Suggestions(t *testing.T) {
 	assignments := ExtractASN1([]db.Section{{
 		SpecID:  "TS 38.413",
