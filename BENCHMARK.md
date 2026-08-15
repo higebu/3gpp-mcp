@@ -287,6 +287,30 @@ bought with 13 more tool calls per task and 30 times the prompt tokens. Where
 one call already *is* the aggregation, the reading the extra rounds buy is
 reading the model did not need.
 
+### get_asn1: the measured walks, collapsed into lookups
+
+The two depth results above are diagnoses, and `get_asn1` is the tool built
+from them: given a type, IE or constant name it returns that assignment's
+text with its defining clause, resolving the name across every specification
+in the database when no `spec_id` is given. Re-running the ASN.1 task types
+against a server with it — same pinned database, same tasks, DeepSeek V4
+Flash on the official API, *answer / answer+citation* — moves exactly the
+rows the diagnoses said it should:
+
+| Task type, one round | without get_asn1 | with get_asn1 |
+|---|---|---|
+| NGAP/S1AP ASN.1 constraint | 72% / 50% | **98–100% / 96–98%** |
+| RRC ASN.1 structure | 52% / 50% | **94% / 88%** |
+
+Both one-round rows now sit on their twenty-round answer scores (which
+stay at 94–100% with the tool attached). The two hops it removes are the
+ones the corpus forced: into a 92–270 kB protocol ASN.1 clause, and — for
+the RRC type, whose questions name a type but not its document — from a
+bare name to the specification that defines it; of that type's 24 one-round
+misses, 21 were the model aiming the lookup at the wrong specification, and
+the cross-spec mode resolves all 21. Per-run tables and the failure
+taxonomy are in the results repository's report.
+
 **`search_openapi` is a cost, not an accuracy.** Repeating the three
 designation types with the FTS index over the OpenAPI store dropped — the server
 as it was before that index existed — changes nothing measurable: 100% answer on
