@@ -1080,27 +1080,6 @@ func TestListOpenAPI(t *testing.T) {
 	})
 }
 
-func TestGetOpenAPI(t *testing.T) {
-	d := setupTestDB(t)
-
-	t.Run("existing", func(t *testing.T) {
-		content, err := d.GetOpenAPI(t.Context(), "TS 29.510", "Nnrf_NFManagement")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if content == "" {
-			t.Error("expected non-empty content")
-		}
-	})
-
-	t.Run("nonexistent", func(t *testing.T) {
-		_, err := d.GetOpenAPI(t.Context(), "TS 29.510", "Nonexistent")
-		if err == nil {
-			t.Fatal("expected error for nonexistent api")
-		}
-	})
-}
-
 func TestUpsertOpenAPI(t *testing.T) {
 	d := setupTestDB(t)
 
@@ -1109,7 +1088,7 @@ func TestUpsertOpenAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		content, err := d.GetOpenAPI(t.Context(), "TS 29.512", "Npcf_SMPolicyControl")
+		content, err := d.GetOpenAPIResolved(t.Context(), "TS 29.512", "Npcf_SMPolicyControl")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1123,7 +1102,7 @@ func TestUpsertOpenAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		content, err := d.GetOpenAPI(t.Context(), "TS 29.510", "Nnrf_NFManagement")
+		content, err := d.GetOpenAPIResolved(t.Context(), "TS 29.510", "Nnrf_NFManagement")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -2546,7 +2525,7 @@ func TestQueryMethodsHonorContext(t *testing.T) {
 		{"GetImage", func() error { _, err := d.GetImage(ctx, "TS 23.501", "", "figure1.png"); return err }},
 		{"ListImages", func() error { _, err := d.ListImages(ctx, "TS 23.501", ""); return err }},
 		{"ListOpenAPI", func() error { _, err := d.ListOpenAPI(ctx, ""); return err }},
-		{"GetOpenAPI", func() error { _, err := d.GetOpenAPI(ctx, "TS 29.510", "Nnrf_NFManagement"); return err }},
+		{"GetOpenAPIResolved", func() error { _, err := d.GetOpenAPIResolved(ctx, "TS 29.510", "Nnrf_NFManagement"); return err }},
 		{"GetReferences", func() error {
 			_, err := d.GetReferences(ctx, "TS 24.229", "", "5.1", DirectionOutgoing, false)
 			return err

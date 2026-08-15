@@ -1088,18 +1088,6 @@ func (d *DB) ListOpenAPI(ctx context.Context, specID string) ([]OpenAPISpec, err
 	return specs, nil
 }
 
-func (d *DB) GetOpenAPI(ctx context.Context, specID, apiName string) (string, error) {
-	var content string
-	err := d.conn.QueryRowContext(ctx,
-		"SELECT content FROM openapi_specs WHERE spec_id = ? AND api_name = ?",
-		specID, apiName,
-	).Scan(&content)
-	if err != nil {
-		return "", fmt.Errorf("get openapi: %w", err)
-	}
-	return content, nil
-}
-
 // UpsertOpenAPI inserts or replaces an OpenAPI spec.
 func (d *DB) UpsertOpenAPI(specID, apiName, version, filename, content string) error {
 	_, err := d.conn.Exec(

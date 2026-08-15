@@ -20,10 +20,15 @@ var ErrOpenAPINotFound = errors.New("openapi definition not found")
 const openapiNameMatch = "(LOWER(api_name) = LOWER(?) OR LOWER(COALESCE(filename, '')) IN (LOWER(?), LOWER(? || '.yaml')))"
 
 // GetOpenAPIResolved returns the content stored for (specID, apiName),
-// resolving apiName as GetOpenAPI does not: case-insensitively, and by
-// filename with or without the .yaml extension. When several rows qualify the
-// exact api_name match wins. A miss is ErrOpenAPINotFound.
+// resolving apiName case-insensitively and by filename with or without the
+// .yaml extension. When several rows qualify the exact api_name match wins.
+// A miss is ErrOpenAPINotFound.
 func (d *DB) GetOpenAPIResolved(ctx context.Context, specID, apiName string) (string, error) {
+	// An empty apiName would match every row whose filename is NULL or empty
+	// through the COALESCE below; it can never name a document.
+	if apiName == "" {
+		return "", ErrOpenAPINotFound
+	}
 	var content string
 	err := d.conn.QueryRowContext(ctx,
 		"SELECT content FROM openapi_specs WHERE spec_id = ? AND "+openapiNameMatch+
@@ -44,6 +49,9 @@ func (d *DB) GetOpenAPIResolved(ctx context.Context, specID, apiName string) (st
 // wrong-document hint: a get_openapi call that named an api_name under the
 // wrong spec_id learns which specification actually provides it.
 func (d *DB) FindOpenAPIByAPIName(ctx context.Context, apiName string) ([]OpenAPISpec, error) {
+	if apiName == "" {
+		return nil, nil
+	}
 	rows, err := d.conn.QueryContext(ctx,
 		"SELECT spec_id, api_name FROM openapi_specs WHERE "+openapiNameMatch+" ORDER BY spec_id, api_name",
 		apiName, apiName, apiName,

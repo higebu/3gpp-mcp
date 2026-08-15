@@ -689,6 +689,13 @@ func TestRunGetOpenAPI(t *testing.T) {
 		!strings.Contains(err.Error(), "provided by TS 29.510 / Nnrf_NFManagement") {
 		t.Errorf("expected wrong-document hint, got: %v", err)
 	}
+
+	// Empty positionals are rejected before they can reach the lookup, where
+	// an empty api-name would otherwise match rows with an empty filename.
+	if err := runGetOpenAPI(t.Context(), &out, d, "TS 29.510", "", "", ""); err == nil ||
+		!strings.Contains(err.Error(), "must not be empty") {
+		t.Errorf("expected empty-argument error, got: %v", err)
+	}
 }
 
 // seedTestImage inserts one PNG image row for TS 23.501.

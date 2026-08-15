@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/higebu/3gpp-mcp/internal/openapiindex"
 )
 
 // TestHandleGetOpenAPI_FilenameFallback verifies that an api_name given in
@@ -87,6 +89,30 @@ func TestHandleGetOpenAPI_NotFoundHints(t *testing.T) {
 		}
 		if !strings.Contains(text, "search_openapi") {
 			t.Errorf("missing search_openapi pointer: %s", text)
+		}
+	})
+
+	t.Run("schema miss in a found document names the defining document", func(t *testing.T) {
+		other := setupTestDB(t)
+		if err := other.UpsertOpenAPI("TS 29.571", "CommonData", "v1.5.0", "TS29571_CommonData.yaml",
+			"openapi: 3.0.0\ncomponents:\n  schemas:\n    ProblemDetails:\n      type: object\n"); err != nil {
+			t.Fatalf("seed openapi: %v", err)
+		}
+		if _, err := openapiindex.Build(context.Background(), other); err != nil {
+			t.Fatalf("build openapi index: %v", err)
+		}
+		result, _, _ := HandleGetOpenAPI(other)(context.Background(), nil, GetOpenAPIInput{
+			SpecID: "TS 29.510", APIName: "Nnrf_NFManagement", Schema: "ProblemDetails",
+		})
+		text := getTextContent(result)
+		if !strings.Contains(text, `Schema "ProblemDetails" not found in this document.`) {
+			t.Errorf("missing local not-found statement: %s", text)
+		}
+		if !strings.Contains(text, `Schema "ProblemDetails" is defined in TS 29.571 / CommonData`) {
+			t.Errorf("missing cross-document schema hint: %s", text)
+		}
+		if !strings.Contains(text, "Available schemas:") || !strings.Contains(text, "NFProfile") {
+			t.Errorf("missing local schema listing: %s", text)
 		}
 	})
 

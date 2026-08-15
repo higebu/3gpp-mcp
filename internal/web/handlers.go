@@ -593,7 +593,7 @@ func (h *handler) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 	specID := r.PathValue("specID")
 	apiName := r.PathValue("apiName")
 
-	content, err := h.db.GetOpenAPI(r.Context(), specID, apiName)
+	content, err := h.db.GetOpenAPIResolved(r.Context(), specID, apiName)
 	if err != nil {
 		h.renderError(w, http.StatusNotFound, fmt.Sprintf("OpenAPI definition %q not found", apiName))
 		return

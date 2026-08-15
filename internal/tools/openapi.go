@@ -79,7 +79,9 @@ func HandleGetOpenAPI(d *db.DB) func(ctx context.Context, req *mcp.CallToolReque
 
 		// If path or schema filter is specified, parse YAML and extract
 		if input.Path != "" || input.Schema != "" {
-			filtered, err := FilterOpenAPI(content, input.Path, input.Schema)
+			filtered, err := FilterOpenAPI(content, input.Path, input.Schema, func(schema string) string {
+				return OpenAPISchemaHint(ctx, d, schema)
+			})
 			if err != nil {
 				return errorResult(fmt.Sprintf("failed to filter openapi: %v", err)), nil, nil
 			}
@@ -110,10 +112,7 @@ func OpenAPINotFoundMessage(ctx context.Context, d *db.DB, specID, apiName, sche
 	// A schema name pins the defining document more precisely than the
 	// api_name guess does, so answer it directly from the index.
 	if schema != "" {
-		if sources, err := d.OpenAPISchemaSources(ctx, schema); err == nil && len(sources) > 0 {
-			msg += fmt.Sprintf(" Schema %q is defined in %s — call get_openapi there, or use search_openapi to find definitions by name.",
-				schema, joinOpenAPISources(sources))
-		}
+		msg += OpenAPISchemaHint(ctx, d, schema)
 	}
 
 	if avail, err := d.ListOpenAPI(ctx, specID); err == nil {
@@ -130,6 +129,20 @@ func OpenAPINotFoundMessage(ctx context.Context, d *db.DB, specID, apiName, sche
 	return msg
 }
 
+// OpenAPISchemaHint reports which documents define the named schema, answered
+// from the openapi_chunks index, as a sentence that can be appended to a
+// not-found message. On a database without the index, or a schema the index
+// does not know, it is "" rather than an error, in the crossSpecHint manner
+// of get_asn1. Shared with the CLI's get-openapi command.
+func OpenAPISchemaHint(ctx context.Context, d *db.DB, schema string) string {
+	sources, err := d.OpenAPISchemaSources(ctx, schema)
+	if err != nil || len(sources) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" Schema %q is defined in %s — call get_openapi there, or use search_openapi to find definitions by name.",
+		schema, joinOpenAPISources(sources))
+}
+
 // joinOpenAPISources renders OpenAPI documents as "spec_id / api_name" pairs,
 // the two arguments a follow-up get_openapi call needs.
 func joinOpenAPISources(specs []db.OpenAPISpec) string {
@@ -141,8 +154,12 @@ func joinOpenAPISources(specs []db.OpenAPISpec) string {
 }
 
 // FilterOpenAPI narrows an OpenAPI YAML document to a path and/or schema
-// subset. It is shared with the CLI's get-openapi command.
-func FilterOpenAPI(content, pathFilter, schemaFilter string) (string, error) {
+// subset. schemaHint, when non-nil, is consulted on a schema the document
+// does not define, so the miss can say where the schema actually lives (the
+// 5G SBI documents keep their common types in TS 29.571) instead of only
+// listing this document's schemas. It is shared with the CLI's get-openapi
+// command.
+func FilterOpenAPI(content, pathFilter, schemaFilter string, schemaHint func(string) string) (string, error) {
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
 		return "", fmt.Errorf("parse yaml: %w", err)
@@ -203,7 +220,11 @@ func FilterOpenAPI(content, pathFilter, schemaFilter string) (string, error) {
 					available = append(available, name)
 				}
 				sort.Strings(available)
-				fmt.Fprintf(&sb, "Schema %q not found. Available schemas:\n", schemaFilter)
+				fmt.Fprintf(&sb, "Schema %q not found in this document.", schemaFilter)
+				if schemaHint != nil {
+					sb.WriteString(schemaHint(schemaFilter))
+				}
+				sb.WriteString(" Available schemas:\n")
 				for _, s := range available {
 					fmt.Fprintf(&sb, "  %s\n", s)
 				}

@@ -716,6 +716,9 @@ func cmdGetOpenAPI(args []string) {
 }
 
 func runGetOpenAPI(ctx context.Context, out io.Writer, d *db.DB, specID, apiName, path, schema string) error {
+	if specID == "" || apiName == "" {
+		return errors.New("spec-id and api-name must not be empty")
+	}
 	content, err := d.GetOpenAPIResolved(ctx, specID, apiName)
 	if errors.Is(err, db.ErrOpenAPINotFound) {
 		return errors.New(tools.OpenAPINotFoundMessage(ctx, d, specID, apiName, schema))
@@ -724,7 +727,8 @@ func runGetOpenAPI(ctx context.Context, out io.Writer, d *db.DB, specID, apiName
 		return err
 	}
 	if path != "" || schema != "" {
-		if content, err = tools.FilterOpenAPI(content, path, schema); err != nil {
+		hint := func(s string) string { return tools.OpenAPISchemaHint(ctx, d, s) }
+		if content, err = tools.FilterOpenAPI(content, path, schema, hint); err != nil {
 			return err
 		}
 	}
