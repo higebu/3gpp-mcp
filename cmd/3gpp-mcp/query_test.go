@@ -183,6 +183,67 @@ func TestRunGetASN1(t *testing.T) {
 		!strings.Contains(err.Error(), "no ASN.1 definitions") {
 		t.Errorf("expected no-ASN.1 error, got: %v", err)
 	}
+
+	// Corpus miss with suggestions, and the wrong-spec hint on a per-spec
+	// miss whose spec the index does not cover.
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "", "CauseMisc", ""); err == nil ||
+		!strings.Contains(err.Error(), "similar names: Cause") {
+		t.Errorf("expected corpus suggestions, got: %v", err)
+	}
+
+	// Without the index, the corpus mode names the rebuild command and the
+	// per-spec path falls back to reading the document.
+	if err := d.Exec("DROP TABLE asn1_defs"); err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "", "AMF-UE-NGAP-ID", ""); err == nil ||
+		!strings.Contains(err.Error(), "build-asn1-index") {
+		t.Errorf("expected missing-index error, got: %v", err)
+	}
+	out.Reset()
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "TS 38.413", "AMF-UE-NGAP-ID", ""); err != nil {
+		t.Fatalf("per-spec fallback without index: %v", err)
+	}
+	if !strings.Contains(out.String(), "AMF-UE-NGAP-ID ::= INTEGER") {
+		t.Errorf("fallback output:\n%s", out.String())
+	}
+}
+
+func TestRunBuildASN1Index(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := d.InitSchema(); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	if err := d.Exec(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+		('TS 38.413', '18.6.0', 'i60', 'NGAP', '18', '38')`); err != nil {
+		t.Fatalf("insert spec: %v", err)
+	}
+	if err := d.Exec(`INSERT INTO sections (spec_id, version, number, title, level, parent_number, content)
+		VALUES ('TS 38.413', '18.6.0', '9.4.5', 'IEs', 2, NULL, ?)`,
+		"```asn1\n-- ASN1START\nAMF-UE-NGAP-ID ::= INTEGER (0..1099511627775)\n-- ASN1STOP\n```"); err != nil {
+		t.Fatalf("insert section: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if err := runBuildASN1Index(t.Context(), dbPath); err != nil {
+		t.Fatalf("runBuildASN1Index: %v", err)
+	}
+
+	ro, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer ro.Close()
+	defs, err := ro.LookupASN1(t.Context(), "AMF-UE-NGAP-ID", "amfuengapid", "")
+	if err != nil || len(defs) != 1 {
+		t.Fatalf("index not built: defs=%+v err=%v", defs, err)
+	}
 }
 
 func TestGetASN1SpecIDArg(t *testing.T) {
