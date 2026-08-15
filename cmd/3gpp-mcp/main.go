@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/higebu/3gpp-mcp/internal/asn1index"
 	"github.com/higebu/3gpp-mcp/internal/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/openapiindex"
@@ -111,10 +112,12 @@ func init() {
 		{name: "import-dir", aliases: []string{"convert-dir"}, desc: "Import a directory of DOCX files into database", run: cmdConvertDir},
 		{name: "update", desc: "Update database to latest spec versions", run: cmdUpdate},
 		{name: "build-openapi-index", desc: "Rebuild the OpenAPI search index", run: cmdBuildOpenAPIIndex},
+		{name: "build-asn1-index", desc: "Rebuild the ASN.1 name index", run: cmdBuildASN1Index},
 		{name: "list-specs", desc: "List specifications in the database", run: cmdListSpecs},
 		{name: "list-versions", desc: "List versions of a specification", run: cmdListVersions},
 		{name: "get-toc", desc: "Print a specification's table of contents", run: cmdGetTOC},
 		{name: "get-section", desc: "Print a section's markdown content", run: cmdGetSection},
+		{name: "get-asn1", desc: "Print ASN.1 definitions from a specification", run: cmdGetASN1},
 		{name: "compare-versions", desc: "Compare two versions of a specification", run: cmdCompareVersions},
 		{name: "search", desc: "Full-text search across specifications", run: cmdSearch},
 		{name: "list-openapi", desc: "List OpenAPI definitions", run: cmdListOpenAPI},
@@ -198,7 +201,7 @@ func newMCPServer(d *db.DB, src *tools.Source) *mcp.Server {
 		Name:    "3gpp-mcp",
 		Version: version,
 	}, &mcp.ServerOptions{
-		Instructions: "3GPP specification server. Use list_specs to find specifications, get_toc to browse structure, get_section to read specification document text (architecture, procedures, requirements), and search to find relevant sections. Use get_references to explore cross-references between specifications (outgoing: what a section references; incoming: what references a spec). For 5G API details (HTTP methods, request/response bodies, paths, schemas, data models) from TS 29.xxx series, use list_openapi to discover APIs and get_openapi to read their OpenAPI definitions, and search_openapi when you know the data type or endpoint but not which API document defines it. Always prefer get_openapi over get_section when looking up API request/response formats or data type definitions.\n\n" +
+		Instructions: "3GPP specification server. Use list_specs to find specifications, get_toc to browse structure, get_section to read specification document text (architecture, procedures, requirements), and search to find relevant sections. Use get_references to explore cross-references between specifications (outgoing: what a section references; incoming: what references a spec). For 5G API details (HTTP methods, request/response bodies, paths, schemas, data models) from TS 29.xxx series, use list_openapi to discover APIs and get_openapi to read their OpenAPI definitions, and search_openapi when you know the data type or endpoint but not which API document defines it. Always prefer get_openapi over get_section when looking up API request/response formats or data type definitions. For ASN.1-specified protocols (RRC TS 38.331/36.331, NGAP TS 38.413, S1AP TS 36.413, XnAP, F1AP, LPP TS 37.355, ...), use get_asn1 with a type, IE or constant name to get its definition and defining section directly — the ASN.1 clauses are far larger than one get_section page. If you do not know which specification defines the name, omit spec_id and the name is resolved across the whole database; get_asn1 with a spec_id and no name lists what that specification defines.\n\n" +
 			"Notation: section text is Markdown. Figures are `![...](image://NAME)` links. Formulas are LaTeX — a standalone equation is a ```latex code block whose equation number is kept as `\\tag{7.3-1}`, and a formula inside a sentence or a table cell is delimited with `$...$` or `$$...$$`. A paragraph's leading indentation — the nesting of requirement and condition lists — is preserved as no-break spaces (U+00A0), one tab of the source document being four.\n\n" +
 			"Versions: the database holds one version per specification, and every get_section, get_toc and search result names the specification and version it came from. To compare a procedure across releases, call list_versions to see which versions exist, then use compare_versions: without section_number it summarizes which sections were added, removed or changed between two versions, and with section_number it returns a line-level diff of that section's text. A version that is not in the database is downloaded and converted on first use, which takes up to a few minutes for a large specification; when that happens the tool says so and you should call it again with the same arguments. Section numbers move between releases, so check get_toc for the older version before reading a section of it. get_image and list_images also accept a version: an archived version's images are downloaded on their own first use, again taking up to a few minutes before a retry succeeds. search and get_references only have data for the version in the database.",
 	})
@@ -207,6 +210,7 @@ func newMCPServer(d *db.DB, src *tools.Source) *mcp.Server {
 	mcp.AddTool(s, tools.ListVersionsTool, tools.HandleListVersions(src))
 	mcp.AddTool(s, tools.GetTOCTool, tools.HandleGetTOC(src))
 	mcp.AddTool(s, tools.GetSectionTool, tools.HandleGetSection(src))
+	mcp.AddTool(s, tools.GetASN1Tool, tools.HandleGetASN1(src))
 	mcp.AddTool(s, tools.CompareVersionsTool, tools.HandleCompareVersions(src))
 	mcp.AddTool(s, tools.SearchTool, tools.HandleSearch(d))
 	mcp.AddTool(s, tools.ListOpenAPITool, tools.HandleListOpenAPI(d))
@@ -407,8 +411,12 @@ func runConvert(ctx context.Context, dbPath, docxPath string, convertImage bool)
 	// here again would only repeat that context.
 	// No OpenAPI rebuild here: the YAML files live in the archive zip, not in
 	// a .docx, so importing documents never changes openapi_specs and a
-	// rebuild could only rewrite every chunk to what it already was.
+	// rebuild could only rewrite every chunk to what it already was. The
+	// ASN.1 index is different — a .docx does carry ASN.1 — so it refreshes.
 	if err := pipeline.ConvertSingleFile(ctx, d, docxPath, convertImage); err != nil {
+		return err
+	}
+	if err := refreshASN1IndexAfterImport(ctx, d); err != nil {
 		return err
 	}
 	fmt.Printf("Written to %s\n", dbPath)
@@ -458,11 +466,12 @@ func runConvertDir(ctx context.Context, dbPath, dirPath string, workers int, con
 	// ConvertDir's errors do not all carry the directory (e.g. "all N files
 	// failed to parse"), so name it here.
 	// As in runConvert, a .docx import cannot change openapi_specs, so there
-	// is nothing for an OpenAPI rebuild to do.
+	// is nothing for an OpenAPI rebuild to do — but it does change ASN.1, so
+	// that index refreshes.
 	if err := pipeline.ConvertDir(ctx, d, dirPath, workers, convertDoc, convertImage); err != nil {
 		return fmt.Errorf("import %s: %w", dirPath, err)
 	}
-	return nil
+	return refreshASN1IndexAfterImport(ctx, d)
 }
 
 // exit is swapped in tests to cover fatal error paths without terminating
@@ -658,7 +667,10 @@ func runPipeline(ctx context.Context, dbPath string, client *http.Client, specs 
 		return err
 	}
 
-	return refreshOpenAPIIndexAfterImport(ctx, d)
+	if err := refreshOpenAPIIndexAfterImport(ctx, d); err != nil {
+		return err
+	}
+	return refreshASN1IndexAfterImport(ctx, d)
 }
 
 // rebuildOpenAPIIndex refreshes the search_openapi index and reports what it
@@ -697,6 +709,69 @@ func refreshOpenAPIIndexAfterImport(ctx context.Context, d *db.DB) error {
 		return fmt.Errorf("%w (dropping the now-stale index also failed: %v)", err, dropErr)
 	}
 	return fmt.Errorf("%w; the now-stale index was dropped, so run 'build-openapi-index' before serving search_openapi", err)
+}
+
+// rebuildASN1Index refreshes the get_asn1 name index and reports what it
+// wrote. Extraction is per-spec, but the index is still replaced wholesale in
+// one transaction: the whole corpus extracts in seconds through the FTS seed,
+// and a rebuild that does not finish changes nothing.
+func rebuildASN1Index(ctx context.Context, d *db.DB) error {
+	stats, err := asn1index.Rebuild(ctx, d)
+	if err != nil {
+		return fmt.Errorf("build asn1 index: %w", err)
+	}
+	fmt.Printf("ASN.1 index: %s\n", stats)
+	return nil
+}
+
+// refreshASN1IndexAfterImport is rebuildASN1Index for a caller that has just
+// rewritten sections. Unlike OpenAPI YAML, a .docx import does change ASN.1
+// content, so every import path ends here. On failure the surviving index
+// describes the corpus as it was before the import — wrong in a way no caller
+// can detect — so it is dropped, leaving the database in the state serve
+// already handles: the tool reports the index as missing and names
+// build-asn1-index.
+func refreshASN1IndexAfterImport(ctx context.Context, d *db.DB) error {
+	err := rebuildASN1Index(ctx, d)
+	if err == nil {
+		return nil
+	}
+	if dropErr := d.DropASN1Index(); dropErr != nil {
+		return fmt.Errorf("%w (dropping the now-stale index also failed: %v)", err, dropErr)
+	}
+	return fmt.Errorf("%w; the now-stale index was dropped, so run 'build-asn1-index' before serving get_asn1 lookups", err)
+}
+
+func cmdBuildASN1Index(args []string) {
+	fs := flag.NewFlagSet("build-asn1-index", flag.ExitOnError)
+	dbPath := fs.String("db", "3gpp.db", "SQLite database path")
+	_ = fs.Parse(args)
+	requireArgs(fs, 0, "3gpp-mcp build-asn1-index [options]")
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if err := runBuildASN1Index(ctx, *dbPath); err != nil {
+		log.Printf("Build asn1 index failed: %v", err)
+		exit(1)
+	}
+}
+
+// runBuildASN1Index rebuilds the index in an existing database. It is the way
+// to add the index to a database built before get_asn1 existed: serve opens
+// read-only and so cannot create the table itself.
+func runBuildASN1Index(ctx context.Context, dbPath string) error {
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer d.Close()
+
+	if err := d.InitSchema(); err != nil {
+		return fmt.Errorf("init schema: %w", err)
+	}
+
+	return rebuildASN1Index(ctx, d)
 }
 
 func cmdBuildOpenAPIIndex(args []string) {
@@ -1101,6 +1176,20 @@ func cmdUpdate(args []string) {
 			log.Fatalf("Update failed: %v", err)
 		}
 		log.Printf("warning: %v; run '3gpp-mcp build-openapi-index --db %s'", err, *dbPath)
+	}
+
+	// The ASN.1 name index gets the identical treatment, for the identical
+	// reason: derived data that build-asn1-index regenerates in seconds is
+	// not worth discarding an hours-long import over, but the database must
+	// not go live carrying an index that disagrees with its sections.
+	if err := refreshASN1IndexAfterImport(ctx, d); err != nil {
+		stale, checkErr := d.HasASN1Index(context.WithoutCancel(ctx))
+		if checkErr != nil || stale {
+			_ = d.Close()
+			discardWorkingCopy(newPath)
+			log.Fatalf("Update failed: %v", err)
+		}
+		log.Printf("warning: %v; run '3gpp-mcp build-asn1-index --db %s'", err, *dbPath)
 	}
 
 	// Checkpoint WAL into the main file so the renamed DB is self-contained.

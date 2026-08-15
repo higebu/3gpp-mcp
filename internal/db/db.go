@@ -301,7 +301,7 @@ CREATE TABLE IF NOT EXISTS spec_references (
 
 CREATE INDEX IF NOT EXISTS idx_ref_source ON spec_references(source_spec_id, source_version, source_section);
 CREATE INDEX IF NOT EXISTS idx_ref_target ON spec_references(target_spec);
-` + OpenAPIIndexSchema
+` + OpenAPIIndexSchema + ASN1IndexSchema
 
 // OpenAPIIndexSchema defines the OpenAPI search index: one row per schema and
 // per operation, derived from openapi_specs by internal/openapiindex and
@@ -865,6 +865,43 @@ func (d *DB) SectionNumbers(ctx context.Context, specID string) (map[string]bool
 		return nil, "", fmt.Errorf("section numbers: iterate: %w", err)
 	}
 	return numbers, version, nil
+}
+
+// ASN1Sections returns, in document order per spec, every section whose
+// content carries an -- ASN1START block, across the database version of every
+// specification. The candidates are seeded through the FTS index — every
+// ```asn1 fence the converter emits keeps its marker line — because a LIKE
+// over the whole sections table takes minutes on a full corpus. The marker
+// usually tokenizes to ASN1START on its own, but the converter also accepts
+// the space-less "--ASN1START", which tokenchars '-' glues into one token, so
+// the query matches both forms. A prose mention outside a fence can slip in;
+// callers extract from ```asn1 fences only, so such a section contributes
+// nothing.
+func (d *DB) ASN1Sections(ctx context.Context) ([]Section, error) {
+	rows, err := d.conn.QueryContext(ctx,
+		`SELECT s.spec_id, s.version, s.number, s.title, s.level, COALESCE(s.parent_number, ''), s.content, COALESCE(p.release, '')
+		 FROM sections_fts f
+		 JOIN sections s ON s.id = f.rowid
+		 LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version
+		 WHERE sections_fts MATCH 'ASN1START OR "--ASN1START"'
+		 ORDER BY s.spec_id, s.id`)
+	if err != nil {
+		return nil, fmt.Errorf("asn1 sections: %w", err)
+	}
+	defer rows.Close()
+
+	var sections []Section
+	for rows.Next() {
+		var s Section
+		if err := rows.Scan(&s.SpecID, &s.Version, &s.Number, &s.Title, &s.Level, &s.ParentNumber, &s.Content, &s.Release); err != nil {
+			return nil, fmt.Errorf("scan asn1 section: %w", err)
+		}
+		sections = append(sections, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("asn1 sections: iterate: %w", err)
+	}
+	return sections, nil
 }
 
 func (d *DB) AllSections(ctx context.Context, specID, version string) ([]Section, error) {

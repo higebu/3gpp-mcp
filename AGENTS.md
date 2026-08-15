@@ -68,6 +68,16 @@ make e2e                  # Playwright suite for web viewer JS behavior (CI job 
   failure mode. `update` keeps its working copy on such a failure — the spec
   import costs hours, the index seconds — but only after confirming the drop
   took.
+- **get_asn1 answers from the asn1_defs table, built at DB build time.**
+  `internal/asn1index` extracts every top-level assignment (candidates seeded
+  via `sections_fts MATCH 'ASN1START'` — a LIKE over a full corpus takes
+  minutes) and `build`, `update`, `import` and `import-dir` all end in a
+  wholesale rebuild — import too, because unlike OpenAPI YAML a `.docx` does
+  carry ASN.1. Like the OpenAPI index it is never allowed to be stale: a
+  failed rebuild drops it, and serve (read-only) reports it missing and names
+  `build-asn1-index`. Without the table the cross-spec (`spec_id`-less) mode
+  and the wrong-spec hint are lost; the per-spec path falls back to reading
+  the whole document per call. Archived versions never enter the index.
 - **Image references are format-independent**: `image://NAME?w=&h=` in body
   text, `<img src="image://...">` in table cells. `structdiff.NormalizeImageRefs`
   keeps conversion-pair extension changes (`.emf`/`.wmf`/`.pcz`/`.png`) from

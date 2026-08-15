@@ -297,6 +297,42 @@ cannot change what there is to index. A database built before this tool existed
 has no index; add it in place with
 [`build-openapi-index`](#other-commands).
 
+### ASN.1 definitions
+
+| Tool | Description | Key Parameters |
+|------|-------------|----------------|
+| `get_asn1` | Get an ASN.1 assignment by name — in one spec or across all of them — or list a spec's assignment names | `spec_id` (optional; omit to resolve `name` across every spec), `name` (assignment name, e.g. `AMF-UE-NGAP-ID`; required without `spec_id`), `version` (requires `spec_id`), `offset`, `max_lines`, `max_chars` |
+
+The ASN.1-specified protocols (RRC TS 38.331/36.331, NGAP TS 38.413, S1AP
+TS 36.413, XnAP, F1AP, ...) write their ASN.1 between `-- ASN1START` /
+`-- ASN1STOP` markers, which the converter stores as ` ```asn1 ` fences (see
+[Code blocks](#code-blocks)). `get_asn1` extracts every top-level assignment —
+types, constants and information objects — from those fences.
+
+With `name` it returns that assignment's full text together with the section
+that defines it, so the answer can be cited. This matters for the protocols
+that define all their IEs in one clause: NGAP's IE definitions clause is
+hundreds of kilobytes, far more than one `get_section` page, while the one
+definition that answers "what range does the ASN.1 allow here" is a few lines.
+Matching ignores case and separators, so the IE table's `AMF UE NGAP ID` finds
+the ASN.1's `AMF-UE-NGAP-ID`; a name that matches nothing gets similar names
+suggested. A name defined more than once returns every definition, each under
+its own source line.
+
+When you do not know which specification defines a name, omit `spec_id`: the
+name is resolved across every specification in the database, from a name
+index built at database build time (`build`, `update`, `import` and
+`import-dir` all refresh it). A lookup that names the wrong specification
+gets told where the name is actually defined. A database built before this
+tool existed has no index — add it in place with
+[`build-asn1-index`](#other-commands). Cross-spec resolution covers the
+database versions only — pass `spec_id` (and optionally `version`) to read
+an archived version, with the same on-demand download behavior as
+`get_section`.
+
+With a `spec_id` and no `name` it lists every assignment name, grouped by
+defining section.
+
 ### Embedded images
 
 | Tool | Description | Key Parameters |
@@ -473,6 +509,7 @@ it at its newest version below the cap. They cannot be combined.
 - `import-dir` — Import all `.docx` files in a directory into the database. Alias: `convert-dir`. Usage: `3gpp-mcp import-dir --db data/3gpp.db ./specs`
 - `update` — Update specifications in the database to latest versions, or to a cap with `--max-release`.
 - `build-openapi-index` — Rebuild the [OpenAPI search index](#openapi-definitions) of an existing database. `build` and `update` do this themselves, so it is for adding the index to a database built before `search_openapi` existed: `serve` opens the database read-only and cannot create it on the fly.
+- `build-asn1-index` — Rebuild the [ASN.1 name index](#asn1-definitions) of an existing database. `build`, `update`, `import` and `import-dir` do this themselves, so it is for adding the index to a database built before `get_asn1` existed.
 - `completion` — Print a shell completion script: `3gpp-mcp completion bash` (or `zsh`, `fish`)
 
 The cap is not stored in the database, so a database built with
@@ -487,8 +524,9 @@ spec.
 ### Query commands
 
 The query commands (`list-specs`, `list-versions`, `get-toc`, `get-section`,
-`compare-versions`, `search`, `list-openapi`, `get-openapi`, `search-openapi`,
-`get-references`, `list-images`, `get-image`) mirror the MCP read tools 1:1, so
+`get-asn1`, `compare-versions`, `search`, `list-openapi`, `get-openapi`,
+`search-openapi`, `get-references`, `list-images`, `get-image`) mirror the MCP
+read tools 1:1, so
 the database can be inspected and scripted from a shell without an MCP client:
 
 ```bash

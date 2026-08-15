@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/higebu/3gpp-mcp/internal/asn1index"
 	"github.com/higebu/3gpp-mcp/internal/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/openapiindex"
@@ -125,6 +126,166 @@ func TestRunGetSection(t *testing.T) {
 
 	if err := runGetSection(t.Context(), &out, &errOut, src, "TS 23.501", "9.9", "", false); err == nil {
 		t.Error("expected error for missing section")
+	}
+}
+
+func TestRunGetASN1(t *testing.T) {
+	d := testutil.SetupTestDB(t)
+	if err := d.Exec(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+		('TS 38.413', '18.6.0', 'i60', 'NG Application Protocol (NGAP)', '18', '38')`); err != nil {
+		t.Fatalf("insert spec: %v", err)
+	}
+	if err := d.Exec(`INSERT INTO sections (spec_id, version, number, title, level, parent_number, content)
+		VALUES ('TS 38.413', '18.6.0', '9.4.5', 'Information Element definitions', 2, NULL, ?)`,
+		"```asn1\n-- ASN1START\nAMF-UE-NGAP-ID ::= INTEGER (0..1099511627775)\n\nCause ::= CHOICE {\n\tmisc\tCauseMisc\n}\n-- ASN1STOP\n```"); err != nil {
+		t.Fatalf("insert section: %v", err)
+	}
+	if _, err := asn1index.Rebuild(t.Context(), d); err != nil {
+		t.Fatalf("rebuild asn1 index: %v", err)
+	}
+	src := tools.NewSource(d)
+
+	var out, errOut bytes.Buffer
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "TS 38.413", "AMF-UE-NGAP-ID", ""); err != nil {
+		t.Fatalf("runGetASN1: %v", err)
+	}
+	if !strings.Contains(out.String(), "[Source: TS 38.413 v18.6.0 (Rel-18) — Section 9.4.5 — AMF-UE-NGAP-ID]") {
+		t.Errorf("missing provenance header:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "AMF-UE-NGAP-ID ::= INTEGER (0..1099511627775)") {
+		t.Errorf("missing definition:\n%s", out.String())
+	}
+
+	out.Reset()
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "TS 38.413", "", ""); err != nil {
+		t.Fatalf("runGetASN1 listing: %v", err)
+	}
+	if !strings.Contains(out.String(), "2 ASN.1 assignments") || !strings.Contains(out.String(), "Cause") {
+		t.Errorf("unexpected listing:\n%s", out.String())
+	}
+
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "TS 38.413", "CauseMisc", ""); err == nil ||
+		!strings.Contains(err.Error(), "similar names: Cause") {
+		t.Errorf("expected not-found error with suggestions, got: %v", err)
+	}
+
+	// Corpus-wide lookup: name only, no spec-id.
+	out.Reset()
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "", "AMF-UE-NGAP-ID", ""); err != nil {
+		t.Fatalf("runGetASN1 corpus lookup: %v", err)
+	}
+	if !strings.Contains(out.String(), "AMF-UE-NGAP-ID ::= INTEGER") ||
+		!strings.Contains(out.String(), "[Source: TS 38.413") {
+		t.Errorf("corpus lookup output:\n%s", out.String())
+	}
+
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "TS 23.501", "", ""); err == nil ||
+		!strings.Contains(err.Error(), "no ASN.1 definitions") {
+		t.Errorf("expected no-ASN.1 error, got: %v", err)
+	}
+
+	// Corpus miss with suggestions, and the wrong-spec hint on a per-spec
+	// miss whose spec the index does not cover.
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "", "CauseMisc", ""); err == nil ||
+		!strings.Contains(err.Error(), "similar names: Cause") {
+		t.Errorf("expected corpus suggestions, got: %v", err)
+	}
+
+	// Without the index, the corpus mode names the rebuild command and the
+	// per-spec path falls back to reading the document.
+	if err := d.Exec("DROP TABLE asn1_defs"); err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "", "AMF-UE-NGAP-ID", ""); err == nil ||
+		!strings.Contains(err.Error(), "build-asn1-index") {
+		t.Errorf("expected missing-index error, got: %v", err)
+	}
+	out.Reset()
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "TS 38.413", "AMF-UE-NGAP-ID", ""); err != nil {
+		t.Fatalf("per-spec fallback without index: %v", err)
+	}
+	if !strings.Contains(out.String(), "AMF-UE-NGAP-ID ::= INTEGER") {
+		t.Errorf("fallback output:\n%s", out.String())
+	}
+}
+
+func TestRefreshASN1IndexAfterImportFailure(t *testing.T) {
+	// A rebuild that fails after an import must drop the index rather than
+	// leave it describing the pre-import corpus: the database then reports
+	// the index as missing, which is the state serve already handles.
+	d := testutil.SetupTestDB(t)
+	if err := d.Exec(`INSERT INTO asn1_defs (name, key, spec_id, version, section_number, section_title, body)
+		VALUES ('Stale', 'stale', 'TS 23.501', '18.6.0', '1', 't', 'Stale ::= INTEGER')`); err != nil {
+		t.Fatalf("seed stale def: %v", err)
+	}
+	// Dropping the FTS table makes ASN1Sections — and so the rebuild — fail.
+	for _, stmt := range []string{
+		"DROP TRIGGER sections_ai", "DROP TRIGGER sections_ad", "DROP TRIGGER sections_au",
+		"DROP TABLE sections_fts",
+	} {
+		if err := d.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+
+	err := refreshASN1IndexAfterImport(t.Context(), d)
+	if err == nil || !strings.Contains(err.Error(), "build-asn1-index") {
+		t.Fatalf("expected drop-and-point error, got: %v", err)
+	}
+	if ok, hasErr := d.HasASN1Index(t.Context()); hasErr != nil || ok {
+		t.Errorf("stale index survived a failed rebuild: ok=%v err=%v", ok, hasErr)
+	}
+}
+
+func TestRunBuildASN1Index(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := d.InitSchema(); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	if err := d.Exec(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+		('TS 38.413', '18.6.0', 'i60', 'NGAP', '18', '38')`); err != nil {
+		t.Fatalf("insert spec: %v", err)
+	}
+	if err := d.Exec(`INSERT INTO sections (spec_id, version, number, title, level, parent_number, content)
+		VALUES ('TS 38.413', '18.6.0', '9.4.5', 'IEs', 2, NULL, ?)`,
+		"```asn1\n-- ASN1START\nAMF-UE-NGAP-ID ::= INTEGER (0..1099511627775)\n-- ASN1STOP\n```"); err != nil {
+		t.Fatalf("insert section: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if err := runBuildASN1Index(t.Context(), dbPath); err != nil {
+		t.Fatalf("runBuildASN1Index: %v", err)
+	}
+
+	ro, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer ro.Close()
+	defs, err := ro.LookupASN1(t.Context(), "AMF-UE-NGAP-ID", "amfuengapid", "")
+	if err != nil || len(defs) != 1 {
+		t.Fatalf("index not built: defs=%+v err=%v", defs, err)
+	}
+}
+
+func TestGetASN1SpecIDArg(t *testing.T) {
+	for arg, want := range map[string]bool{
+		"TS 38.331":                    true,
+		"tr 21.905":                    true,
+		"38.331":                       true,
+		"AMF-UE-NGAP-ID":               false,
+		"maxNrofCellMeas":              false,
+		"KlobucharModel2Parameter-r16": false,
+	} {
+		if got := specIDArg.MatchString(arg); got != want {
+			t.Errorf("specIDArg(%q) = %v, want %v", arg, got, want)
+		}
 	}
 }
 
@@ -765,6 +926,19 @@ func seedDBPath(t *testing.T) string {
 	if _, err := openapiindex.Build(t.Context(), d); err != nil {
 		t.Fatalf("build openapi index: %v", err)
 	}
+	// Same for the ASN.1 name index, seeded with one small module.
+	if err := d.Exec(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+		('TS 38.413', '18.6.0', 'i60', 'NGAP', '18', '38')`); err != nil {
+		t.Fatalf("insert asn1 spec: %v", err)
+	}
+	if err := d.Exec(`INSERT INTO sections (spec_id, version, number, title, level, parent_number, content)
+		VALUES ('TS 38.413', '18.6.0', '9.4.5', 'IE definitions', 2, NULL, ?)`,
+		"```asn1\n-- ASN1START\nAMF-UE-NGAP-ID ::= INTEGER (0..1099511627775)\n-- ASN1STOP\n```"); err != nil {
+		t.Fatalf("insert asn1 section: %v", err)
+	}
+	if _, err := asn1index.Rebuild(t.Context(), d); err != nil {
+		t.Fatalf("build asn1 index: %v", err)
+	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("close seed db: %v", err)
 	}
@@ -797,6 +971,9 @@ func TestCmdQueryCommands(t *testing.T) {
 		{"search-openapi", func() { cmdSearchOpenAPI([]string{"-db", path, "-limit", "2", "NFProfile"}) }, []string{"NFProfile", "total_count"}},
 		{"search-openapi multi-arg", func() { cmdSearchOpenAPI([]string{"-db", path, "-kind", "operation", "nf-instances"}) }, []string{`"operation"`}},
 		{"list-images", func() { cmdListImages([]string{"-db", path, "TS 23.501"}) }, []string{`"count"`}},
+		{"get-asn1 lookup", func() { cmdGetASN1([]string{"-db", path, "TS 38.413", "AMF-UE-NGAP-ID"}) }, []string{"[Source: TS 38.413", "AMF-UE-NGAP-ID ::= INTEGER"}},
+		{"get-asn1 corpus", func() { cmdGetASN1([]string{"-db", path, "AMF-UE-NGAP-ID"}) }, []string{"AMF-UE-NGAP-ID ::= INTEGER"}},
+		{"get-asn1 listing", func() { cmdGetASN1([]string{"-db", path, "TS 38.413"}) }, []string{"1 ASN.1 assignments", "Section 9.4.5"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -18,9 +18,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/higebu/3gpp-mcp/internal/asn1index"
 	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/structdiff"
 	"github.com/higebu/3gpp-mcp/internal/textdiff"
@@ -341,6 +343,139 @@ func runGetSection(ctx context.Context, out, errOut io.Writer, src *tools.Source
 		fmt.Fprintf(out, "%s\n\n", s.Content)
 	}
 	return nil
+}
+
+// get-asn1
+
+// specIDArg matches a positional argument naming a specification ("TS 38.331",
+// "TR 21.905", or a bare "38.331"), which is how get-asn1 tells a per-spec
+// call from a corpus-wide name lookup: ASN.1 identifiers start with a letter
+// and never take either shape. A bare number still fails the spec lookup —
+// spec IDs carry their TS/TR prefix — but as "specification not found", not
+// as a baffling name miss.
+var specIDArg = regexp.MustCompile(`^((?i)t[sr] ?)?\d+\.\d+`)
+
+func cmdGetASN1(args []string) {
+	fs := flag.NewFlagSet("get-asn1", flag.ExitOnError)
+	qf := addQueryFlags(fs, true)
+	version := fs.String("version", "", "Specification version to read (e.g. 18.6.0, i60, Rel-18; default: the database version; requires a spec-id)")
+	_ = fs.Parse(args)
+	usage := func() {
+		fmt.Fprintln(os.Stderr, "Usage: 3gpp-mcp get-asn1 [options] <spec-id> [name]")
+		fmt.Fprintln(os.Stderr, "       3gpp-mcp get-asn1 [options] <name>        (looks the name up across every spec)")
+		fmt.Fprintln(os.Stderr, "Options must come before positional arguments.")
+		os.Exit(1)
+	}
+	var specID, name string
+	switch {
+	case fs.NArg() == 1 && specIDArg.MatchString(fs.Arg(0)):
+		specID = fs.Arg(0)
+	case fs.NArg() == 1:
+		name = fs.Arg(0)
+	case fs.NArg() == 2:
+		specID, name = fs.Arg(0), fs.Arg(1)
+	default:
+		usage()
+	}
+	if specID == "" && *version != "" {
+		fmt.Fprintln(os.Stderr, "-version requires a spec-id: the cross-spec lookup covers the database versions only.")
+		os.Exit(1)
+	}
+
+	runQuery("get-asn1", func(ctx context.Context) error {
+		src, cleanup, err := qf.openSource(*version != "")
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		return runGetASN1(ctx, os.Stdout, os.Stderr, src, specID, name, *version)
+	})
+}
+
+func runGetASN1(ctx context.Context, out, errOut io.Writer, src *tools.Source, specID, name, version string) error {
+	if specID == "" {
+		key := asn1index.Key(name)
+		defs, err := src.DB.LookupASN1(ctx, name, key, "")
+		if errors.Is(err, db.ErrNoASN1Index) {
+			return fmt.Errorf("%w; run '3gpp-mcp build-asn1-index' to add it, or pass a spec-id", err)
+		}
+		if err != nil {
+			return err
+		}
+		if len(defs) == 0 {
+			msg := fmt.Sprintf("ASN.1 assignment %q not found in any specification in the database", name)
+			if suggestions, serr := src.DB.ASN1NameSuggestions(ctx, key, "", 20); serr == nil && len(suggestions) > 0 {
+				msg += "; similar names: " + strings.Join(suggestions, ", ")
+			}
+			return errors.New(msg)
+		}
+		_, err = io.WriteString(out, tools.RenderASN1Definitions(tools.ASN1DefAssignments(defs), false))
+		return err
+	}
+
+	// The database version is served from the prebuilt index when it holds
+	// the spec; everything else — an explicit version, an index-less
+	// database, a spec the index has nothing for — reads the document.
+	if version == "" {
+		if listing, err := src.DB.ASN1SpecListing(ctx, specID); err == nil && len(listing) > 0 {
+			if name == "" {
+				_, err := io.WriteString(out, tools.RenderASN1Listing(tools.ASN1DefAssignments(listing)))
+				return err
+			}
+			key := asn1index.Key(name)
+			defs, err := src.DB.LookupASN1(ctx, name, key, specID)
+			if err != nil {
+				return err
+			}
+			if len(defs) == 0 {
+				msg := fmt.Sprintf("ASN.1 assignment %q not found in %s", name, specID)
+				if suggestions, serr := src.DB.ASN1NameSuggestions(ctx, key, specID, 20); serr == nil && len(suggestions) > 0 {
+					msg += "; similar names: " + strings.Join(suggestions, ", ")
+				} else if all, aerr := src.DB.LookupASN1(ctx, name, key, ""); aerr == nil && len(all) > 0 {
+					msg += "; it is defined in " + strings.Join(db.ASN1DefSpecs(all), ", ")
+				}
+				return errors.New(msg)
+			}
+			_, err = io.WriteString(out, tools.RenderASN1Definitions(tools.ASN1DefAssignments(defs), false))
+			return err
+		}
+	}
+
+	var sections []db.Section
+	var res tools.Resolution
+	err := waitForFetch(ctx, errOut, func() error {
+		var err error
+		sections, res, err = src.AllSections(ctx, specID, version)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if len(sections) == 0 {
+		if err := familyPartsErr(ctx, src.DB, specID); err != nil {
+			return err
+		}
+		return fmt.Errorf("specification %s not found", specID)
+	}
+
+	assignments := tools.ExtractASN1(sections)
+	if len(assignments) == 0 {
+		return fmt.Errorf("%s contains no ASN.1 definitions (no -- ASN1START blocks)", specID)
+	}
+	if name == "" {
+		_, err := io.WriteString(out, tools.RenderASN1Listing(assignments))
+		return err
+	}
+	matches := tools.MatchASN1(assignments, name)
+	if len(matches) == 0 {
+		msg := fmt.Sprintf("ASN.1 assignment %q not found in %s", name, specID)
+		if suggestions := tools.ASN1Suggestions(assignments, name, 20); len(suggestions) > 0 {
+			msg += "; similar names: " + strings.Join(suggestions, ", ")
+		}
+		return errors.New(msg)
+	}
+	_, err = io.WriteString(out, tools.RenderASN1Definitions(matches, res.Archived))
+	return err
 }
 
 // compare-versions
