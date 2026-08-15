@@ -6,7 +6,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/db"
 )
 
 // Stats summarizes a rebuild, for the line the CLI logs afterwards.

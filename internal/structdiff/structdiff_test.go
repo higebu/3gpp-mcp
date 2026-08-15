@@ -3,7 +3,7 @@ package structdiff
 import (
 	"testing"
 
-	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/db"
 )
 
 // TestDiffRenumberedWithContentChange checks that a section that was

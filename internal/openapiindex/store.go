@@ -18,7 +18,7 @@ import (
 	"regexp"
 	"sort"
 
-	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/db"
 	"gopkg.in/yaml.v3"
 )
 

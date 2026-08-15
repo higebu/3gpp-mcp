@@ -7,7 +7,7 @@ package structdiff
 import (
 	"strings"
 
-	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/db"
 )
 
 // Renumbering pairs a section that moved to a new number between versions.

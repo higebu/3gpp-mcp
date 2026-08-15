@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/higebu/3gpp-mcp/db"
+	"github.com/higebu/3gpp-mcp/internal/db"
 )
 
 // SeedData is the canonical seed SQL used across test packages.
