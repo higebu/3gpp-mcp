@@ -716,7 +716,10 @@ func cmdGetOpenAPI(args []string) {
 }
 
 func runGetOpenAPI(ctx context.Context, out io.Writer, d *db.DB, specID, apiName, path, schema string) error {
-	content, err := d.GetOpenAPI(ctx, specID, apiName)
+	content, err := d.GetOpenAPIResolved(ctx, specID, apiName)
+	if errors.Is(err, db.ErrOpenAPINotFound) {
+		return errors.New(tools.OpenAPINotFoundMessage(ctx, d, specID, apiName, schema))
+	}
 	if err != nil {
 		return err
 	}
