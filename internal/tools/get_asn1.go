@@ -159,7 +159,10 @@ func ExtractASN1(sections []db.Section) []ASN1Assignment {
 			}
 			if h := asn1Head(line); h != "" {
 				flush(i)
-				start, name = i, h
+				// Clone for the same reason Text clones its single-line
+				// case: the head substring would otherwise pin the whole
+				// section Content in the process-lifetime corpus index.
+				start, name = i, strings.Clone(h)
 			} else if strings.TrimSpace(line) == "END" {
 				flush(i)
 			}
