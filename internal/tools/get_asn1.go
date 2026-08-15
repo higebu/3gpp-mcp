@@ -49,6 +49,15 @@ var asn1HeadRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*`)
 // definition, least of all beside the normative definition of the same name.
 var asn1ExampleMarkerRE = regexp.MustCompile(`^--\s*/[^/]*/\s*ASN1START\b`)
 
+// isASN1ExampleMarker applies asn1ExampleMarkerRE the way the converter's
+// matchASN1Marker matches marker paragraphs: NBSP normalized to space and
+// surrounding whitespace trimmed, because 3GPP documents use both liberally
+// and the fence keeps the marker line verbatim.
+func isASN1ExampleMarker(line string) bool {
+	line = strings.ReplaceAll(line, "\u00a0", " ")
+	return asn1ExampleMarkerRE.MatchString(strings.TrimSpace(line))
+}
+
 // asn1Head returns the assignment name a fence line defines, or "" when the
 // line does not open an assignment. "::=" is the discriminator: the lines
 // inside a body — SEQUENCE fields, ENUMERATED values, object-set rows — never
@@ -63,7 +72,15 @@ func asn1Head(line string) string {
 	if !found {
 		return ""
 	}
-	name := asn1HeadRE.FindString(strings.TrimLeft(head, " \t"))
+	// A "::=" that sits inside a line-tail comment ("field INTEGER, -- x ::= 3")
+	// is comment text, not an assignment: "--" cannot occur in an identifier,
+	// so its presence before the "::=" settles it.
+	if strings.Contains(head, "--") {
+		return ""
+	}
+	// NBSP counts as indentation like space and tab: fences keep the source
+	// text verbatim, and 3GPP documents use NBSP liberally.
+	name := asn1HeadRE.FindString(strings.TrimLeft(head, " \t\u00a0"))
 	if name == "" {
 		return ""
 	}
@@ -127,7 +144,7 @@ func ExtractASN1(sections []db.Section) []ASN1Assignment {
 			if skipFence {
 				continue
 			}
-			if asn1ExampleMarkerRE.MatchString(line) {
+			if isASN1ExampleMarker(line) {
 				flush(i)
 				skipFence = true
 				continue
@@ -365,14 +382,16 @@ func HandleGetASN1(src *Source) func(ctx context.Context, req *mcp.CallToolReque
 		matches := MatchASN1(assignments, input.Name)
 		if len(matches) == 0 {
 			msg := fmt.Sprintf("ASN.1 assignment %q not found in %s.", input.Name, label)
-			if suggestions := ASN1Suggestions(assignments, input.Name, 20); len(suggestions) > 0 {
+			suggestions := ASN1Suggestions(assignments, input.Name, 20)
+			if len(suggestions) > 0 {
 				msg += " Similar names: " + strings.Join(suggestions, ", ")
 			}
 			// A name aimed at the wrong specification is the common miss —
 			// the caller guessed RRC for an LPP type, say — so check where
 			// the name does live before answering a bare not-found.
-			msg += crossSpecHint(ctx, src, input.Name)
-			if !strings.Contains(msg, "Similar names") && !strings.Contains(msg, "defined in") {
+			hint := crossSpecHint(ctx, src, input.Name)
+			msg += hint
+			if len(suggestions) == 0 && hint == "" {
 				msg += " Call get_asn1 without `name` to list the assignment names."
 			}
 			return errorResult(msg), nil, nil

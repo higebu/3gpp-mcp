@@ -175,6 +175,32 @@ func TestExtractASN1SkipsExampleFences(t *testing.T) {
 	}
 }
 
+func TestExtractASN1WhitespaceVariants(t *testing.T) {
+	// Fences keep the source text verbatim, and 3GPP documents indent with
+	// NBSP as liberally as with tabs: an NBSP-indented head is still a head,
+	// an example marker with leading whitespace or NBSP separators is still
+	// an example marker, and a "::=" inside a line-tail comment does not
+	// start an assignment mid-SEQUENCE.
+	sections := []db.Section{{
+		SpecID: "TS 38.331",
+		Number: "6.3",
+		Content: "```asn1\n-- ASN1START\nFirst ::= SEQUENCE {\n\tfield\tINTEGER,\t-- default ::= 32\n\tother\tINTEGER\n}\n\n\u00a0Second ::= INTEGER (0..1)\n-- ASN1STOP\n```\n\n" +
+			"```asn1\n\t-- /example/ ASN1START\nWrongOne ::= INTEGER\n-- ASN1STOP\n```\n\n" +
+			"```asn1\n--\u00a0/example/\u00a0ASN1START\nWrongTwo ::= INTEGER\n-- ASN1STOP\n```",
+	}}
+	got := ExtractASN1(sections)
+	names := make([]string, len(got))
+	for i, a := range got {
+		names[i] = a.Name
+	}
+	if len(got) != 2 || names[0] != "First" || names[1] != "Second" {
+		t.Fatalf("extracted names = %v, want [First Second]", names)
+	}
+	if !strings.Contains(got[0].Text, "-- default ::= 32") || !strings.Contains(got[0].Text, "other") {
+		t.Errorf("First was split at the tail comment:\n%s", got[0].Text)
+	}
+}
+
 func TestExtractASN1SkipsOneLineModuleHeader(t *testing.T) {
 	// RRC writes the module header in one line — "NR-RRC-Definitions
 	// DEFINITIONS AUTOMATIC TAGS ::=" — which must not become an assignment
