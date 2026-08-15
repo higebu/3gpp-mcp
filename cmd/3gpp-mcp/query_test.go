@@ -128,6 +128,49 @@ func TestRunGetSection(t *testing.T) {
 	}
 }
 
+func TestRunGetASN1(t *testing.T) {
+	d := testutil.SetupTestDB(t)
+	if err := d.Exec(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+		('TS 38.413', '18.6.0', 'i60', 'NG Application Protocol (NGAP)', '18', '38')`); err != nil {
+		t.Fatalf("insert spec: %v", err)
+	}
+	if err := d.Exec(`INSERT INTO sections (spec_id, version, number, title, level, parent_number, content)
+		VALUES ('TS 38.413', '18.6.0', '9.4.5', 'Information Element definitions', 2, NULL, ?)`,
+		"```asn1\n-- ASN1START\nAMF-UE-NGAP-ID ::= INTEGER (0..1099511627775)\n\nCause ::= CHOICE {\n\tmisc\tCauseMisc\n}\n-- ASN1STOP\n```"); err != nil {
+		t.Fatalf("insert section: %v", err)
+	}
+	src := tools.NewSource(d)
+
+	var out, errOut bytes.Buffer
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "TS 38.413", "AMF-UE-NGAP-ID", ""); err != nil {
+		t.Fatalf("runGetASN1: %v", err)
+	}
+	if !strings.Contains(out.String(), "[Source: TS 38.413 v18.6.0 (Rel-18) — Section 9.4.5 — AMF-UE-NGAP-ID]") {
+		t.Errorf("missing provenance header:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "AMF-UE-NGAP-ID ::= INTEGER (0..1099511627775)") {
+		t.Errorf("missing definition:\n%s", out.String())
+	}
+
+	out.Reset()
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "TS 38.413", "", ""); err != nil {
+		t.Fatalf("runGetASN1 listing: %v", err)
+	}
+	if !strings.Contains(out.String(), "2 ASN.1 assignments") || !strings.Contains(out.String(), "Cause") {
+		t.Errorf("unexpected listing:\n%s", out.String())
+	}
+
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "TS 38.413", "CauseMisc", ""); err == nil ||
+		!strings.Contains(err.Error(), "similar names: Cause") {
+		t.Errorf("expected not-found error with suggestions, got: %v", err)
+	}
+
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "TS 23.501", "", ""); err == nil ||
+		!strings.Contains(err.Error(), "no ASN.1 definitions") {
+		t.Errorf("expected no-ASN.1 error, got: %v", err)
+	}
+}
+
 func TestRunCompareVersions_SameVersion(t *testing.T) {
 	d := testutil.SetupTestDB(t)
 	src := tools.NewSource(d)

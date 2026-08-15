@@ -1,0 +1,292 @@
+package tools
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/higebu/3gpp-mcp/internal/db"
+)
+
+// asn1TestModule mimics how the DOCX converter renders an NGAP-style ASN.1
+// clause: one ```asn1 fence holding a whole module, markers included.
+const asn1TestModule = "Each IE is defined below.\n\n" +
+	"```asn1\n" +
+	"-- ASN1START\n" +
+	"-- **************************************************************\n" +
+	"NGAP-IEs {\n" +
+	"itu-t (0) identified-organization (4) etsi (0) mobileDomain (0) }\n" +
+	"\n" +
+	"DEFINITIONS AUTOMATIC TAGS ::=\n" +
+	"\n" +
+	"BEGIN\n" +
+	"\n" +
+	"IMPORTS\n" +
+	"\tCriticality\n" +
+	"FROM NGAP-CommonDataTypes;\n" +
+	"\n" +
+	"AMF-UE-NGAP-ID ::= INTEGER (0..1099511627775)\n" +
+	"\n" +
+	"Cause ::= CHOICE {\n" +
+	"\tradioNetwork\t\tCauseRadioNetwork,\n" +
+	"\tmisc\t\t\tCauseMisc,\n" +
+	"\t...\n" +
+	"}\n" +
+	"\n" +
+	"CauseMisc ::= ENUMERATED {\n" +
+	"\tcontrol-processing-overload,\n" +
+	"\tunspecified,\n" +
+	"\t...\n" +
+	"}\n" +
+	"\n" +
+	"maxNrOfErrors INTEGER ::= 256\n" +
+	"\n" +
+	"\tid-AMF-UE-NGAP-ID\t\t\t\t\tProtocolIE-ID ::= 10\n" +
+	"\n" +
+	"END\n" +
+	"-- ASN1STOP\n" +
+	"```"
+
+func seedASN1Spec(t *testing.T, d *db.DB) {
+	t.Helper()
+	if err := d.Exec(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+		('TS 38.413', '18.6.0', 'i60', 'NG Application Protocol (NGAP)', '18', '38')`); err != nil {
+		t.Fatalf("insert spec: %v", err)
+	}
+	sections := []struct{ number, title, content string }{
+		{"9.3.4", "PDU definitions", "```asn1\n-- ASN1START\nPDU-Container ::= SEQUENCE {\n\tid\tINTEGER\n}\n-- ASN1STOP\n```"},
+		{"9.4.5", "Information Element definitions", asn1TestModule},
+	}
+	for _, s := range sections {
+		if err := d.Exec(`INSERT INTO sections (spec_id, version, number, title, level, parent_number, content)
+			VALUES ('TS 38.413', '18.6.0', ?, ?, 2, NULL, ?)`, s.number, s.title, s.content); err != nil {
+			t.Fatalf("insert section %s: %v", s.number, err)
+		}
+	}
+}
+
+func TestExtractASN1(t *testing.T) {
+	sections := []db.Section{{
+		SpecID:  "TS 38.413",
+		Version: "18.6.0",
+		Number:  "9.4.5",
+		Title:   "Information Element definitions",
+		Content: asn1TestModule,
+	}}
+	got := ExtractASN1(sections)
+
+	names := make([]string, len(got))
+	for i, a := range got {
+		names[i] = a.Name
+	}
+	want := []string{"AMF-UE-NGAP-ID", "Cause", "CauseMisc", "maxNrOfErrors", "id-AMF-UE-NGAP-ID"}
+	if len(names) != len(want) {
+		t.Fatalf("extracted names = %v, want %v", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("extracted names = %v, want %v", names, want)
+		}
+	}
+
+	for _, a := range got {
+		if a.Section.Number != "9.4.5" {
+			t.Errorf("%s: section = %q, want 9.4.5", a.Name, a.Section.Number)
+		}
+		if a.Section.Content != "" {
+			t.Errorf("%s: section content not cleared", a.Name)
+		}
+	}
+
+	// An ENUMERATED keeps its closing brace: the body runs to the next head,
+	// not to the next column-0 line.
+	if !strings.HasSuffix(got[2].Text, "}") {
+		t.Errorf("CauseMisc body lost its closing brace:\n%s", got[2].Text)
+	}
+	// A value assignment is one line.
+	if got[3].Text != "maxNrOfErrors INTEGER ::= 256" {
+		t.Errorf("maxNrOfErrors body = %q", got[3].Text)
+	}
+	// NGAP's constant definitions are tab-indented; the indentation is kept.
+	if got[4].Text != "\tid-AMF-UE-NGAP-ID\t\t\t\t\tProtocolIE-ID ::= 10" {
+		t.Errorf("id-AMF-UE-NGAP-ID body = %q", got[4].Text)
+	}
+	// END closes the module: the last assignment must not absorb it or the
+	// -- ASN1STOP marker.
+	if strings.Contains(got[4].Text, "END") {
+		t.Errorf("last assignment absorbed the module END:\n%s", got[4].Text)
+	}
+	// The module header's DEFINITIONS line is not an assignment.
+	for _, a := range got {
+		if a.Name == "DEFINITIONS" || a.Name == "NGAP-IEs" {
+			t.Errorf("module header extracted as assignment %q", a.Name)
+		}
+	}
+}
+
+func TestExtractASN1IgnoresOtherFences(t *testing.T) {
+	sections := []db.Section{{
+		SpecID:  "TS 29.060",
+		Number:  "7",
+		Content: "```\nFoo ::= SEQUENCE {}\n```\n\nBar ::= outside any fence",
+	}}
+	if got := ExtractASN1(sections); len(got) != 0 {
+		t.Errorf("extracted %d assignments from non-asn1 content, want 0", len(got))
+	}
+}
+
+func TestExtractASN1UnterminatedFence(t *testing.T) {
+	sections := []db.Section{{
+		SpecID:  "TS 38.413",
+		Number:  "9",
+		Content: "```asn1\n-- ASN1START\nFoo ::= INTEGER (0..15)",
+	}}
+	got := ExtractASN1(sections)
+	if len(got) != 1 || got[0].Name != "Foo" || got[0].Text != "Foo ::= INTEGER (0..15)" {
+		t.Errorf("unterminated fence: got %+v", got)
+	}
+}
+
+func TestMatchASN1(t *testing.T) {
+	assignments := ExtractASN1([]db.Section{{
+		SpecID:  "TS 38.413",
+		Number:  "9.4.5",
+		Content: asn1TestModule,
+	}})
+
+	t.Run("exact", func(t *testing.T) {
+		got := MatchASN1(assignments, "AMF-UE-NGAP-ID")
+		if len(got) != 1 || got[0].Name != "AMF-UE-NGAP-ID" {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("IE title form", func(t *testing.T) {
+		got := MatchASN1(assignments, "AMF UE NGAP ID")
+		if len(got) != 1 || got[0].Name != "AMF-UE-NGAP-ID" {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("case-insensitive", func(t *testing.T) {
+		got := MatchASN1(assignments, "causemisc")
+		if len(got) != 1 || got[0].Name != "CauseMisc" {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		if got := MatchASN1(assignments, "NoSuchType"); len(got) != 0 {
+			t.Fatalf("got %+v", got)
+		}
+	})
+}
+
+func TestASN1Suggestions(t *testing.T) {
+	assignments := ExtractASN1([]db.Section{{
+		SpecID:  "TS 38.413",
+		Number:  "9.4.5",
+		Content: asn1TestModule,
+	}})
+	got := ASN1Suggestions(assignments, "cause", 20)
+	want := []string{"Cause", "CauseMisc"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("suggestions = %v, want %v", got, want)
+	}
+}
+
+func TestHandleGetASN1(t *testing.T) {
+	d := setupTestDB(t)
+	seedASN1Spec(t, d)
+	handler := HandleGetASN1(NewSource(d))
+
+	t.Run("lookup", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetASN1Input{SpecID: "TS 38.413", Name: "AMF-UE-NGAP-ID"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "[Source: TS 38.413 v18.6.0 (Rel-18) — Section 9.4.5 — AMF-UE-NGAP-ID]") {
+			t.Errorf("missing source header, got: %s", text)
+		}
+		if !strings.Contains(text, "AMF-UE-NGAP-ID ::= INTEGER (0..1099511627775)") {
+			t.Errorf("missing definition, got: %s", text)
+		}
+	})
+
+	t.Run("lookup via IE title", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetASN1Input{SpecID: "TS 38.413", Name: "AMF UE NGAP ID"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if text := getTextContent(result); !strings.Contains(text, "AMF-UE-NGAP-ID ::=") {
+			t.Errorf("missing definition, got: %s", text)
+		}
+	})
+
+	t.Run("listing", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetASN1Input{SpecID: "TS 38.413"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "[Source: TS 38.413 v18.6.0 (Rel-18)]") {
+			t.Errorf("missing source header, got: %s", text)
+		}
+		if !strings.Contains(text, "6 ASN.1 assignments") {
+			t.Errorf("missing count, got: %s", text)
+		}
+		for _, want := range []string{"Section 9.3.4 — PDU definitions:", "Section 9.4.5 — Information Element definitions:", "PDU-Container", "maxNrOfErrors"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("listing missing %q, got: %s", want, text)
+			}
+		}
+	})
+
+	t.Run("not found with suggestions", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetASN1Input{SpecID: "TS 38.413", Name: "CauseRadio"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError {
+			t.Fatalf("expected error result")
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "not found") || !strings.Contains(text, "Similar names") {
+			t.Errorf("expected suggestions, got: %s", text)
+		}
+	})
+
+	t.Run("spec without ASN.1", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetASN1Input{SpecID: "TS 23.501"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError {
+			t.Fatalf("expected error result")
+		}
+		if text := getTextContent(result); !strings.Contains(text, "no ASN.1 definitions") {
+			t.Errorf("got: %s", text)
+		}
+	})
+
+	t.Run("unknown spec", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetASN1Input{SpecID: "TS 99.999"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError {
+			t.Fatalf("expected error result")
+		}
+	})
+
+	t.Run("missing spec_id", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetASN1Input{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError {
+			t.Fatalf("expected error result")
+		}
+	})
+}

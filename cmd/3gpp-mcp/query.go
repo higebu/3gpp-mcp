@@ -343,6 +343,67 @@ func runGetSection(ctx context.Context, out, errOut io.Writer, src *tools.Source
 	return nil
 }
 
+// get-asn1
+
+func cmdGetASN1(args []string) {
+	fs := flag.NewFlagSet("get-asn1", flag.ExitOnError)
+	qf := addQueryFlags(fs, true)
+	version := fs.String("version", "", "Specification version to read (e.g. 18.6.0, i60, Rel-18; default: the database version)")
+	_ = fs.Parse(args)
+	if fs.NArg() != 1 && fs.NArg() != 2 {
+		fmt.Fprintln(os.Stderr, "Usage: 3gpp-mcp get-asn1 [options] <spec-id> [name]")
+		fmt.Fprintln(os.Stderr, "Options must come before positional arguments.")
+		os.Exit(1)
+	}
+
+	runQuery("get-asn1", func(ctx context.Context) error {
+		src, cleanup, err := qf.openSource(*version != "")
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		return runGetASN1(ctx, os.Stdout, os.Stderr, src, fs.Arg(0), fs.Arg(1), *version)
+	})
+}
+
+func runGetASN1(ctx context.Context, out, errOut io.Writer, src *tools.Source, specID, name, version string) error {
+	var sections []db.Section
+	var res tools.Resolution
+	err := waitForFetch(ctx, errOut, func() error {
+		var err error
+		sections, res, err = src.AllSections(ctx, specID, version)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if len(sections) == 0 {
+		if err := familyPartsErr(ctx, src.DB, specID); err != nil {
+			return err
+		}
+		return fmt.Errorf("specification %s not found", specID)
+	}
+
+	assignments := tools.ExtractASN1(sections)
+	if len(assignments) == 0 {
+		return fmt.Errorf("%s contains no ASN.1 definitions (no -- ASN1START blocks)", specID)
+	}
+	if name == "" {
+		_, err := io.WriteString(out, tools.RenderASN1Listing(assignments))
+		return err
+	}
+	matches := tools.MatchASN1(assignments, name)
+	if len(matches) == 0 {
+		msg := fmt.Sprintf("ASN.1 assignment %q not found in %s", name, specID)
+		if suggestions := tools.ASN1Suggestions(assignments, name, 20); len(suggestions) > 0 {
+			msg += "; similar names: " + strings.Join(suggestions, ", ")
+		}
+		return errors.New(msg)
+	}
+	_, err = io.WriteString(out, tools.RenderASN1Definitions(matches, res.Archived))
+	return err
+}
+
 // compare-versions
 
 func cmdCompareVersions(args []string) {
