@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/higebu/3gpp-mcp/internal/asn1index"
 	"github.com/higebu/3gpp-mcp/internal/db"
 )
 
@@ -67,6 +68,9 @@ func seedASN1Spec(t *testing.T, d *db.DB) {
 			VALUES (?, (SELECT version FROM specs WHERE id = ?), ?, ?, 2, NULL, ?)`, s.spec, s.spec, s.number, s.title, s.content); err != nil {
 			t.Fatalf("insert section %s: %v", s.number, err)
 		}
+	}
+	if _, err := asn1index.Rebuild(context.Background(), d); err != nil {
+		t.Fatalf("rebuild asn1 index: %v", err)
 	}
 }
 
@@ -275,21 +279,31 @@ func TestMatchASN1(t *testing.T) {
 	})
 }
 
-func TestCorpusASN1DetachedFromCallerCancel(t *testing.T) {
-	// The index build must survive the caller's cancelation: a client
-	// timeout shorter than the build would otherwise cancel it on every
-	// retry and no get_asn1 call could ever succeed.
+func TestGetASN1WithoutIndex(t *testing.T) {
+	// A database from before the index existed (serve opens read-only and
+	// cannot create the table): the cross-spec mode names the rebuild
+	// command, the per-spec path falls back to reading the document.
 	d := setupTestDB(t)
 	seedASN1Spec(t, d)
-	src := NewSource(d)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	assignments, err := src.CorpusASN1(ctx)
-	if err != nil {
-		t.Fatalf("build failed under canceled context: %v", err)
+	if err := d.Exec("DROP TABLE asn1_defs"); err != nil {
+		t.Fatalf("drop index: %v", err)
 	}
-	if len(assignments) == 0 {
-		t.Fatal("expected assignments from the seeded corpus")
+	handler := HandleGetASN1(NewSource(d))
+
+	result, _, err := handler(context.Background(), nil, GetASN1Input{Name: "AMF-UE-NGAP-ID"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError || !strings.Contains(getTextContent(result), "build-asn1-index") {
+		t.Errorf("expected missing-index error naming the command, got: %s", getTextContent(result))
+	}
+
+	result, _, err = handler(context.Background(), nil, GetASN1Input{SpecID: "TS 38.413", Name: "AMF-UE-NGAP-ID"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if text := getTextContent(result); result.IsError || !strings.Contains(text, "AMF-UE-NGAP-ID ::= INTEGER") {
+		t.Errorf("per-spec fallback failed without the index, got: %s", text)
 	}
 }
 

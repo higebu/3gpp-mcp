@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/higebu/3gpp-mcp/internal/asn1index"
 	"github.com/higebu/3gpp-mcp/internal/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/openapiindex"
@@ -138,6 +139,9 @@ func TestRunGetASN1(t *testing.T) {
 		VALUES ('TS 38.413', '18.6.0', '9.4.5', 'Information Element definitions', 2, NULL, ?)`,
 		"```asn1\n-- ASN1START\nAMF-UE-NGAP-ID ::= INTEGER (0..1099511627775)\n\nCause ::= CHOICE {\n\tmisc\tCauseMisc\n}\n-- ASN1STOP\n```"); err != nil {
 		t.Fatalf("insert section: %v", err)
+	}
+	if _, err := asn1index.Rebuild(t.Context(), d); err != nil {
+		t.Fatalf("rebuild asn1 index: %v", err)
 	}
 	src := tools.NewSource(d)
 

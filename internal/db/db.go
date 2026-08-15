@@ -301,7 +301,7 @@ CREATE TABLE IF NOT EXISTS spec_references (
 
 CREATE INDEX IF NOT EXISTS idx_ref_source ON spec_references(source_spec_id, source_version, source_section);
 CREATE INDEX IF NOT EXISTS idx_ref_target ON spec_references(target_spec);
-` + OpenAPIIndexSchema
+` + OpenAPIIndexSchema + ASN1IndexSchema
 
 // OpenAPIIndexSchema defines the OpenAPI search index: one row per schema and
 // per operation, derived from openapi_specs by internal/openapiindex and

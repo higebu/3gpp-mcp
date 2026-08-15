@@ -320,12 +320,15 @@ suggested. A name defined more than once returns every definition, each under
 its own source line.
 
 When you do not know which specification defines a name, omit `spec_id`: the
-name is resolved across every specification in the database, seeded through
-the full-text index and cached in memory after the first lookup. A lookup
-that names the wrong specification gets told where the name is actually
-defined. Cross-spec resolution covers the database versions only — pass
-`spec_id` (and optionally `version`) to read an archived version, with the
-same on-demand download behavior as `get_section`.
+name is resolved across every specification in the database, from a name
+index built at database build time (`build`, `update`, `import` and
+`import-dir` all refresh it). A lookup that names the wrong specification
+gets told where the name is actually defined. A database built before this
+tool existed has no index — add it in place with
+[`build-asn1-index`](#other-commands). Cross-spec resolution covers the
+database versions only — pass `spec_id` (and optionally `version`) to read
+an archived version, with the same on-demand download behavior as
+`get_section`.
 
 With a `spec_id` and no `name` it lists every assignment name, grouped by
 defining section.
@@ -506,6 +509,7 @@ it at its newest version below the cap. They cannot be combined.
 - `import-dir` — Import all `.docx` files in a directory into the database. Alias: `convert-dir`. Usage: `3gpp-mcp import-dir --db data/3gpp.db ./specs`
 - `update` — Update specifications in the database to latest versions, or to a cap with `--max-release`.
 - `build-openapi-index` — Rebuild the [OpenAPI search index](#openapi-definitions) of an existing database. `build` and `update` do this themselves, so it is for adding the index to a database built before `search_openapi` existed: `serve` opens the database read-only and cannot create it on the fly.
+- `build-asn1-index` — Rebuild the [ASN.1 name index](#asn1-definitions) of an existing database. `build`, `update`, `import` and `import-dir` do this themselves, so it is for adding the index to a database built before `get_asn1` existed.
 - `completion` — Print a shell completion script: `3gpp-mcp completion bash` (or `zsh`, `fish`)
 
 The cap is not stored in the database, so a database built with

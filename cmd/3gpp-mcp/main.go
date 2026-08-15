@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/higebu/3gpp-mcp/internal/asn1index"
 	"github.com/higebu/3gpp-mcp/internal/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/openapiindex"
@@ -111,6 +112,7 @@ func init() {
 		{name: "import-dir", aliases: []string{"convert-dir"}, desc: "Import a directory of DOCX files into database", run: cmdConvertDir},
 		{name: "update", desc: "Update database to latest spec versions", run: cmdUpdate},
 		{name: "build-openapi-index", desc: "Rebuild the OpenAPI search index", run: cmdBuildOpenAPIIndex},
+		{name: "build-asn1-index", desc: "Rebuild the ASN.1 name index", run: cmdBuildASN1Index},
 		{name: "list-specs", desc: "List specifications in the database", run: cmdListSpecs},
 		{name: "list-versions", desc: "List versions of a specification", run: cmdListVersions},
 		{name: "get-toc", desc: "Print a specification's table of contents", run: cmdGetTOC},
@@ -409,8 +411,12 @@ func runConvert(ctx context.Context, dbPath, docxPath string, convertImage bool)
 	// here again would only repeat that context.
 	// No OpenAPI rebuild here: the YAML files live in the archive zip, not in
 	// a .docx, so importing documents never changes openapi_specs and a
-	// rebuild could only rewrite every chunk to what it already was.
+	// rebuild could only rewrite every chunk to what it already was. The
+	// ASN.1 index is different — a .docx does carry ASN.1 — so it refreshes.
 	if err := pipeline.ConvertSingleFile(ctx, d, docxPath, convertImage); err != nil {
+		return err
+	}
+	if err := refreshASN1IndexAfterImport(ctx, d); err != nil {
 		return err
 	}
 	fmt.Printf("Written to %s\n", dbPath)
@@ -460,11 +466,12 @@ func runConvertDir(ctx context.Context, dbPath, dirPath string, workers int, con
 	// ConvertDir's errors do not all carry the directory (e.g. "all N files
 	// failed to parse"), so name it here.
 	// As in runConvert, a .docx import cannot change openapi_specs, so there
-	// is nothing for an OpenAPI rebuild to do.
+	// is nothing for an OpenAPI rebuild to do — but it does change ASN.1, so
+	// that index refreshes.
 	if err := pipeline.ConvertDir(ctx, d, dirPath, workers, convertDoc, convertImage); err != nil {
 		return fmt.Errorf("import %s: %w", dirPath, err)
 	}
-	return nil
+	return refreshASN1IndexAfterImport(ctx, d)
 }
 
 // exit is swapped in tests to cover fatal error paths without terminating
@@ -660,7 +667,10 @@ func runPipeline(ctx context.Context, dbPath string, client *http.Client, specs 
 		return err
 	}
 
-	return refreshOpenAPIIndexAfterImport(ctx, d)
+	if err := refreshOpenAPIIndexAfterImport(ctx, d); err != nil {
+		return err
+	}
+	return refreshASN1IndexAfterImport(ctx, d)
 }
 
 // rebuildOpenAPIIndex refreshes the search_openapi index and reports what it
@@ -699,6 +709,69 @@ func refreshOpenAPIIndexAfterImport(ctx context.Context, d *db.DB) error {
 		return fmt.Errorf("%w (dropping the now-stale index also failed: %v)", err, dropErr)
 	}
 	return fmt.Errorf("%w; the now-stale index was dropped, so run 'build-openapi-index' before serving search_openapi", err)
+}
+
+// rebuildASN1Index refreshes the get_asn1 name index and reports what it
+// wrote. Extraction is per-spec, but the index is still replaced wholesale in
+// one transaction: the whole corpus extracts in seconds through the FTS seed,
+// and a rebuild that does not finish changes nothing.
+func rebuildASN1Index(ctx context.Context, d *db.DB) error {
+	stats, err := asn1index.Rebuild(ctx, d)
+	if err != nil {
+		return fmt.Errorf("build asn1 index: %w", err)
+	}
+	fmt.Printf("ASN.1 index: %s\n", stats)
+	return nil
+}
+
+// refreshASN1IndexAfterImport is rebuildASN1Index for a caller that has just
+// rewritten sections. Unlike OpenAPI YAML, a .docx import does change ASN.1
+// content, so every import path ends here. On failure the surviving index
+// describes the corpus as it was before the import — wrong in a way no caller
+// can detect — so it is dropped, leaving the database in the state serve
+// already handles: the tool reports the index as missing and names
+// build-asn1-index.
+func refreshASN1IndexAfterImport(ctx context.Context, d *db.DB) error {
+	err := rebuildASN1Index(ctx, d)
+	if err == nil {
+		return nil
+	}
+	if dropErr := d.DropASN1Index(); dropErr != nil {
+		return fmt.Errorf("%w (dropping the now-stale index also failed: %v)", err, dropErr)
+	}
+	return fmt.Errorf("%w; the now-stale index was dropped, so run 'build-asn1-index' before serving get_asn1 lookups", err)
+}
+
+func cmdBuildASN1Index(args []string) {
+	fs := flag.NewFlagSet("build-asn1-index", flag.ExitOnError)
+	dbPath := fs.String("db", "3gpp.db", "SQLite database path")
+	_ = fs.Parse(args)
+	requireArgs(fs, 0, "3gpp-mcp build-asn1-index [options]")
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if err := runBuildASN1Index(ctx, *dbPath); err != nil {
+		log.Printf("Build asn1 index failed: %v", err)
+		exit(1)
+	}
+}
+
+// runBuildASN1Index rebuilds the index in an existing database. It is the way
+// to add the index to a database built before get_asn1 existed: serve opens
+// read-only and so cannot create the table itself.
+func runBuildASN1Index(ctx context.Context, dbPath string) error {
+	d, err := db.OpenReadWrite(dbPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer d.Close()
+
+	if err := d.InitSchema(); err != nil {
+		return fmt.Errorf("init schema: %w", err)
+	}
+
+	return rebuildASN1Index(ctx, d)
 }
 
 func cmdBuildOpenAPIIndex(args []string) {
@@ -1103,6 +1176,20 @@ func cmdUpdate(args []string) {
 			log.Fatalf("Update failed: %v", err)
 		}
 		log.Printf("warning: %v; run '3gpp-mcp build-openapi-index --db %s'", err, *dbPath)
+	}
+
+	// The ASN.1 name index gets the identical treatment, for the identical
+	// reason: derived data that build-asn1-index regenerates in seconds is
+	// not worth discarding an hours-long import over, but the database must
+	// not go live carrying an index that disagrees with its sections.
+	if err := refreshASN1IndexAfterImport(ctx, d); err != nil {
+		stale, checkErr := d.HasASN1Index(context.WithoutCancel(ctx))
+		if checkErr != nil || stale {
+			_ = d.Close()
+			discardWorkingCopy(newPath)
+			log.Fatalf("Update failed: %v", err)
+		}
+		log.Printf("warning: %v; run '3gpp-mcp build-asn1-index --db %s'", err, *dbPath)
 	}
 
 	// Checkpoint WAL into the main file so the renamed DB is self-contained.

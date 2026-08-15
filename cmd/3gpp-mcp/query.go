@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/higebu/3gpp-mcp/internal/asn1index"
 	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/structdiff"
 	"github.com/higebu/3gpp-mcp/internal/textdiff"
@@ -393,20 +394,51 @@ func cmdGetASN1(args []string) {
 
 func runGetASN1(ctx context.Context, out, errOut io.Writer, src *tools.Source, specID, name, version string) error {
 	if specID == "" {
-		assignments, err := src.CorpusASN1(ctx)
+		key := asn1index.Key(name)
+		defs, err := src.DB.LookupASN1(ctx, name, key, "")
+		if errors.Is(err, db.ErrNoASN1Index) {
+			return fmt.Errorf("%w; run '3gpp-mcp build-asn1-index' to add it, or pass a spec-id", err)
+		}
 		if err != nil {
 			return err
 		}
-		matches := tools.MatchASN1(assignments, name)
-		if len(matches) == 0 {
+		if len(defs) == 0 {
 			msg := fmt.Sprintf("ASN.1 assignment %q not found in any specification in the database", name)
-			if suggestions := tools.ASN1Suggestions(assignments, name, 20); len(suggestions) > 0 {
+			if suggestions, serr := src.DB.ASN1NameSuggestions(ctx, key, "", 20); serr == nil && len(suggestions) > 0 {
 				msg += "; similar names: " + strings.Join(suggestions, ", ")
 			}
 			return errors.New(msg)
 		}
-		_, err = io.WriteString(out, tools.RenderASN1Definitions(matches, false))
+		_, err = io.WriteString(out, tools.RenderASN1Definitions(tools.ASN1DefAssignments(defs), false))
 		return err
+	}
+
+	// The database version is served from the prebuilt index when it holds
+	// the spec; everything else — an explicit version, an index-less
+	// database, a spec the index has nothing for — reads the document.
+	if version == "" {
+		if listing, err := src.DB.ASN1SpecListing(ctx, specID); err == nil && len(listing) > 0 {
+			if name == "" {
+				_, err := io.WriteString(out, tools.RenderASN1Listing(tools.ASN1DefAssignments(listing)))
+				return err
+			}
+			key := asn1index.Key(name)
+			defs, err := src.DB.LookupASN1(ctx, name, key, specID)
+			if err != nil {
+				return err
+			}
+			if len(defs) == 0 {
+				msg := fmt.Sprintf("ASN.1 assignment %q not found in %s", name, specID)
+				if suggestions, serr := src.DB.ASN1NameSuggestions(ctx, key, specID, 20); serr == nil && len(suggestions) > 0 {
+					msg += "; similar names: " + strings.Join(suggestions, ", ")
+				} else if all, aerr := src.DB.LookupASN1(ctx, name, key, ""); aerr == nil && len(all) > 0 {
+					msg += "; it is defined in " + strings.Join(db.ASN1DefSpecs(all), ", ")
+				}
+				return errors.New(msg)
+			}
+			_, err = io.WriteString(out, tools.RenderASN1Definitions(tools.ASN1DefAssignments(defs), false))
+			return err
+		}
 	}
 
 	var sections []db.Section
@@ -439,12 +471,6 @@ func runGetASN1(ctx context.Context, out, errOut io.Writer, src *tools.Source, s
 		msg := fmt.Sprintf("ASN.1 assignment %q not found in %s", name, specID)
 		if suggestions := tools.ASN1Suggestions(assignments, name, 20); len(suggestions) > 0 {
 			msg += "; similar names: " + strings.Join(suggestions, ", ")
-		} else if corpus, cerr := src.CorpusASN1(ctx); cerr == nil {
-			// The cross-spec hint costs a corpus read this one-shot process
-			// throws away, so pay it only when there is nothing else to say.
-			if specs := tools.ASN1DefiningSpecs(corpus, name); len(specs) > 0 {
-				msg += "; it is defined in " + strings.Join(specs, ", ")
-			}
 		}
 		return errors.New(msg)
 	}
