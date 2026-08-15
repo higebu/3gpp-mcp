@@ -275,6 +275,24 @@ func TestMatchASN1(t *testing.T) {
 	})
 }
 
+func TestCorpusASN1DetachedFromCallerCancel(t *testing.T) {
+	// The index build must survive the caller's cancelation: a client
+	// timeout shorter than the build would otherwise cancel it on every
+	// retry and no get_asn1 call could ever succeed.
+	d := setupTestDB(t)
+	seedASN1Spec(t, d)
+	src := NewSource(d)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assignments, err := src.CorpusASN1(ctx)
+	if err != nil {
+		t.Fatalf("build failed under canceled context: %v", err)
+	}
+	if len(assignments) == 0 {
+		t.Fatal("expected assignments from the seeded corpus")
+	}
+}
+
 func TestRenderASN1ListingCountsListedNames(t *testing.T) {
 	// A name defined twice in one section is listed once; the header must
 	// count the listed lines, not the raw assignments.

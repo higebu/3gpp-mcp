@@ -181,6 +181,21 @@ func TestRunGetASN1(t *testing.T) {
 	}
 }
 
+func TestGetASN1SpecIDArg(t *testing.T) {
+	for arg, want := range map[string]bool{
+		"TS 38.331":                    true,
+		"tr 21.905":                    true,
+		"38.331":                       true,
+		"AMF-UE-NGAP-ID":               false,
+		"maxNrofCellMeas":              false,
+		"KlobucharModel2Parameter-r16": false,
+	} {
+		if got := specIDArg.MatchString(arg); got != want {
+			t.Errorf("specIDArg(%q) = %v, want %v", arg, got, want)
+		}
+	}
+}
+
 func TestRunCompareVersions_SameVersion(t *testing.T) {
 	d := testutil.SetupTestDB(t)
 	src := tools.NewSource(d)

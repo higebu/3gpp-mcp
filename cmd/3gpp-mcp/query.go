@@ -347,9 +347,12 @@ func runGetSection(ctx context.Context, out, errOut io.Writer, src *tools.Source
 // get-asn1
 
 // specIDArg matches a positional argument naming a specification ("TS 38.331",
-// "TR 21.905"), which is how get-asn1 tells a per-spec call from a corpus-wide
-// name lookup: ASN.1 identifiers never take that shape.
-var specIDArg = regexp.MustCompile(`^(?i)t[sr] ?\d+\.\d+`)
+// "TR 21.905", or a bare "38.331"), which is how get-asn1 tells a per-spec
+// call from a corpus-wide name lookup: ASN.1 identifiers start with a letter
+// and never take either shape. A bare number still fails the spec lookup —
+// spec IDs carry their TS/TR prefix — but as "specification not found", not
+// as a baffling name miss.
+var specIDArg = regexp.MustCompile(`^((?i)t[sr] ?)?\d+\.\d+`)
 
 func cmdGetASN1(args []string) {
 	fs := flag.NewFlagSet("get-asn1", flag.ExitOnError)
@@ -436,8 +439,9 @@ func runGetASN1(ctx context.Context, out, errOut io.Writer, src *tools.Source, s
 		msg := fmt.Sprintf("ASN.1 assignment %q not found in %s", name, specID)
 		if suggestions := tools.ASN1Suggestions(assignments, name, 20); len(suggestions) > 0 {
 			msg += "; similar names: " + strings.Join(suggestions, ", ")
-		}
-		if corpus, cerr := src.CorpusASN1(ctx); cerr == nil {
+		} else if corpus, cerr := src.CorpusASN1(ctx); cerr == nil {
+			// The cross-spec hint costs a corpus read this one-shot process
+			// throws away, so pay it only when there is nothing else to say.
 			if specs := tools.ASN1DefiningSpecs(corpus, name); len(specs) > 0 {
 				msg += "; it is defined in " + strings.Join(specs, ", ")
 			}
