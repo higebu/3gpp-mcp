@@ -58,6 +58,9 @@ func seedASN1Spec(t *testing.T, d *db.DB) {
 		{"TS 38.413", "9.3.4", "PDU definitions", "```asn1\n-- ASN1START\nPDU-Container ::= SEQUENCE {\n\tid\tINTEGER\n}\n-- ASN1STOP\n```"},
 		{"TS 38.413", "9.4.5", "Information Element definitions", asn1TestModule},
 		{"TS 37.355", "6.5.2", "GNSS assistance data", "```asn1\n-- ASN1START\nKlobucharModel-r16 ::= SEQUENCE {\n\talpha0-r16\tINTEGER,\n\tbeta0-r16\tINTEGER\n}\n-- ASN1STOP\n```"},
+		// The converter also accepts the space-less marker; the FTS seeding of
+		// the corpus-wide index must find this section too.
+		{"TS 37.355", "6.5.3", "Barometric assistance", "```asn1\n--ASN1START\nBaro-NoSpace-r16 ::= INTEGER (0..7)\n--ASN1STOP\n```"},
 	}
 	for _, s := range sections {
 		if err := d.Exec(`INSERT INTO sections (spec_id, version, number, title, level, parent_number, content)
@@ -152,6 +155,39 @@ func TestExtractASN1TrimsTrailingComments(t *testing.T) {
 	}
 	if got[1].Text != "maxCellMeas INTEGER ::= 32\t-- highest number of cells" {
 		t.Errorf("tail comment of a code line lost: %q", got[1].Text)
+	}
+}
+
+func TestExtractASN1SkipsExampleFences(t *testing.T) {
+	// A tagged marker ("-- /example/ ASN1START") fences a non-normative
+	// guideline block; RRC's Annex A examples reuse the names of normative
+	// IEs, so extracting them would put a wrong body beside the real one.
+	sections := []db.Section{{
+		SpecID: "TS 38.331",
+		Number: "A.3",
+		Content: "```asn1\n-- /example/ ASN1START\nPLMN-IdentityInfo ::= SEQUENCE {\n\twrong\tINTEGER\n}\n-- ASN1STOP\n```\n\n" +
+			"```asn1\n-- /bad example/ ASN1START\nBadThing ::= INTEGER\n-- ASN1STOP\n```\n\n" +
+			"```asn1\n-- ASN1START\nPLMN-IdentityInfo ::= SEQUENCE {\n\tright\tINTEGER\n}\n-- ASN1STOP\n```",
+	}}
+	got := ExtractASN1(sections)
+	if len(got) != 1 || got[0].Name != "PLMN-IdentityInfo" || !strings.Contains(got[0].Text, "right") {
+		t.Fatalf("expected only the normative definition, got %+v", got)
+	}
+}
+
+func TestExtractASN1SkipsOneLineModuleHeader(t *testing.T) {
+	// RRC writes the module header in one line — "NR-RRC-Definitions
+	// DEFINITIONS AUTOMATIC TAGS ::=" — which must not become an assignment
+	// named after the module.
+	sections := []db.Section{{
+		SpecID: "TS 38.331",
+		Number: "6.2.1",
+		Content: "```asn1\n-- ASN1START\nNR-RRC-Definitions DEFINITIONS AUTOMATIC TAGS ::=\n\nBEGIN\n\n" +
+			"CellIdentity ::= BIT STRING (SIZE (36))\n\nEND\n-- ASN1STOP\n```",
+	}}
+	got := ExtractASN1(sections)
+	if len(got) != 1 || got[0].Name != "CellIdentity" {
+		t.Fatalf("expected only CellIdentity, got %+v", got)
 	}
 }
 
@@ -335,6 +371,16 @@ func TestHandleGetASN1(t *testing.T) {
 		}
 		if !strings.Contains(text, "KlobucharModel-r16 ::= SEQUENCE") {
 			t.Errorf("missing definition, got: %s", text)
+		}
+	})
+
+	t.Run("cross-spec lookup finds space-less markers", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetASN1Input{Name: "Baro-NoSpace-r16"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if text := getTextContent(result); result.IsError || !strings.Contains(text, "Baro-NoSpace-r16 ::= INTEGER (0..7)") {
+			t.Errorf("space-less --ASN1START section missing from corpus index, got: %s", text)
 		}
 	})
 

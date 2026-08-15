@@ -869,10 +869,12 @@ func (d *DB) SectionNumbers(ctx context.Context, specID string) (map[string]bool
 
 // ASN1Sections returns, in document order per spec, every section whose
 // content carries an -- ASN1START block, across the database version of every
-// specification. The candidates are seeded through the FTS index — ASN1START
-// is a single token there, and every ```asn1 fence the converter emits keeps
-// its markers — because a LIKE over the whole sections table takes minutes on
-// a full corpus. A prose mention of ASN1START outside a fence can slip in;
+// specification. The candidates are seeded through the FTS index — every
+// ```asn1 fence the converter emits keeps its marker line — because a LIKE
+// over the whole sections table takes minutes on a full corpus. The marker
+// usually tokenizes to ASN1START on its own, but the converter also accepts
+// the space-less "--ASN1START", which tokenchars '-' glues into one token, so
+// the query matches both forms. A prose mention outside a fence can slip in;
 // callers extract from ```asn1 fences only, so such a section contributes
 // nothing.
 func (d *DB) ASN1Sections(ctx context.Context) ([]Section, error) {
@@ -881,7 +883,7 @@ func (d *DB) ASN1Sections(ctx context.Context) ([]Section, error) {
 		 FROM sections_fts f
 		 JOIN sections s ON s.id = f.rowid
 		 LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version
-		 WHERE sections_fts MATCH 'ASN1START'
+		 WHERE sections_fts MATCH 'ASN1START OR "--ASN1START"'
 		 ORDER BY s.spec_id, s.id`)
 	if err != nil {
 		return nil, fmt.Errorf("asn1 sections: %w", err)

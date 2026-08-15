@@ -42,20 +42,35 @@ type ASN1Assignment struct {
 // types (Name {Class : param} ::= ...) and information objects alike.
 var asn1HeadRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*`)
 
+// asn1ExampleMarkerRE matches a tagged extraction marker, "-- /example/
+// ASN1START". The converter fences tagged blocks like untagged ones, but a
+// tag marks the block as non-normative — the corpus only ever tags example
+// variants — and a guideline example must not come back as a citable
+// definition, least of all beside the normative definition of the same name.
+var asn1ExampleMarkerRE = regexp.MustCompile(`^--\s*/[^/]*/\s*ASN1START\b`)
+
 // asn1Head returns the assignment name a fence line defines, or "" when the
 // line does not open an assignment. "::=" is the discriminator: the lines
 // inside a body — SEQUENCE fields, ENUMERATED values, object-set rows — never
 // carry it, so indentation is allowed rather than required; NGAP writes its
 // whole constant definitions list one tab in. Comment lines start with "--"
-// and fail the identifier match. A module header's "DEFINITIONS ... ::= BEGIN"
-// line carries "::=" too and is excluded by its keyword.
+// and fail the identifier match. A module header carries "::=" too — NGAP
+// puts "DEFINITIONS AUTOMATIC TAGS ::=" on a line of its own, RRC writes
+// "NR-RRC-Definitions DEFINITIONS AUTOMATIC TAGS ::=" in one line — so any
+// line with a DEFINITIONS token before the "::=" is excluded.
 func asn1Head(line string) string {
-	if !strings.Contains(line, "::=") {
+	head, _, found := strings.Cut(line, "::=")
+	if !found {
 		return ""
 	}
-	name := asn1HeadRE.FindString(strings.TrimLeft(line, " \t"))
-	if name == "" || name == "DEFINITIONS" {
+	name := asn1HeadRE.FindString(strings.TrimLeft(head, " \t"))
+	if name == "" {
 		return ""
+	}
+	for _, tok := range strings.Fields(head) {
+		if tok == "DEFINITIONS" {
+			return ""
+		}
 	}
 	return name
 }
@@ -72,7 +87,7 @@ func ExtractASN1(sections []db.Section) []ASN1Assignment {
 		meta := sec
 		meta.Content = ""
 		lines := strings.Split(sec.Content, "\n")
-		inFence := false
+		inFence, skipFence := false, false
 		start, name := -1, ""
 		flush := func(end int) {
 			if start < 0 {
@@ -99,12 +114,22 @@ func ExtractASN1(sections []db.Section) []ASN1Assignment {
 		}
 		for i, line := range lines {
 			if !inFence {
-				inFence = line == "```asn1"
+				if line == "```asn1" {
+					inFence, skipFence = true, false
+				}
 				continue
 			}
 			if strings.HasPrefix(line, "```") {
 				flush(i)
 				inFence = false
+				continue
+			}
+			if skipFence {
+				continue
+			}
+			if asn1ExampleMarkerRE.MatchString(line) {
+				flush(i)
+				skipFence = true
 				continue
 			}
 			if h := asn1Head(line); h != "" {
