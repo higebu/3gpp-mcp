@@ -286,6 +286,60 @@ func TestHandleGetASN1(t *testing.T) {
 		}
 	})
 
+	t.Run("a name defined in two specs returns both", func(t *testing.T) {
+		if err := d.Exec(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+			('TS 36.413', '18.4.0', 'i40', 'S1AP', '18', '36')`); err != nil {
+			t.Fatalf("insert spec: %v", err)
+		}
+		if err := d.Exec(`INSERT INTO sections (spec_id, version, number, title, level, parent_number, content)
+			VALUES ('TS 36.413', '18.4.0', '9.3.4', 'IE definitions', 2, NULL, ?)`,
+			"```asn1\n-- ASN1START\nCause ::= INTEGER (0..7)\n-- ASN1STOP\n```"); err != nil {
+			t.Fatalf("insert section: %v", err)
+		}
+		if _, err := asn1index.Rebuild(context.Background(), d); err != nil {
+			t.Fatalf("rebuild: %v", err)
+		}
+		result, _, err := handler(context.Background(), nil, GetASN1Input{Name: "Cause"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "[2 definitions of Cause in the database]") {
+			t.Errorf("missing multi-definition header, got: %s", text)
+		}
+		if !strings.Contains(text, "TS 38.413") || !strings.Contains(text, "TS 36.413") {
+			t.Errorf("expected both specs in output, got: %s", text)
+		}
+	})
+
+	t.Run("explicit version reads the document", func(t *testing.T) {
+		// The database version named explicitly resolves to the same content,
+		// but through the full-read path rather than the index.
+		result, _, err := handler(context.Background(), nil, GetASN1Input{SpecID: "TS 38.413", Name: "AMF-UE-NGAP-ID", Version: "18.6.0"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if text := getTextContent(result); result.IsError || !strings.Contains(text, "AMF-UE-NGAP-ID ::= INTEGER") {
+			t.Errorf("explicit-version lookup failed, got: %s", text)
+		}
+	})
+
+	t.Run("family ID lists its parts", func(t *testing.T) {
+		if err := d.Exec(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+			('TS 90.101-1', '18.0.0', 'i00', 'Part 1', '18', '90'),
+			('TS 90.101-2', '18.0.0', 'i00', 'Part 2', '18', '90')`); err != nil {
+			t.Fatalf("insert parts: %v", err)
+		}
+		result, _, err := handler(context.Background(), nil, GetASN1Input{SpecID: "TS 90.101"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !result.IsError || !strings.Contains(text, "multiple parts") || !strings.Contains(text, "TS 90.101-1") {
+			t.Errorf("expected family parts hint, got: %s", text)
+		}
+	})
+
 	t.Run("corpus not-found with suggestions", func(t *testing.T) {
 		result, _, err := handler(context.Background(), nil, GetASN1Input{Name: "Klobuchar"})
 		if err != nil {

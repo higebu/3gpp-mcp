@@ -209,6 +209,34 @@ func TestRunGetASN1(t *testing.T) {
 	}
 }
 
+func TestRefreshASN1IndexAfterImportFailure(t *testing.T) {
+	// A rebuild that fails after an import must drop the index rather than
+	// leave it describing the pre-import corpus: the database then reports
+	// the index as missing, which is the state serve already handles.
+	d := testutil.SetupTestDB(t)
+	if err := d.Exec(`INSERT INTO asn1_defs (name, key, spec_id, version, section_number, section_title, body)
+		VALUES ('Stale', 'stale', 'TS 23.501', '18.6.0', '1', 't', 'Stale ::= INTEGER')`); err != nil {
+		t.Fatalf("seed stale def: %v", err)
+	}
+	// Dropping the FTS table makes ASN1Sections — and so the rebuild — fail.
+	for _, stmt := range []string{
+		"DROP TRIGGER sections_ai", "DROP TRIGGER sections_ad", "DROP TRIGGER sections_au",
+		"DROP TABLE sections_fts",
+	} {
+		if err := d.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+
+	err := refreshASN1IndexAfterImport(t.Context(), d)
+	if err == nil || !strings.Contains(err.Error(), "build-asn1-index") {
+		t.Fatalf("expected drop-and-point error, got: %v", err)
+	}
+	if ok, hasErr := d.HasASN1Index(t.Context()); hasErr != nil || ok {
+		t.Errorf("stale index survived a failed rebuild: ok=%v err=%v", ok, hasErr)
+	}
+}
+
 func TestRunBuildASN1Index(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	d, err := db.OpenReadWrite(dbPath)
@@ -898,6 +926,19 @@ func seedDBPath(t *testing.T) string {
 	if _, err := openapiindex.Build(t.Context(), d); err != nil {
 		t.Fatalf("build openapi index: %v", err)
 	}
+	// Same for the ASN.1 name index, seeded with one small module.
+	if err := d.Exec(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
+		('TS 38.413', '18.6.0', 'i60', 'NGAP', '18', '38')`); err != nil {
+		t.Fatalf("insert asn1 spec: %v", err)
+	}
+	if err := d.Exec(`INSERT INTO sections (spec_id, version, number, title, level, parent_number, content)
+		VALUES ('TS 38.413', '18.6.0', '9.4.5', 'IE definitions', 2, NULL, ?)`,
+		"```asn1\n-- ASN1START\nAMF-UE-NGAP-ID ::= INTEGER (0..1099511627775)\n-- ASN1STOP\n```"); err != nil {
+		t.Fatalf("insert asn1 section: %v", err)
+	}
+	if _, err := asn1index.Rebuild(t.Context(), d); err != nil {
+		t.Fatalf("build asn1 index: %v", err)
+	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("close seed db: %v", err)
 	}
@@ -930,6 +971,9 @@ func TestCmdQueryCommands(t *testing.T) {
 		{"search-openapi", func() { cmdSearchOpenAPI([]string{"-db", path, "-limit", "2", "NFProfile"}) }, []string{"NFProfile", "total_count"}},
 		{"search-openapi multi-arg", func() { cmdSearchOpenAPI([]string{"-db", path, "-kind", "operation", "nf-instances"}) }, []string{`"operation"`}},
 		{"list-images", func() { cmdListImages([]string{"-db", path, "TS 23.501"}) }, []string{`"count"`}},
+		{"get-asn1 lookup", func() { cmdGetASN1([]string{"-db", path, "TS 38.413", "AMF-UE-NGAP-ID"}) }, []string{"[Source: TS 38.413", "AMF-UE-NGAP-ID ::= INTEGER"}},
+		{"get-asn1 corpus", func() { cmdGetASN1([]string{"-db", path, "AMF-UE-NGAP-ID"}) }, []string{"AMF-UE-NGAP-ID ::= INTEGER"}},
+		{"get-asn1 listing", func() { cmdGetASN1([]string{"-db", path, "TS 38.413"}) }, []string{"1 ASN.1 assignments", "Section 9.4.5"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
