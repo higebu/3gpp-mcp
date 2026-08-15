@@ -669,8 +669,32 @@ func TestRunGetOpenAPI(t *testing.T) {
 		t.Errorf("path filter not applied:\n%s", out.String())
 	}
 
-	if err := runGetOpenAPI(t.Context(), &out, d, "TS 29.510", "Nope_API", "", ""); err == nil {
-		t.Error("expected error for unknown API name")
+	// File-name form resolves to the same document.
+	out.Reset()
+	if err := runGetOpenAPI(t.Context(), &out, d, "TS 29.510", "TS29510_Nnrf_NFManagement", "", ""); err != nil {
+		t.Fatalf("runGetOpenAPI filename fallback: %v", err)
+	}
+	if !strings.Contains(out.String(), "openapi: 3.0.0") {
+		t.Errorf("filename fallback output:\n%s", out.String())
+	}
+
+	err := runGetOpenAPI(t.Context(), &out, d, "TS 29.510", "Nope_API", "", "")
+	if err == nil {
+		t.Fatal("expected error for unknown API name")
+	}
+	if !strings.Contains(err.Error(), "Available api_name values in TS 29.510: Nnrf_NFManagement") {
+		t.Errorf("expected available api_name listing, got: %v", err)
+	}
+	if err := runGetOpenAPI(t.Context(), &out, d, "TS 23.501", "Nnrf_NFManagement", "", ""); err == nil ||
+		!strings.Contains(err.Error(), "provided by TS 29.510 / Nnrf_NFManagement") {
+		t.Errorf("expected wrong-document hint, got: %v", err)
+	}
+
+	// Empty positionals are rejected before they can reach the lookup, where
+	// an empty api-name would otherwise match rows with an empty filename.
+	if err := runGetOpenAPI(t.Context(), &out, d, "TS 29.510", "", "", ""); err == nil ||
+		!strings.Contains(err.Error(), "must not be empty") {
+		t.Errorf("expected empty-argument error, got: %v", err)
 	}
 }
 
