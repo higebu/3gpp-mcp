@@ -11,9 +11,9 @@ import (
 )
 
 type GetASN1Input struct {
-	SpecID   string `json:"spec_id" jsonschema:"required,Specification ID (e.g. TS 38.413)"`
-	Name     string `json:"name,omitempty" jsonschema:"ASN.1 assignment name (e.g. AMF-UE-NGAP-ID). Matching ignores case and separators, so an IE title like 'AMF UE NGAP ID' also resolves. Omit to list every assignment name in the specification."`
-	Version  string `json:"version,omitempty" jsonschema:"Specification version to read (e.g. 18.6.0). Also accepts an archive token (i60) or a release selector (Rel-18). Defaults to the version in the database. Use list_versions to see what exists."`
+	SpecID   string `json:"spec_id,omitempty" jsonschema:"Specification ID (e.g. TS 38.413). Omit it to look the name up across every specification in the database — use that when you do not know which specification defines the type."`
+	Name     string `json:"name,omitempty" jsonschema:"ASN.1 assignment name (e.g. AMF-UE-NGAP-ID). Matching ignores case and separators, so an IE title like 'AMF UE NGAP ID' also resolves. Required when spec_id is omitted; with a spec_id, omit it to list every assignment name in the specification."`
+	Version  string `json:"version,omitempty" jsonschema:"Specification version to read (e.g. 18.6.0). Also accepts an archive token (i60) or a release selector (Rel-18). Defaults to the version in the database, and requires spec_id. Use list_versions to see what exists."`
 	Offset   int    `json:"offset,omitempty" jsonschema:"Start line number (0-based, default: 0)"`
 	MaxLines int    `json:"max_lines,omitempty" jsonschema:"Maximum number of lines to return (default: 200)"`
 	MaxChars int    `json:"max_chars,omitempty" jsonschema:"Maximum number of characters to return (can be combined with max_lines)"`
@@ -21,7 +21,7 @@ type GetASN1Input struct {
 
 var GetASN1Tool = &mcp.Tool{
 	Name:        "get_asn1",
-	Description: "Get ASN.1 definitions from a 3GPP specification. The protocol specifications (RRC TS 38.331/36.331, NGAP TS 38.413, S1AP TS 36.413, XnAP, F1AP, ...) write their ASN.1 between -- ASN1START / -- ASN1STOP markers, and this tool extracts every top-level assignment from those blocks. With `name`, it returns the full text of that assignment — type, constant or information object — together with the section that defines it, so the answer can be cited. Use it when you know a type, IE or constant name and need its definition or constraints: the defining clause can be hundreds of kilobytes, which get_section can only page through. Matching ignores case and separators, so an IE table title like 'AMF UE NGAP ID' finds AMF-UE-NGAP-ID. Without `name`, it lists every assignment name grouped by the section that defines it. Pass `version` to read a past version, which is downloaded and converted on first use; call list_versions first to see which versions exist.",
+	Description: "Get ASN.1 definitions from the 3GPP specifications. The protocol specifications (RRC TS 38.331/36.331, NGAP TS 38.413, S1AP TS 36.413, XnAP, F1AP, LPP TS 37.355, ...) write their ASN.1 between -- ASN1START / -- ASN1STOP markers, and this tool extracts every top-level assignment from those blocks. With `name`, it returns the full text of that assignment — type, constant or information object — together with the specification and section that define it, so the answer can be cited. Use it when you know a type, IE or constant name and need its definition or constraints: the defining clause can be hundreds of kilobytes, which get_section can only page through. If you do not know which specification defines the name, omit spec_id — the name is resolved across every specification in the database. Matching ignores case and separators, so an IE table title like 'AMF UE NGAP ID' finds AMF-UE-NGAP-ID. With a spec_id and no `name`, it lists every assignment name grouped by the section that defines it. Pass `version` (with spec_id) to read a past version, which is downloaded and converted on first use; call list_versions first to see which versions exist.",
 }
 
 // ASN1Assignment is one top-level ASN.1 assignment extracted from the
@@ -78,7 +78,16 @@ func ExtractASN1(sections []db.Section) []ASN1Assignment {
 			if start < 0 {
 				return
 			}
-			for end > start && strings.TrimSpace(lines[end-1]) == "" {
+			// Trailing blank and comment-only lines are separators, not body:
+			// the -- ASN1STOP marker and RRC's -- TAG-...-STOP line trail the
+			// last assignment of a fence, and a banner comment introducing
+			// the next assignment trails the one before it. A comment on the
+			// tail of a code line stays — only whole comment lines go.
+			for end > start+1 {
+				t := strings.TrimSpace(lines[end-1])
+				if t != "" && !strings.HasPrefix(t, "--") {
+					break
+				}
 				end--
 			}
 			out = append(out, ASN1Assignment{
@@ -241,10 +250,57 @@ func RenderASN1Listing(assignments []ASN1Assignment) string {
 	return sb.String()
 }
 
+// ASN1DefiningSpecs names the specifications that define a name, deduplicated
+// in document order, for the cross-spec hint on a per-spec miss. Shared with
+// the CLI's get-asn1 command.
+func ASN1DefiningSpecs(assignments []ASN1Assignment, name string) []string {
+	var specs []string
+	seen := make(map[string]bool)
+	for _, a := range MatchASN1(assignments, name) {
+		if !seen[a.Section.SpecID] {
+			seen[a.Section.SpecID] = true
+			specs = append(specs, a.Section.SpecID)
+		}
+	}
+	return specs
+}
+
+// renderASN1Matches renders resolved definitions as a paginated result: a
+// single definition gets its source line as the page-stable header, several
+// get per-definition source lines under a count header.
+func renderASN1Matches(matches []ASN1Assignment, archived bool, scope string, input GetASN1Input) *mcp.CallToolResult {
+	if len(matches) == 1 {
+		a := matches[0]
+		result := paginateText("```asn1\n"+a.Text+"\n```\n", input.Offset, input.MaxLines, input.MaxChars)
+		return prependLine(ASN1SourceLine(a, archived), result)
+	}
+	result := paginateText(RenderASN1Definitions(matches, archived), input.Offset, input.MaxLines, input.MaxChars)
+	header := fmt.Sprintf("[%d definitions of %s in %s]", len(matches), matches[0].Name, scope)
+	return prependLine(header, result)
+}
+
 func HandleGetASN1(src *Source) func(ctx context.Context, req *mcp.CallToolRequest, input GetASN1Input) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input GetASN1Input) (*mcp.CallToolResult, any, error) {
 		if input.SpecID == "" {
-			return errorResult("spec_id is required"), nil, nil
+			if input.Name == "" {
+				return errorResult("name is required when spec_id is omitted; pass a spec_id to list a specification's assignment names"), nil, nil
+			}
+			if input.Version != "" {
+				return errorResult("version requires spec_id: the cross-specification lookup covers the versions in the database only"), nil, nil
+			}
+			assignments, err := src.CorpusASN1(ctx)
+			if err != nil {
+				return errorResult(fmt.Sprintf("failed to index ASN.1 definitions: %v", err)), nil, nil
+			}
+			matches := MatchASN1(assignments, input.Name)
+			if len(matches) == 0 {
+				msg := fmt.Sprintf("ASN.1 assignment %q not found in any specification in the database.", input.Name)
+				if suggestions := ASN1Suggestions(assignments, input.Name, 20); len(suggestions) > 0 {
+					msg += " Similar names: " + strings.Join(suggestions, ", ")
+				}
+				return errorResult(msg), nil, nil
+			}
+			return renderASN1Matches(matches, false, "the database", input), nil, nil
 		}
 
 		sections, res, err := src.AllSections(ctx, input.SpecID, input.Version)
@@ -265,7 +321,11 @@ func HandleGetASN1(src *Source) func(ctx context.Context, req *mcp.CallToolReque
 		assignments := ExtractASN1(sections)
 		label := specLabel(sections[0])
 		if len(assignments) == 0 {
-			return errorResult(fmt.Sprintf("%s contains no ASN.1 definitions (no -- ASN1START blocks)", label)), nil, nil
+			msg := fmt.Sprintf("%s contains no ASN.1 definitions (no -- ASN1START blocks).", label)
+			if input.Name != "" {
+				msg += crossSpecHint(ctx, src, input.Name)
+			}
+			return errorResult(msg), nil, nil
 		}
 
 		if input.Name == "" {
@@ -282,19 +342,33 @@ func HandleGetASN1(src *Source) func(ctx context.Context, req *mcp.CallToolReque
 			msg := fmt.Sprintf("ASN.1 assignment %q not found in %s.", input.Name, label)
 			if suggestions := ASN1Suggestions(assignments, input.Name, 20); len(suggestions) > 0 {
 				msg += " Similar names: " + strings.Join(suggestions, ", ")
-			} else {
+			}
+			// A name aimed at the wrong specification is the common miss —
+			// the caller guessed RRC for an LPP type, say — so check where
+			// the name does live before answering a bare not-found.
+			msg += crossSpecHint(ctx, src, input.Name)
+			if !strings.Contains(msg, "Similar names") && !strings.Contains(msg, "defined in") {
 				msg += " Call get_asn1 without `name` to list the assignment names."
 			}
 			return errorResult(msg), nil, nil
 		}
 
-		if len(matches) == 1 {
-			a := matches[0]
-			result := paginateText("```asn1\n"+a.Text+"\n```\n", input.Offset, input.MaxLines, input.MaxChars)
-			return prependLine(ASN1SourceLine(a, res.Archived), result), nil, nil
-		}
-		result := paginateText(RenderASN1Definitions(matches, res.Archived), input.Offset, input.MaxLines, input.MaxChars)
-		header := fmt.Sprintf("[%d definitions of %s in %s]", len(matches), matches[0].Name, label)
-		return prependLine(header, result), nil, nil
+		return renderASN1Matches(matches, res.Archived, label, input), nil, nil
 	}
+}
+
+// crossSpecHint reports where a name that missed in one specification is
+// actually defined, so a wrong guess costs one call instead of a search. The
+// corpus index build can fail (no FTS in a hand-built database); the hint is
+// then omitted rather than turning a useful not-found into an error.
+func crossSpecHint(ctx context.Context, src *Source, name string) string {
+	assignments, err := src.CorpusASN1(ctx)
+	if err != nil {
+		return ""
+	}
+	specs := ASN1DefiningSpecs(assignments, name)
+	if len(specs) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" It is defined in %s — call get_asn1 with that spec_id, or with no spec_id.", strings.Join(specs, ", "))
 }

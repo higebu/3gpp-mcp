@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/higebu/3gpp-mcp/internal/converter/pipeline"
@@ -27,6 +28,35 @@ type Source struct {
 	Budget time.Duration
 	// UseCache controls the archive directory listing cache.
 	UseCache bool
+
+	// asn1Mu guards the lazily built corpus-wide ASN.1 assignment index used
+	// by get_asn1's spec_id-less lookup; see CorpusASN1.
+	asn1Mu    sync.Mutex
+	asn1Built bool
+	asn1All   []ASN1Assignment
+}
+
+// CorpusASN1 returns every ASN.1 assignment of the database version of every
+// specification, extracting once and answering from memory afterwards. The
+// build reads the ~2,000 ASN1START-bearing sections through the FTS index —
+// a few seconds on a full corpus, paid by the first spec_id-less get_asn1
+// call. The mutex is held across the build on purpose: concurrent callers all
+// need the same data, and a failed build (context canceled mid-query) stays
+// unbuilt so the next call retries. Archived versions never enter this index;
+// it covers what the database was built with, like search.
+func (s *Source) CorpusASN1(ctx context.Context) ([]ASN1Assignment, error) {
+	s.asn1Mu.Lock()
+	defer s.asn1Mu.Unlock()
+	if s.asn1Built {
+		return s.asn1All, nil
+	}
+	sections, err := s.DB.ASN1Sections(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.asn1All = ExtractASN1(sections)
+	s.asn1Built = true
+	return s.asn1All, nil
 }
 
 // NewSource returns a Source that reads only the prebuilt database.

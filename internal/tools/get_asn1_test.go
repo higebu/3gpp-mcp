@@ -50,16 +50,18 @@ const asn1TestModule = "Each IE is defined below.\n\n" +
 func seedASN1Spec(t *testing.T, d *db.DB) {
 	t.Helper()
 	if err := d.Exec(`INSERT INTO specs (id, version, version_token, title, release, series) VALUES
-		('TS 38.413', '18.6.0', 'i60', 'NG Application Protocol (NGAP)', '18', '38')`); err != nil {
+		('TS 38.413', '18.6.0', 'i60', 'NG Application Protocol (NGAP)', '18', '38'),
+		('TS 37.355', '18.2.0', 'i20', 'LTE Positioning Protocol (LPP)', '18', '37')`); err != nil {
 		t.Fatalf("insert spec: %v", err)
 	}
-	sections := []struct{ number, title, content string }{
-		{"9.3.4", "PDU definitions", "```asn1\n-- ASN1START\nPDU-Container ::= SEQUENCE {\n\tid\tINTEGER\n}\n-- ASN1STOP\n```"},
-		{"9.4.5", "Information Element definitions", asn1TestModule},
+	sections := []struct{ spec, number, title, content string }{
+		{"TS 38.413", "9.3.4", "PDU definitions", "```asn1\n-- ASN1START\nPDU-Container ::= SEQUENCE {\n\tid\tINTEGER\n}\n-- ASN1STOP\n```"},
+		{"TS 38.413", "9.4.5", "Information Element definitions", asn1TestModule},
+		{"TS 37.355", "6.5.2", "GNSS assistance data", "```asn1\n-- ASN1START\nKlobucharModel-r16 ::= SEQUENCE {\n\talpha0-r16\tINTEGER,\n\tbeta0-r16\tINTEGER\n}\n-- ASN1STOP\n```"},
 	}
 	for _, s := range sections {
 		if err := d.Exec(`INSERT INTO sections (spec_id, version, number, title, level, parent_number, content)
-			VALUES ('TS 38.413', '18.6.0', ?, ?, 2, NULL, ?)`, s.number, s.title, s.content); err != nil {
+			VALUES (?, (SELECT version FROM specs WHERE id = ?), ?, ?, 2, NULL, ?)`, s.spec, s.spec, s.number, s.title, s.content); err != nil {
 			t.Fatalf("insert section %s: %v", s.number, err)
 		}
 	}
@@ -121,6 +123,35 @@ func TestExtractASN1(t *testing.T) {
 		if a.Name == "DEFINITIONS" || a.Name == "NGAP-IEs" {
 			t.Errorf("module header extracted as assignment %q", a.Name)
 		}
+	}
+}
+
+func TestExtractASN1TrimsTrailingComments(t *testing.T) {
+	// The per-type fences of RRC and LPP carry no module END, so the last
+	// assignment runs to the fence: the -- TAG-...-STOP and -- ASN1STOP
+	// marker lines must not end up in its body. A comment on the tail of a
+	// code line is content and stays.
+	sections := []db.Section{{
+		SpecID:  "TS 37.355",
+		Number:  "6.5.2",
+		Content: "```asn1\n-- ASN1START\nKlobucharModel-r16 ::= SEQUENCE {\n\talpha0-r16\tINTEGER\n}\n\n-- TAG-KLOBUCHARMODEL-STOP\n-- ASN1STOP\n```",
+	}, {
+		SpecID:  "TS 36.331",
+		Number:  "6.4",
+		Content: "```asn1\n-- ASN1START\nmaxCellMeas INTEGER ::= 32\t-- highest number of cells\n-- ASN1STOP\n```",
+	}}
+	got := ExtractASN1(sections)
+	if len(got) != 2 {
+		t.Fatalf("extracted %d assignments, want 2", len(got))
+	}
+	if strings.Contains(got[0].Text, "--") {
+		t.Errorf("trailing comment lines kept:\n%s", got[0].Text)
+	}
+	if !strings.HasSuffix(got[0].Text, "}") {
+		t.Errorf("body should end at the closing brace:\n%s", got[0].Text)
+	}
+	if got[1].Text != "maxCellMeas INTEGER ::= 32\t-- highest number of cells" {
+		t.Errorf("tail comment of a code line lost: %q", got[1].Text)
 	}
 }
 
@@ -280,13 +311,86 @@ func TestHandleGetASN1(t *testing.T) {
 		}
 	})
 
-	t.Run("missing spec_id", func(t *testing.T) {
+	t.Run("missing spec_id and name", func(t *testing.T) {
 		result, _, err := handler(context.Background(), nil, GetASN1Input{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if !result.IsError {
 			t.Fatalf("expected error result")
+		}
+	})
+
+	t.Run("cross-spec lookup without spec_id", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetASN1Input{Name: "KlobucharModel-r16"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if result.IsError {
+			t.Fatalf("unexpected error result: %s", text)
+		}
+		if !strings.Contains(text, "[Source: TS 37.355 v18.2.0 (Rel-18) — Section 6.5.2 — KlobucharModel-r16]") {
+			t.Errorf("missing source header, got: %s", text)
+		}
+		if !strings.Contains(text, "KlobucharModel-r16 ::= SEQUENCE") {
+			t.Errorf("missing definition, got: %s", text)
+		}
+	})
+
+	t.Run("cross-spec lookup is fuzzy", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetASN1Input{Name: "klobuchar model r16"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if text := getTextContent(result); result.IsError || !strings.Contains(text, "KlobucharModel-r16 ::=") {
+			t.Errorf("fuzzy corpus lookup failed, got: %s", text)
+		}
+	})
+
+	t.Run("version without spec_id", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetASN1Input{Name: "KlobucharModel-r16", Version: "18.0.0"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError {
+			t.Fatalf("expected error result")
+		}
+	})
+
+	t.Run("wrong spec gets a cross-spec hint", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetASN1Input{SpecID: "TS 38.413", Name: "KlobucharModel-r16"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError {
+			t.Fatalf("expected error result")
+		}
+		text := getTextContent(result)
+		if !strings.Contains(text, "not found in TS 38.413") || !strings.Contains(text, "defined in TS 37.355") {
+			t.Errorf("expected cross-spec hint, got: %s", text)
+		}
+	})
+
+	t.Run("spec without ASN.1 hints at the defining spec", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetASN1Input{SpecID: "TS 23.501", Name: "KlobucharModel-r16"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !result.IsError || !strings.Contains(text, "defined in TS 37.355") {
+			t.Errorf("expected cross-spec hint, got: %s", text)
+		}
+	})
+
+	t.Run("corpus not-found with suggestions", func(t *testing.T) {
+		result, _, err := handler(context.Background(), nil, GetASN1Input{Name: "Klobuchar"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		text := getTextContent(result)
+		if !result.IsError || !strings.Contains(text, "Similar names: KlobucharModel-r16") {
+			t.Errorf("expected corpus suggestions, got: %s", text)
 		}
 	})
 }

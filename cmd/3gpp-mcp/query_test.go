@@ -165,6 +165,16 @@ func TestRunGetASN1(t *testing.T) {
 		t.Errorf("expected not-found error with suggestions, got: %v", err)
 	}
 
+	// Corpus-wide lookup: name only, no spec-id.
+	out.Reset()
+	if err := runGetASN1(t.Context(), &out, &errOut, src, "", "AMF-UE-NGAP-ID", ""); err != nil {
+		t.Fatalf("runGetASN1 corpus lookup: %v", err)
+	}
+	if !strings.Contains(out.String(), "AMF-UE-NGAP-ID ::= INTEGER") ||
+		!strings.Contains(out.String(), "[Source: TS 38.413") {
+		t.Errorf("corpus lookup output:\n%s", out.String())
+	}
+
 	if err := runGetASN1(t.Context(), &out, &errOut, src, "TS 23.501", "", ""); err == nil ||
 		!strings.Contains(err.Error(), "no ASN.1 definitions") {
 		t.Errorf("expected no-ASN.1 error, got: %v", err)

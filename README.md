@@ -301,7 +301,7 @@ has no index; add it in place with
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `get_asn1` | Get an ASN.1 assignment by name, or list every assignment name | `spec_id` (required), `name` (optional): assignment name, e.g. `AMF-UE-NGAP-ID`; `version`, `offset`, `max_lines`, `max_chars` |
+| `get_asn1` | Get an ASN.1 assignment by name — in one spec or across all of them — or list a spec's assignment names | `spec_id` (optional; omit to resolve `name` across every spec), `name` (assignment name, e.g. `AMF-UE-NGAP-ID`; required without `spec_id`), `version` (requires `spec_id`), `offset`, `max_lines`, `max_chars` |
 
 The ASN.1-specified protocols (RRC TS 38.331/36.331, NGAP TS 38.413, S1AP
 TS 36.413, XnAP, F1AP, ...) write their ASN.1 between `-- ASN1START` /
@@ -319,9 +319,16 @@ the ASN.1's `AMF-UE-NGAP-ID`; a name that matches nothing gets similar names
 suggested. A name defined more than once returns every definition, each under
 its own source line.
 
-Without `name` it lists every assignment name, grouped by defining section.
-`version` reads a past version, with the same on-demand download behavior as
-`get_section`.
+When you do not know which specification defines a name, omit `spec_id`: the
+name is resolved across every specification in the database, seeded through
+the full-text index and cached in memory after the first lookup. A lookup
+that names the wrong specification gets told where the name is actually
+defined. Cross-spec resolution covers the database versions only — pass
+`spec_id` (and optionally `version`) to read an archived version, with the
+same on-demand download behavior as `get_section`.
+
+With a `spec_id` and no `name` it lists every assignment name, grouped by
+defining section.
 
 ### Embedded images
 

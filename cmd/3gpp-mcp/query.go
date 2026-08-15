@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"time"
 
@@ -345,14 +346,35 @@ func runGetSection(ctx context.Context, out, errOut io.Writer, src *tools.Source
 
 // get-asn1
 
+// specIDArg matches a positional argument naming a specification ("TS 38.331",
+// "TR 21.905"), which is how get-asn1 tells a per-spec call from a corpus-wide
+// name lookup: ASN.1 identifiers never take that shape.
+var specIDArg = regexp.MustCompile(`^(?i)t[sr] ?\d+\.\d+`)
+
 func cmdGetASN1(args []string) {
 	fs := flag.NewFlagSet("get-asn1", flag.ExitOnError)
 	qf := addQueryFlags(fs, true)
-	version := fs.String("version", "", "Specification version to read (e.g. 18.6.0, i60, Rel-18; default: the database version)")
+	version := fs.String("version", "", "Specification version to read (e.g. 18.6.0, i60, Rel-18; default: the database version; requires a spec-id)")
 	_ = fs.Parse(args)
-	if fs.NArg() != 1 && fs.NArg() != 2 {
+	usage := func() {
 		fmt.Fprintln(os.Stderr, "Usage: 3gpp-mcp get-asn1 [options] <spec-id> [name]")
+		fmt.Fprintln(os.Stderr, "       3gpp-mcp get-asn1 [options] <name>        (looks the name up across every spec)")
 		fmt.Fprintln(os.Stderr, "Options must come before positional arguments.")
+		os.Exit(1)
+	}
+	var specID, name string
+	switch {
+	case fs.NArg() == 1 && specIDArg.MatchString(fs.Arg(0)):
+		specID = fs.Arg(0)
+	case fs.NArg() == 1:
+		name = fs.Arg(0)
+	case fs.NArg() == 2:
+		specID, name = fs.Arg(0), fs.Arg(1)
+	default:
+		usage()
+	}
+	if specID == "" && *version != "" {
+		fmt.Fprintln(os.Stderr, "-version requires a spec-id: the cross-spec lookup covers the database versions only.")
 		os.Exit(1)
 	}
 
@@ -362,11 +384,28 @@ func cmdGetASN1(args []string) {
 			return err
 		}
 		defer cleanup()
-		return runGetASN1(ctx, os.Stdout, os.Stderr, src, fs.Arg(0), fs.Arg(1), *version)
+		return runGetASN1(ctx, os.Stdout, os.Stderr, src, specID, name, *version)
 	})
 }
 
 func runGetASN1(ctx context.Context, out, errOut io.Writer, src *tools.Source, specID, name, version string) error {
+	if specID == "" {
+		assignments, err := src.CorpusASN1(ctx)
+		if err != nil {
+			return err
+		}
+		matches := tools.MatchASN1(assignments, name)
+		if len(matches) == 0 {
+			msg := fmt.Sprintf("ASN.1 assignment %q not found in any specification in the database", name)
+			if suggestions := tools.ASN1Suggestions(assignments, name, 20); len(suggestions) > 0 {
+				msg += "; similar names: " + strings.Join(suggestions, ", ")
+			}
+			return errors.New(msg)
+		}
+		_, err = io.WriteString(out, tools.RenderASN1Definitions(matches, false))
+		return err
+	}
+
 	var sections []db.Section
 	var res tools.Resolution
 	err := waitForFetch(ctx, errOut, func() error {
@@ -397,6 +436,11 @@ func runGetASN1(ctx context.Context, out, errOut io.Writer, src *tools.Source, s
 		msg := fmt.Sprintf("ASN.1 assignment %q not found in %s", name, specID)
 		if suggestions := tools.ASN1Suggestions(assignments, name, 20); len(suggestions) > 0 {
 			msg += "; similar names: " + strings.Join(suggestions, ", ")
+		}
+		if corpus, cerr := src.CorpusASN1(ctx); cerr == nil {
+			if specs := tools.ASN1DefiningSpecs(corpus, name); len(specs) > 0 {
+				msg += "; it is defined in " + strings.Join(specs, ", ")
+			}
 		}
 		return errors.New(msg)
 	}

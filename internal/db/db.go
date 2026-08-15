@@ -867,6 +867,41 @@ func (d *DB) SectionNumbers(ctx context.Context, specID string) (map[string]bool
 	return numbers, version, nil
 }
 
+// ASN1Sections returns, in document order per spec, every section whose
+// content carries an -- ASN1START block, across the database version of every
+// specification. The candidates are seeded through the FTS index — ASN1START
+// is a single token there, and every ```asn1 fence the converter emits keeps
+// its markers — because a LIKE over the whole sections table takes minutes on
+// a full corpus. A prose mention of ASN1START outside a fence can slip in;
+// callers extract from ```asn1 fences only, so such a section contributes
+// nothing.
+func (d *DB) ASN1Sections(ctx context.Context) ([]Section, error) {
+	rows, err := d.conn.QueryContext(ctx,
+		`SELECT s.spec_id, s.version, s.number, s.title, s.level, COALESCE(s.parent_number, ''), s.content, COALESCE(p.release, '')
+		 FROM sections_fts f
+		 JOIN sections s ON s.id = f.rowid
+		 LEFT JOIN specs p ON p.id = s.spec_id AND p.version = s.version
+		 WHERE sections_fts MATCH 'ASN1START'
+		 ORDER BY s.spec_id, s.id`)
+	if err != nil {
+		return nil, fmt.Errorf("asn1 sections: %w", err)
+	}
+	defer rows.Close()
+
+	var sections []Section
+	for rows.Next() {
+		var s Section
+		if err := rows.Scan(&s.SpecID, &s.Version, &s.Number, &s.Title, &s.Level, &s.ParentNumber, &s.Content, &s.Release); err != nil {
+			return nil, fmt.Errorf("scan asn1 section: %w", err)
+		}
+		sections = append(sections, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("asn1 sections: iterate: %w", err)
+	}
+	return sections, nil
+}
+
 func (d *DB) AllSections(ctx context.Context, specID, version string) ([]Section, error) {
 	version, err := d.ResolveVersion(ctx, specID, version)
 	if errors.Is(err, ErrNoVersion) {
