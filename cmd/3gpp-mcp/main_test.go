@@ -1028,7 +1028,7 @@ func TestMainDispatch_CompletionBash(t *testing.T) {
 // cmdServe.
 func TestStreamableHTTP(t *testing.T) {
 	d := testutil.SetupTestDB(t)
-	s := newMCPServer(d, tools.NewSource(d))
+	s := tools.NewServer(d, tools.NewSource(d), version)
 
 	handler := mcp.NewStreamableHTTPHandler(
 		func(r *http.Request) *mcp.Server { return s },
@@ -1076,7 +1076,7 @@ func TestStreamableHTTP(t *testing.T) {
 // request — no initialize handshake, no session — is served.
 func TestStreamableHTTPNewProtocolRawPOST(t *testing.T) {
 	d := testutil.SetupTestDB(t)
-	s := newMCPServer(d, tools.NewSource(d))
+	s := tools.NewServer(d, tools.NewSource(d), version)
 
 	handler := mcp.NewStreamableHTTPHandler(
 		func(r *http.Request) *mcp.Server { return s },
@@ -1123,7 +1123,7 @@ func TestStreamableHTTPNewProtocolRawPOST(t *testing.T) {
 // as the tools, so an unauthenticated viewer would make the token meaningless.
 func TestBuildHTTPHandler_WebViewerAuth(t *testing.T) {
 	d := testutil.SetupTestDB(t)
-	s := newMCPServer(d, tools.NewSource(d))
+	s := tools.NewServer(d, tools.NewSource(d), version)
 
 	t.Run("token set", func(t *testing.T) {
 		handler := buildHTTPHandler(tools.NewSource(d), s, "secret-token", true)

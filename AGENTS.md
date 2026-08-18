@@ -109,6 +109,12 @@ make e2e                  # Playwright suite for web viewer JS behavior (CI job 
 - **HTTP transport runs stateless** (`StreamableHTTPOptions{Stateless: true}`)
   — required to serve MCP protocol 2026-07-28; older protocol versions get
   per-request sessions.
+- **webmcp.js is a thin same-origin passthrough to `/mcp/`** (W3C
+  `document.modelContext`): it registers the tools reported by `tools/list` at
+  page load, so the browser registration stays in sync with the server without
+  a tool list of its own. The e2e harness (`e2e/e2eserver`) mounts `/mcp/`
+  with the same `tools.NewStreamableHTTPHandler` as `buildHTTPHandler`, so
+  the bridge is tested against the real stateless handler.
 - `--convert-image` (EMF/WMF → PNG) requires LibreOffice (`soffice`) at runtime.
 
 ## Conventions

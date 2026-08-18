@@ -75,7 +75,16 @@ func run(addr string) error {
 		}
 	}
 
-	srv := &http.Server{Addr: addr, Handler: web.NewServer(tools.NewSource(d))}
+	// Mirror cmdServe's production wiring: the same stateless handler
+	// (tools.NewStreamableHTTPHandler) mounted under /mcp/ next to the
+	// viewer, so the webmcp.js bridge is exercised against the real thing.
+	src := tools.NewSource(d)
+	s := tools.NewServer(d, src, "e2e")
+	mux := http.NewServeMux()
+	mux.Handle("/mcp/", http.StripPrefix("/mcp", tools.NewStreamableHTTPHandler(s)))
+	mux.Handle("/", web.NewServer(src))
+
+	srv := &http.Server{Addr: addr, Handler: mux}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
 	log.Printf("e2eserver listening on http://%s", addr)
