@@ -117,6 +117,10 @@ Browse specifications in your browser by adding `--web` to the HTTP transport:
 
 Features: spec list with filtering, section viewer with TOC sidebar, full-text search with pagination, past-version browsing (versions are listed per spec and downloaded on demand, like the MCP tools), version comparison (structural summary and per-section diffs), embedded images, cross-reference links, OpenAPI definitions with syntax highlighting, KaTeX rendering of the [LaTeX formulas](#formulas) the converter emits, dark mode, responsive design. Code blocks are syntax-highlighted per notation — ASN.1, Diameter, SIP/RTSP, SDP and XML (see [Code blocks](#code-blocks)).
 
+#### WebMCP
+
+When the browser provides the [W3C WebMCP](https://github.com/webmachinelearning/webmcp) API (`document.modelContext`, a Chrome origin trial as of 2026), the viewer registers all of its MCP tools with the browser at page load, so an in-browser agent can query the spec database directly. The registration is a thin same-origin passthrough to the `/mcp/` endpoint — there is nothing to configure server-side, and browsers without the API are unaffected. During the origin trial, enable it locally via Chrome flags (`chrome://flags`), or for a shared deployment serve an `Origin-Trial` header from a fronting proxy.
+
 ## Deployment
 
 ### Streamable HTTP
