@@ -108,6 +108,7 @@ func init() {
 		{name: "update", desc: "Update database to latest spec versions", run: cmdUpdate},
 		{name: "build-openapi-index", desc: "Rebuild the OpenAPI search index", run: cmdBuildOpenAPIIndex},
 		{name: "build-asn1-index", desc: "Rebuild the ASN.1 name index", run: cmdBuildASN1Index},
+		{name: "init-db", desc: "Create an empty database with just the schema", run: cmdInitDB},
 		{name: "list-specs", desc: "List specifications in the database", run: cmdListSpecs},
 		{name: "list-versions", desc: "List versions of a specification", run: cmdListVersions},
 		{name: "get-toc", desc: "Print a specification's table of contents", run: cmdGetTOC},
@@ -738,6 +739,30 @@ func runBuildASN1Index(ctx context.Context, dbPath string) error {
 	}
 
 	return rebuildASN1Index(ctx, d)
+}
+
+// cmdInitDB creates a database file with the schema but no data. serve only
+// needs the schema to answer the MCP handshake (tool list, prompts,
+// resources): registration is unconditional, so a container build that only
+// needs to pass server introspection doesn't have to run the full spec
+// import first.
+func cmdInitDB(args []string) {
+	fs := flag.NewFlagSet("init-db", flag.ExitOnError)
+	dbPath := fs.String("db", "3gpp.db", "Output SQLite database path")
+	_ = fs.Parse(args)
+	requireArgs(fs, 0, "3gpp-mcp init-db [options]")
+
+	d, err := db.OpenReadWrite(*dbPath)
+	if err != nil {
+		log.Printf("Open database failed: %v", err)
+		exit(1)
+	}
+	defer d.Close()
+
+	if err := d.InitSchema(); err != nil {
+		log.Printf("Init schema failed: %v", err)
+		exit(1)
+	}
 }
 
 func cmdBuildOpenAPIIndex(args []string) {
