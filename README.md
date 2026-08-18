@@ -196,7 +196,7 @@ combined.
 To run on Cloud Run, see `cloudbuild.yaml` (build + push + deploy) and
 `service.yaml` (Cloud Run service spec).
 
-## MCP Tools
+## Tools
 
 Every tool below also has a CLI twin (`list_specs` → `3gpp-mcp list-specs`, and
 so on) for shell use and scripting — see the
