@@ -5,7 +5,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,8 +16,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/goccy/tobari"
 
 	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/testutil"
@@ -84,7 +89,13 @@ func run(addr string) error {
 	mux.Handle("/mcp/", http.StripPrefix("/mcp", tools.NewStreamableHTTPHandler(s)))
 	mux.Handle("/", web.NewServer(src))
 
-	srv := &http.Server{Addr: addr, Handler: mux}
+	var handler http.Handler = mux
+	coverDir := os.Getenv("TOBARI_E2E_COVERDIR")
+	if coverDir != "" {
+		handler = coverageMiddleware(mux)
+	}
+
+	srv := &http.Server{Addr: addr, Handler: handler}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
 	log.Printf("e2eserver listening on http://%s", addr)
@@ -98,6 +109,81 @@ func run(addr string) error {
 		if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 			return fmt.Errorf("shutdown: %w", err)
 		}
+		if coverDir != "" {
+			if err := writeCoverage(coverDir); err != nil {
+				return fmt.Errorf("write coverage: %w", err)
+			}
+		}
 		return nil
 	}
+}
+
+// coverageMiddleware scopes tobari coverage measurement to the Playwright
+// test named by the X-Tobari-Scenario request header (set by the fixtures in
+// e2e/tests/fixtures.ts). Requests without the header — Playwright's
+// readiness poll, favicon fetches — stay unscoped so they never attribute
+// coverage to a test. Without the tobari-instrumented build (see
+// playwright.config.ts) CoverWithName degrades to plain fn() execution, but
+// the middleware is only installed when TOBARI_E2E_COVERDIR is set anyway.
+func coverageMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := r.Header.Get("X-Tobari-Scenario")
+		if name == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		tobari.CoverWithName(name, func() { next.ServeHTTP(w, r) })
+	})
+}
+
+// writeCoverage dumps the coverage gathered over the run into dir:
+// e2e.cover (everything the process executed, go tool cover compatible),
+// scenarios/<test>.cover (one scoped profile per Playwright test) and
+// tobari.json/tobari.toon (per-scenario report for tooling and AI analysis).
+func writeCoverage(dir string) error {
+	scenarioDir := filepath.Join(dir, "scenarios")
+	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+		return err
+	}
+
+	var merged bytes.Buffer
+	tobari.WriteAllCoverprofile(tobari.SetMode, &merged)
+	if err := os.WriteFile(filepath.Join(dir, "e2e.cover"), merged.Bytes(), 0o644); err != nil {
+		return err
+	}
+
+	for name := range tobari.CoverprofileMap(tobari.SetMode) {
+		var buf bytes.Buffer
+		tobari.WriteCoverprofileByName(name, tobari.SetMode, &buf)
+		out := filepath.Join(scenarioDir, scenarioFileName(name)+".cover")
+		if err := os.WriteFile(out, buf.Bytes(), 0o644); err != nil {
+			return err
+		}
+	}
+
+	report := tobari.CollectCoverReport()
+	js, err := json.Marshal(report)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tobari.json"), js, 0o644); err != nil {
+		return err
+	}
+	toon, err := report.MarshalTOON()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "tobari.toon"), toon, 0o644)
+}
+
+// scenarioFileName flattens a Playwright test title into a safe file name.
+func scenarioFileName(name string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
+			return r
+		default:
+			return '-'
+		}
+	}, name)
 }

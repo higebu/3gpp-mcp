@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 test('arrow keys navigate to next and previous chapters', async ({ page }) => {
   await page.goto('/specs/TS%2023.501/sections/1');

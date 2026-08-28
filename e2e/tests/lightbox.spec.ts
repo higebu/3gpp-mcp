@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 test('clicking a figure opens the lightbox, clicking again closes it', async ({ page }) => {
   await page.goto('/specs/TS%2023.501/sections/9');

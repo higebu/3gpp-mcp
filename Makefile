@@ -1,4 +1,4 @@
-.PHONY: build install import import-dir build-db download-specs download-latest-specs update-specs db-info test e2e clean web
+.PHONY: build install import import-dir build-db download-specs download-latest-specs update-specs db-info test e2e e2e-cover clean web
 
 SPECS_DIR ?= specs
 DB_PATH ?= data/3gpp.db
@@ -77,6 +77,15 @@ e2e:
 	cd e2e && npm ci && \
 	if [ -z "$$CHROMIUM_PATH" ]; then npx playwright install chromium; fi && \
 	npx playwright test
+
+# Run the e2e suite with scoped Go coverage (github.com/goccy/tobari): the
+# harness is rebuilt instrumented and writes to e2e/coverage/ — a merged
+# e2e.cover (go tool cover compatible), one profile per Playwright test under
+# scenarios/, and tobari.json/.toon reports.
+e2e-cover:
+	cd e2e && npm ci && \
+	if [ -z "$$CHROMIUM_PATH" ]; then npx playwright install chromium; fi && \
+	E2E_COVERAGE=1 npx playwright test
 
 # Clean build artifacts
 clean:

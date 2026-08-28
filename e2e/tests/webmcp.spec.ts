@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 const ALL_TOOLS = [
   'list_specs', 'list_versions', 'get_toc', 'get_section', 'get_asn1',

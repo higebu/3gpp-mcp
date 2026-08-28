@@ -18,6 +18,7 @@ gofmt -l . && go vet ./... && golangci-lint run   # Lint (CI also runs go test -
 make build-db             # Download + import latest version of every spec (RELEASE=19 for one release, MAX_RELEASE=19 to cap)
 make web                  # HTTP server with web viewer at :8080
 make e2e                  # Playwright suite for web viewer JS behavior (CI job "e2e"); hermetic server harness in e2e/e2eserver
+make e2e-cover            # Same suite with scoped Go coverage (goccy/tobari) → e2e/coverage/: merged e2e.cover + one profile per Playwright test
 ```
 
 ## Package Map

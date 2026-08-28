@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 test('KaTeX renders inline and display math', async ({ page }) => {
   await page.goto('/specs/TS%2023.501/sections/9');

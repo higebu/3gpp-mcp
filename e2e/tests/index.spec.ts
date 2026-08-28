@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 test('series select auto-submits the filter form', async ({ page }) => {
   await page.goto('/');
