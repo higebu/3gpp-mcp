@@ -74,13 +74,44 @@ jobs:
         run: npx playwright install-deps chromium
         working-directory: e2e
       - name: Build e2e server harness
-        # Compile ahead of time so a module-cache miss cannot eat into the
-        # Playwright webServer startup timeout.
-        run: go build -o /dev/null ./e2eserver
+        # Compile ahead of time so a module-cache miss (and the tobari
+        # instrumented rebuild) cannot eat into the Playwright webServer
+        # startup timeout. Must use the same GOFLAGS as the webServer command
+        # in playwright.config.ts, or the cache warm-up is wasted.
+        run: GOFLAGS="$(go tool tobari flags -exclude-analysis=modernc.org/sqlite)" go build -o /dev/null ./e2eserver
         working-directory: e2e
       - name: Run e2e tests
         run: npx playwright test
+        env:
+          E2E_COVERAGE: "1"
         working-directory: e2e
+      - name: E2E coverage summary
+        # The harness writes profiles on graceful shutdown, so they exist for
+        # failed runs too — hence always().
+        if: always()
+        working-directory: e2e
+        run: |
+          if [ ! -f coverage/e2e.cover ]; then
+            echo "no e2e coverage output" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo '### e2e Go coverage (tobari)'
+            echo '```'
+            go tool cover -func=coverage/e2e.cover | tail -n 1
+            echo
+            echo 'per-scenario profiles:'
+            ls coverage/scenarios
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload e2e coverage
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-coverage
+          path: e2e/coverage/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
