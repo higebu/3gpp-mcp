@@ -61,7 +61,7 @@ timeout: 7200s
 
 steps:
   - id: clone
-    name: gcr.io/cloud-builders/git@sha256:bfcbd8719280b196bd860e89531c3c9b598daab4a07aef1d17a163c822d569bd
+    name: gcr.io/cloud-builders/git@sha256:c9fbabc7a67ae911e2c16af928377083d0f121f1346ac7c6dbb3062348c40dc5
     args:
       - clone
       - --depth=1
