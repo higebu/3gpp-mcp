@@ -116,6 +116,14 @@ make e2e                  # Playwright suite for web viewer JS behavior (CI job 
   with the same `tools.NewStreamableHTTPHandler` as `buildHTTPHandler`, so
   the bridge is tested against the real stateless handler.
 - `--convert-image` (EMF/WMF → PNG) requires LibreOffice (`soffice`) at runtime.
+- **Tool descriptions stay under 1024 characters.** The OpenAI-compatible
+  chat completions API rejects a longer `tools[].function.description`
+  ("string too long. Expected a string with maximum length 1024"), and
+  clients that front other vendors' models with that API shape (GitHub
+  Copilot, Gemini models included) drop the whole tool list on one
+  over-long description. `TestToolDescriptionLength` enforces the cap on
+  what `tools/list` actually returns; detail that does not fit goes into
+  the parameter descriptions (`jsonschema` tags), which no API caps.
 
 ## Conventions
 

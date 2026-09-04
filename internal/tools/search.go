@@ -11,7 +11,7 @@ import (
 )
 
 type SearchInput struct {
-	Query string `json:"query" jsonschema:"required,FTS5 query string. Hyphenated or dotted terms like IMS-AKA and 38.101 are auto-quoted. Use AND/OR/NOT operators and double-quoted phrases for exact matches (e.g. '\"core network\" AND AMF')."`
+	Query string `json:"query" jsonschema:"required,FTS5 query string: AND/OR/NOT (AMF AND authentication), a double-quoted phrase (\"service based interface\"), a prefix (handov*), a column filter (title:authentication or content:handover) or proximity (NEAR(AMF UE, 5)). Hyphenated or dotted terms like IMS-AKA and 38.101 are auto-quoted. After a positive term, -term excludes it (AMF -SMF), same as NOT; an exclusion cannot begin a query or follow AND/OR."`
 	// Deprecated: use SpecIDs instead. Ignored when SpecIDs is non-empty.
 	SpecID  string   `json:"spec_id,omitempty" jsonschema:"Limit search to a single specification (e.g. TS 23.501). Ignored when spec_ids is provided."`
 	SpecIDs []string `json:"spec_ids,omitempty" jsonschema:"Limit search to one or more specifications (e.g. [\"TS 23.501\", \"TS 23.502\"]). Takes precedence over spec_id."`
@@ -20,31 +20,8 @@ type SearchInput struct {
 }
 
 var SearchTool = &mcp.Tool{
-	Name: "search",
-	Description: `Full-text search across 3GPP specifications using SQLite FTS5 syntax.
-
-Query syntax:
-- AND/OR/NOT:    AMF AND authentication
-- Phrase:        "service based interface"
-- Prefix:        handov*
-- Column filter: title:authentication  or  content:handover
-- Proximity:     NEAR(AMF UE, 5)
-- Hyphenated or dotted terms (e.g. IMS-AKA, sec-agree, 38.101) are auto-quoted to avoid FTS5 syntax errors.
-- After a positive term, "-term" excludes that term (e.g. AMF -SMF), same as NOT. An exclusion cannot begin a query or immediately follow AND/OR.
-
-Stemming:
-- The index uses porter stemming: inflected English forms match each other (handover finds handovers).
-- Prefix and phrase queries operate on stemmed forms, so they can match a bit more broadly than the exact surface text.
-
-Pagination:
-- Results come as {results, total_count, limit, offset}; total_count is the full match count.
-- Use limit (default 10, max 200) and offset to page through matches beyond the first page.
-
-Tips:
-- Use exact 3GPP terms (AMF, SMF, gNB, UE, NRF, PCF, etc.)
-- Phrase search improves precision for multi-word concepts
-- title:term restricts matches to section headings only
-- Use spec_ids to search across multiple specifications at once`,
+	Name:        "search",
+	Description: `Full-text search across 3GPP specification text using SQLite FTS5 syntax (AND/OR/NOT, "quoted phrases", prefix*, title:/content: column filters, NEAR(); see the query parameter). The index applies porter stemming, so inflected English forms match each other (handover finds handovers) and prefix and phrase queries match a bit more broadly than the exact surface text. Use exact 3GPP terms (AMF, SMF, gNB, UE, NRF, PCF), a phrase for a multi-word concept, title:term to match section headings only, and spec_ids to search several specifications at once. Results come as {results, total_count, limit, offset}; page with limit (default 10, max 200) and offset. This index covers specification clause text only: OpenAPI content is in search_openapi.`,
 }
 
 func HandleSearch(d *db.DB) func(ctx context.Context, req *mcp.CallToolRequest, input SearchInput) (*mcp.CallToolResult, any, error) {
