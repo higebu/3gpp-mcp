@@ -549,6 +549,14 @@ func compareVersions(a, b *SpecVersion) int {
 	return strings.Compare(a.Version, b.Version)
 }
 
+// FetchPage fetches one HTML page from the 3GPP site with the listing
+// safeguards (size cap, truncation check) and no retry. Exported for the
+// meeting index, which reads the DynaReport meeting pages the same way the
+// archive listings are read.
+func FetchPage(ctx context.Context, client *http.Client, url string) (string, error) {
+	return fetchPage(ctx, client, url)
+}
+
 func fetchPage(ctx context.Context, client *http.Client, url string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
