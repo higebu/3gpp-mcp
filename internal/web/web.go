@@ -39,5 +39,13 @@ func NewServer(src *tools.Source) http.Handler {
 	mux.HandleFunc("GET /specs/{specID}/openapi/{apiName...}", h.handleOpenAPI)
 	mux.HandleFunc("GET /search", h.handleSearch)
 
+	// Meeting documents (TDocs), fetched on demand. A document named by FTP
+	// path carries the path percent-encoded in the {id} segment; the mux
+	// matches on the escaped path, so its %2F does not split the segment.
+	mux.HandleFunc("GET /tdocs", h.handleTDocLookup)
+	mux.HandleFunc("GET /tdocs/{id}", h.handleTDoc)
+	mux.HandleFunc("GET /tdocs/{id}/sections/{number...}", h.handleTDocSection)
+	mux.HandleFunc("GET /tdocs/{id}/images/{name...}", h.handleTDocImage)
+
 	return mux
 }

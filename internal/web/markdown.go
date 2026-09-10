@@ -78,6 +78,10 @@ type renderOpts struct {
 	sectionExists func(string) bool
 	// targetInfo validates cross-spec section references; nil skips validation.
 	targetInfo func(spec, section string) (exists bool, version string, ok bool)
+	// imageBase, when set, is the URL prefix image:// references resolve
+	// under instead of the spec image route; a meeting document serves its
+	// own images from /tdocs/{id}/images/.
+	imageBase string
 }
 
 // renderMarkdown converts Markdown content to HTML, rewriting image:// URLs
@@ -119,6 +123,9 @@ func renderMarkdown(content string, o renderOpts) string {
 	})
 	escapedSpec := url.PathEscape(specID)
 	imageURL := func(name string) string {
+		if o.imageBase != "" {
+			return o.imageBase + url.PathEscape(name)
+		}
 		src := "/specs/" + escapedSpec + "/images/" + url.PathEscape(name)
 		if version != "" {
 			src += "?version=" + url.QueryEscape(version)

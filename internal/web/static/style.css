@@ -1731,3 +1731,32 @@ body:has(dialog.lightbox[open]) {
     text-underline-offset: 3px;
     cursor: help;
 }
+
+/* Meeting documents (TDocs) */
+.tdoc-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.25rem;
+}
+
+.tdoc-title {
+    font-size: 1rem;
+    margin: 0;
+}
+
+.tdoc-meta {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    margin: 0 0 8px;
+    word-break: break-word;
+}
+
+.tdoc-lookup-form input[type="text"] {
+    min-width: 18rem;
+}
+
+.tdoc-help {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    max-width: 60rem;
+}

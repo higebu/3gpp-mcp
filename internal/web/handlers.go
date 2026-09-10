@@ -157,6 +157,12 @@ func (h *handler) initTemplates() {
 			return u
 		},
 		"refURL": refURL,
+		"tdocURL": func(id string) string {
+			return "/tdocs/" + url.PathEscape(id)
+		},
+		"tdocSectionURL": func(id, number string) string {
+			return "/tdocs/" + url.PathEscape(id) + "/sections/" + url.PathEscape(number)
+		},
 		// releaseLabel renders a bare release number as "Rel-18"; anything else
 		// is shown unchanged.
 		"releaseLabel": specver.ReleaseLabel,
