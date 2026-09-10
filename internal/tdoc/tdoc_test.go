@@ -793,19 +793,21 @@ func TestParseMeetings_Edges(t *testing.T) {
 
 func TestCanonicalIDAndPaths(t *testing.T) {
 	for in, want := range map[string]string{
-		"r1-2509715":                       "R1-2509715",
-		"https://www.3gpp.org/ftp/a/b.zip": "a/b.zip",
-		"https://3gpp.org/ftp/a/b.zip":     "a/b.zip",
-		"ftp/a/b.zip":                      "a/b.zip",
-		`tsg_ran\WG1_RL1\x.zip`:            "tsg_ran/WG1_RL1/x.zip",
-		"/a/./b.zip":                       "a/b.zip",
+		"r1-2509715":                           "R1-2509715",
+		"https://www.3gpp.org/ftp/a/b.zip":     "a/b.zip",
+		"https://3gpp.org/ftp/a/b.zip":         "a/b.zip",
+		"ftp/a/b.zip":                          "a/b.zip",
+		`tsg_ran\WG1_RL1\x.zip`:                "tsg_ran/WG1_RL1/x.zip",
+		"/a/./b.zip":                           "a/b.zip",
+		"a/b%23c.zip":                          "a/b#c.zip",
+		"https://www.3gpp.org/ftp/a/b%23c.zip": "a/b#c.zip",
 	} {
 		got, ok := CanonicalID(in)
 		if !ok || got != want {
 			t.Errorf("CanonicalID(%q) = %q, %v; want %q", in, got, ok, want)
 		}
 	}
-	for _, in := range []string{"TS 23.501", "https://www.3gpp.org/", "/ftp/", "//", "https://example.org/ftp/x.zip"} {
+	for _, in := range []string{"TS 23.501", "https://www.3gpp.org/", "/ftp/", "//", "https://example.org/ftp/x.zip", "tsg_ran/%2e%2e/x.zip", "https://www.3gpp.org/ftp/%2E%2E/x.zip"} {
 		if got, ok := CanonicalID(in); ok {
 			t.Errorf("CanonicalID(%q) = %q, want rejection", in, got)
 		}

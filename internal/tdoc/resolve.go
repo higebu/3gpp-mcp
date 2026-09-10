@@ -143,6 +143,11 @@ func documentPath(request string) (string, bool) {
 		if u.Fragment != "" {
 			p += "#" + u.Fragment
 		}
+	} else if unescaped, err := url.PathUnescape(p); err == nil {
+		// A bare path is decoded too, so the traversal check below sees
+		// the same form for both inputs ("%2e%2e" is ".."), and a pasted
+		// listing link ("...RAN1%23123_v100.zip") names the real file.
+		p = unescaped
 	}
 	for _, seg := range strings.Split(p, "/") {
 		if seg == ".." {
