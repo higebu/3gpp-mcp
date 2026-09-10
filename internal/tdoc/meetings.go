@@ -2,6 +2,7 @@ package tdoc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"html"
 	"log"
@@ -211,16 +212,17 @@ func cellText(cell string) string {
 	return strings.TrimSpace(t)
 }
 
-// The disk cache holds one meeting per line as tab-separated fields.
-const cacheFields = 9
-
+// The disk cache holds one meeting per line as JSON. The line-oriented
+// cache trims whitespace off every line, so a delimiter-separated encoding
+// would lose the trailing empty fields of a meeting without a folder.
 func encodeMeetings(ms []Meeting) []string {
 	lines := make([]string, 0, len(ms))
 	for _, m := range ms {
-		lines = append(lines, strings.Join([]string{
-			m.Code, m.Title, m.Town, m.Start, m.End, m.Dir, m.DocsDir,
-			m.FirstTDoc.String(), m.LastTDoc.String(),
-		}, "\t"))
+		b, err := json.Marshal(m)
+		if err != nil {
+			continue
+		}
+		lines = append(lines, string(b))
 	}
 	return lines
 }
@@ -228,21 +230,9 @@ func encodeMeetings(ms []Meeting) []string {
 func decodeMeetings(lines []string) ([]Meeting, error) {
 	ms := make([]Meeting, 0, len(lines))
 	for _, line := range lines {
-		f := strings.Split(line, "\t")
-		if len(f) != cacheFields {
-			return nil, fmt.Errorf("malformed meeting cache line: %q", line)
-		}
-		m := Meeting{Code: f[0], Title: f[1], Town: f[2], Start: f[3], End: f[4], Dir: f[5], DocsDir: f[6]}
-		if f[7] != "" && f[8] != "" {
-			first, err := ParseID(f[7])
-			if err != nil {
-				return nil, err
-			}
-			last, err := ParseID(f[8])
-			if err != nil {
-				return nil, err
-			}
-			m.FirstTDoc, m.LastTDoc = first, last
+		var m Meeting
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			return nil, fmt.Errorf("malformed meeting cache line %q: %w", line, err)
 		}
 		ms = append(ms, m)
 	}

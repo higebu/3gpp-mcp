@@ -1396,3 +1396,60 @@ func TestCmdGetTDoc_ArgOrder(t *testing.T) {
 		t.Errorf("expected usage reminder on stderr, got: %s", stderr.String())
 	}
 }
+
+// TestOpenTDocSource covers the meeting-document store path of get-tdoc:
+// the TDoc cache is opened without the version cache, -no-fetch skips it,
+// and a cache that cannot open disables the feature with a warning.
+func TestOpenTDocSource(t *testing.T) {
+	path := seedDBPath(t)
+	qf := &queryFlags{db: path, tdocCache: filepath.Join(t.TempDir(), "tdocs.db"), tdocCacheMB: 1}
+	src, cleanup, err := qf.openTDocSource()
+	if err != nil {
+		t.Fatalf("openTDocSource: %v", err)
+	}
+	if src.TDocs == nil || src.Store != nil {
+		t.Errorf("TDocs = %v, Store = %v; want only the TDoc store", src.TDocs != nil, src.Store != nil)
+	}
+	cleanup()
+
+	qf.noFetch = true
+	src, cleanup, err = qf.openTDocSource()
+	if err != nil {
+		t.Fatalf("openTDocSource with -no-fetch: %v", err)
+	}
+	if src.TDocs != nil {
+		t.Error("expected no TDoc store with -no-fetch")
+	}
+	cleanup()
+
+	// A path whose parent is a file cannot be created: warn and carry on.
+	file := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	qf.noFetch = false
+	qf.tdocCache = filepath.Join(file, "tdocs.db")
+	src, cleanup, err = qf.openTDocSource()
+	if err != nil {
+		t.Fatalf("openTDocSource with an unwritable cache: %v", err)
+	}
+	if src.TDocs != nil {
+		t.Error("expected the TDoc store to be disabled when it cannot open")
+	}
+	cleanup()
+
+	if _, _, err := (&queryFlags{db: filepath.Join(t.TempDir(), "missing.db")}).openTDocSource(); err == nil {
+		t.Error("expected an error for a missing database")
+	}
+}
+
+func TestDefaultTDocCacheMB(t *testing.T) {
+	t.Setenv("THREEGPP_TDOC_CACHE_MB", "7")
+	if got := defaultTDocCacheMB(); got != 7 {
+		t.Errorf("defaultTDocCacheMB() = %d, want 7", got)
+	}
+	t.Setenv("THREEGPP_TDOC_CACHE_MB", "seven")
+	if got := defaultTDocCacheMB(); got != tdocstore.DefaultLimitBytes>>20 {
+		t.Errorf("defaultTDocCacheMB() with an invalid value = %d, want the default", got)
+	}
+}

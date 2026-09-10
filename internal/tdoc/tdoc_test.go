@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -530,5 +532,293 @@ func TestDocumentTitle(t *testing.T) {
 	}
 	if got := titleFromPreamble("Subtitle: not this\nno title here"); got != "" {
 		t.Errorf("title = %q, want none", got)
+	}
+}
+
+// makeDocxWithImage builds a .docx whose one heading is followed by an
+// inline PNG figure.
+func makeDocxWithImage(t *testing.T, png []byte) []byte {
+	t.Helper()
+	const contentTypes = `<?xml version="1.0"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="xml" ContentType="application/xml"/>
+<Default Extension="png" ContentType="image/png"/>
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`
+	const rels = `<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`
+	const docRels = `<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>
+</Relationships>`
+	const doc = `<?xml version="1.0"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<w:body>
+<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>1 Figure</w:t></w:r></w:p>
+<w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">` +
+		`<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData>` +
+		`<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill>` +
+		`<a:blip r:embed="rId5"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>
+</w:body>
+</w:document>`
+	const styles = `<?xml version="1.0"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/></w:style>
+</w:styles>`
+	return makeZip(t, map[string][]byte{
+		"[Content_Types].xml":          []byte(contentTypes),
+		"_rels/.rels":                  []byte(rels),
+		"word/document.xml":            []byte(doc),
+		"word/_rels/document.xml.rels": []byte(docRels),
+		"word/media/image1.png":        png,
+		"word/styles.xml":              []byte(styles),
+	})
+}
+
+// installFakeLibreOffice puts a `libreoffice` script first on PATH that
+// "converts" any .doc by writing docx (or nothing, when docx is nil) into the
+// --outdir it is given, so the .doc path is exercised without LibreOffice.
+func installFakeLibreOffice(t *testing.T, docx []byte) {
+	t.Helper()
+	dir := t.TempDir()
+	src := ""
+	if docx != nil {
+		src = filepath.Join(dir, "converted.docx")
+		if err := os.WriteFile(src, docx, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := "#!/bin/sh\n" +
+		"out=''; in=''\n" +
+		"while [ $# -gt 0 ]; do case \"$1\" in --outdir) out=\"$2\"; shift;; *.doc) in=\"$1\";; esac; shift; done\n" +
+		"[ -n \"$FAKE_DOCX\" ] && cp \"$FAKE_DOCX\" \"$out/$(basename \"$in\" .doc).docx\"\n" +
+		"exit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "libreoffice"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_DOCX", src)
+}
+
+func TestFetch_MoreCases(t *testing.T) {
+	ctx := context.Background()
+	var manyNested = map[string][]byte{"real.docx": makeDocx(t, "# 1 Real", "body")}
+	for i := range maxNestedZips + 2 {
+		manyNested[fmt.Sprintf("att%02d.zip", i)] = makeZip(t, map[string][]byte{fmt.Sprintf("a%d.docx", i): makeDocx(t, "x")})
+	}
+	files := map[string][]byte{
+		"tsg_ran/WG1_RL1/TSGR1_123/docs/R1-2509100.zip": makeZip(t, map[string][]byte{"R1-2509100.docx": makeDocxWithImage(t, []byte("png-bytes"))}),
+		"tsg_ran/WG1_RL1/TSGR1_123/docs/R1-2509101.zip": makeZip(t, map[string][]byte{
+			"R1-2509101.docx": makeDocx(t, "# 1 Main", "main"),
+			"broken.zip":      []byte("this is not a zip"),
+			"dir/":            nil,
+			"sub/..evil.docx": makeDocx(t, "x"),
+		}),
+		"tsg_ran/WG1_RL1/TSGR1_123/docs/R1-2509102.zip": makeZip(t, manyNested),
+		"tsg_ran/WG1_RL1/TSGR1_123/docs/R1-2509103.zip": makeZip(t, map[string][]byte{"R1-2509103.docx": makeDocx(t)}),
+		"tsg_ran/WG1_RL1/TSGR1_123/docs/R1-2509104.zip": makeZip(t, map[string][]byte{"R1-2509104.doc": []byte("legacy")}),
+		"tsg_ran/WG1_RL1/TSGR1_123/Report/old.doc":      []byte("legacy"),
+		"tsg_ran/WG1_RL1/TSGR1_123/docs/R1-2509105.zip": makeZip(t, map[string][]byte{"R1-2509105.docx": []byte("not a docx")}),
+	}
+	client := fakeSite(t, files)
+
+	t.Run("images are returned", func(t *testing.T) {
+		doc, _ := Resolve(ctx, client, "R1-2509100", "", false)
+		f, err := Fetch(ctx, client, doc)
+		if err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+		if len(f.Images) != 1 || f.Images[0].Name != "image1.png" || string(f.Images[0].Data) != "png-bytes" || f.Images[0].SpecID != "R1-2509100" {
+			t.Errorf("Images = %+v", f.Images)
+		}
+	})
+
+	t.Run("skips corrupt nested zips, directories and traversing names", func(t *testing.T) {
+		doc, _ := Resolve(ctx, client, "R1-2509101", "", false)
+		f, err := Fetch(ctx, client, doc)
+		if err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+		if strings.Join(sorted(f.Files), "|") != "R1-2509101.docx|broken.zip" {
+			t.Errorf("Files = %v", f.Files)
+		}
+	})
+
+	t.Run("opens at most maxNestedZips attachments", func(t *testing.T) {
+		doc, _ := Resolve(ctx, client, "R1-2509102", "", false)
+		f, err := Fetch(ctx, client, doc)
+		if err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+		nested := 0
+		for _, name := range f.Files {
+			if strings.Contains(name, ".zip/") {
+				nested++
+			}
+		}
+		if nested != maxNestedZips || f.MainFile != "real.docx" {
+			t.Errorf("nested members = %d (want %d), main = %q", nested, maxNestedZips, f.MainFile)
+		}
+	})
+
+	t.Run("document without text", func(t *testing.T) {
+		doc, _ := Resolve(ctx, client, "R1-2509103", "", false)
+		if _, err := Fetch(ctx, client, doc); !errors.Is(err, ErrUnsupported) {
+			t.Errorf("err = %v, want ErrUnsupported", err)
+		}
+	})
+
+	t.Run("unparseable docx", func(t *testing.T) {
+		doc, _ := Resolve(ctx, client, "R1-2509105", "", false)
+		if _, err := Fetch(ctx, client, doc); err == nil || !strings.Contains(err.Error(), "parse") {
+			t.Errorf("err = %v", err)
+		}
+	})
+
+	t.Run("legacy doc converted", func(t *testing.T) {
+		installFakeLibreOffice(t, makeDocx(t, "# 1 Converted", "from doc"))
+		doc, _ := Resolve(ctx, client, "R1-2509104", "", false)
+		f, err := Fetch(ctx, client, doc)
+		if err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+		if f.MainFile != "R1-2509104.doc" || len(f.Sections) != 1 || !strings.Contains(f.Sections[0].Content, "from doc") {
+			t.Errorf("got %+v", f)
+		}
+		// A bare .doc named by path takes the same route.
+		doc, _ = Resolve(ctx, client, "tsg_ran/WG1_RL1/TSGR1_123/Report/old.doc", "", false)
+		f, err = Fetch(ctx, client, doc)
+		if err != nil {
+			t.Fatalf("Fetch bare .doc: %v", err)
+		}
+		if f.MainFile != "old.doc" || len(f.Sections) != 1 {
+			t.Errorf("got %+v", f)
+		}
+	})
+
+	t.Run("legacy doc conversion produced nothing", func(t *testing.T) {
+		installFakeLibreOffice(t, nil)
+		doc, _ := Resolve(ctx, client, "R1-2509104", "", false)
+		if _, err := Fetch(ctx, client, doc); err == nil || !strings.Contains(err.Error(), "produced no .docx") {
+			t.Errorf("err = %v", err)
+		}
+	})
+}
+
+func TestSanitizeName(t *testing.T) {
+	for in, want := range map[string]string{
+		"R1-2509715 CR_38213.docx": "R1-2509715 CR_38213.docx",
+		`a/b\c:d*e?f"g<h>i|j.docx`: "a_b_c_d_e_f_g_h_i_j.docx",
+		"":                         "document",
+		".":                        "document",
+		"..":                       "document",
+	} {
+		if got := sanitizeName(in); got != want {
+			t.Errorf("sanitizeName(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := titleFromPreamble("Title:\t-\n"); got != "" {
+		t.Errorf("a dash title = %q, want none", got)
+	}
+	if got := documentTitle(nil, "R1-1"); got != "R1-1" {
+		t.Errorf("documentTitle(no sections) = %q", got)
+	}
+}
+
+func TestFetchMeetings_Cache(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	hits := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dynareport", func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		switch r.URL.Query().Get("code") {
+		case "Meetings-R1.htm":
+			fmt.Fprint(w, meetingPage)
+		case "Meetings-R2.htm":
+			fmt.Fprint(w, "<html><body>nothing here</body></html>")
+		default:
+			http.Error(w, "boom", http.StatusInternalServerError)
+		}
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	client := &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+
+	g, _ := GroupByCode("R1")
+	for i := range 2 {
+		ms, err := FetchMeetings(context.Background(), client, g, true)
+		if err != nil {
+			t.Fatalf("FetchMeetings #%d: %v", i, err)
+		}
+		if len(ms) != 6 || ms[1].Code != "R1-123" || ms[1].FirstTDoc.String() != "R1-2508300" {
+			t.Errorf("#%d: got %+v", i, ms[1])
+		}
+	}
+	if hits != 1 {
+		t.Errorf("page fetched %d times, want 1 (second call must hit the cache)", hits)
+	}
+
+	r2, _ := GroupByCode("R2")
+	if _, err := FetchMeetings(context.Background(), client, r2, true); err == nil || !strings.Contains(err.Error(), "lists no meetings") {
+		t.Errorf("empty page: err = %v", err)
+	}
+	if _, err := FetchMeetings(context.Background(), client, Group{Code: "S5", Name: "SA5"}, false); err == nil {
+		t.Error("expected an error for a failing page")
+	}
+}
+
+func TestParseMeetings_Edges(t *testing.T) {
+	page := `<table>
+<tr><td>too</td><td>few</td></tr>
+<tr><td>has space</td><td>x</td><td>x</td><td>2025-01-01</td><td>2025-01-02</td><td>-</td></tr>
+<tr><td>R1-1</td><td>3GPPRAN1#1</td><td>x</td><td>not a date</td><td>2025-01-02</td><td>-</td></tr>
+<tr><td>R1-2</td><td>3GPPRAN1#2</td><td><a href="/../../../\ftp\tsg_ran\WG1_RL1\TSGR1_2\..\Invitation/">x</a></td><td>2025‑01‑01</td><td>2025‑01‑02</td><td>R1-1 - S2-2</td></tr>
+</table>`
+	ms := ParseMeetings(page)
+	if len(ms) != 1 || ms[0].Code != "R1-2" || ms[0].FirstTDoc.Prefix != "" || ms[0].Dir != "" {
+		t.Errorf("got %+v", ms)
+	}
+	if _, err := decodeMeetings(nil); err == nil {
+		t.Error("empty cache accepted")
+	}
+	if _, err := decodeMeetings([]string{"{not json"}); err == nil {
+		t.Error("malformed cache line accepted")
+	}
+	if got := exampleMeeting([]Meeting{{Code: "R1-9"}}); got != "R1-123" {
+		t.Errorf("exampleMeeting fallback = %q", got)
+	}
+}
+
+func TestCanonicalIDAndPaths(t *testing.T) {
+	for in, want := range map[string]string{
+		"r1-2509715":                       "R1-2509715",
+		"https://www.3gpp.org/ftp/a/b.zip": "a/b.zip",
+		"https://3gpp.org/ftp/a/b.zip":     "a/b.zip",
+		"ftp/a/b.zip":                      "a/b.zip",
+		`tsg_ran\WG1_RL1\x.zip`:            "tsg_ran/WG1_RL1/x.zip",
+		"/a/./b.zip":                       "a/b.zip",
+	} {
+		got, ok := CanonicalID(in)
+		if !ok || got != want {
+			t.Errorf("CanonicalID(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"TS 23.501", "https://www.3gpp.org/", "/ftp/", "//", "https://example.org/ftp/x.zip"} {
+		if got, ok := CanonicalID(in); ok {
+			t.Errorf("CanonicalID(%q) = %q, want rejection", in, got)
+		}
+	}
+}
+
+func TestResolve_Errors(t *testing.T) {
+	client := fakeSite(t, nil)
+	ctx := context.Background()
+	if _, err := Resolve(ctx, client, "R2-2600001", "", false); err == nil {
+		t.Error("expected an error when the meeting page cannot be fetched")
+	}
+	if _, err := Resolve(ctx, client, "R1-2600001", "../x/", false); !errors.Is(err, ErrNotFound) {
+		t.Errorf("invalid folder: err = %v", err)
 	}
 }

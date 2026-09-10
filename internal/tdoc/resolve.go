@@ -126,7 +126,7 @@ func exampleMeeting(meetings []Meeting) string {
 // site rather than a TDoc number, and normalizes it to a path relative to
 // /ftp/. Only paths under the site are accepted, without ".." components.
 func documentPath(request string) (string, bool) {
-	p := strings.TrimSpace(request)
+	p := strings.ReplaceAll(strings.TrimSpace(request), `\`, "/")
 	if !strings.Contains(p, "/") {
 		return "", false
 	}
@@ -144,7 +144,6 @@ func documentPath(request string) (string, bool) {
 			p += "#" + u.Fragment
 		}
 	}
-	p = strings.ReplaceAll(p, `\`, "/")
 	for _, seg := range strings.Split(p, "/") {
 		if seg == ".." {
 			return "", false

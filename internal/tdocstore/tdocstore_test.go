@@ -314,3 +314,94 @@ func TestOpenRejectsUnwritablePath(t *testing.T) {
 		t.Error("Open on an unwritable path should fail so the caller can disable fetching")
 	}
 }
+
+// TestClosedStoreErrors covers the database error branches: every read
+// reports the failure instead of pretending the cache is empty.
+func TestClosedStoreErrors(t *testing.T) {
+	s := openStore(t, -1, func(_ context.Context, d tdoc.Document) (*tdoc.Fetched, error) {
+		return fetchedDoc(d.ID, "body"), nil
+	})
+	if err := s.Ensure(context.Background(), testDoc("R1-1"), time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Has("R1-1"); err == nil {
+		t.Error("Has on a closed store must fail")
+	}
+	if err := s.Ensure(context.Background(), testDoc("R1-1"), time.Second); err == nil {
+		t.Error("Ensure on a closed store must fail")
+	}
+	if _, err := s.Get("R1-1"); err == nil {
+		t.Error("Get on a closed store must fail")
+	}
+	if _, err := s.GetTOC("R1-1"); err == nil {
+		t.Error("GetTOC on a closed store must fail")
+	}
+	if _, err := s.AllSections("R1-1"); err == nil {
+		t.Error("AllSections on a closed store must fail")
+	}
+	if _, err := s.GetSection("R1-1", "1", true); err == nil {
+		t.Error("GetSection on a closed store must fail")
+	}
+	if _, err := s.GetImage("R1-1", "image1.png"); err == nil {
+		t.Error("GetImage on a closed store must fail")
+	}
+	if _, err := s.ListImages("R1-1"); err == nil {
+		t.Error("ListImages on a closed store must fail")
+	}
+	s.limitBytes = 0 // a negative limit returns before touching the database
+	if err := s.evict("R1-1"); err == nil {
+		t.Error("evict on a closed store must fail")
+	}
+	if err := s.delete("R1-1"); err == nil {
+		t.Error("delete on a closed store must fail")
+	}
+	if err := s.put(testDoc("R1-2"), fetchedDoc("R1-2", "x")); err == nil {
+		t.Error("put on a closed store must fail")
+	}
+}
+
+func TestOpenRejectsDirectoryPath(t *testing.T) {
+	if _, err := Open(Options{Path: t.TempDir()}); err == nil {
+		t.Error("Open on a directory should fail")
+	}
+}
+
+func TestGetImageMisses(t *testing.T) {
+	s := openStore(t, -1, func(_ context.Context, d tdoc.Document) (*tdoc.Fetched, error) {
+		return fetchedDoc(d.ID, "body"), nil
+	})
+	if err := s.Ensure(context.Background(), testDoc("R1-1"), time.Second); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"noext", "other.png", ".png"} {
+		if img, err := s.GetImage("R1-1", name); err != nil || img != nil {
+			t.Errorf("GetImage(%q) = %+v, %v; want nil, nil", name, img, err)
+		}
+	}
+	if err := s.Ensure(context.Background(), tdoc.Document{ID: "tsg_ran/x.zip", Path: "tsg_ran/x.zip"}, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := s.Get("tsg_ran/x.zip")
+	if err != nil || rec == nil || rec.MeetingCode != "" || rec.Group != "" {
+		t.Errorf("path-named record = %+v, %v", rec, err)
+	}
+}
+
+func TestDefaultPath(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	p, err := DefaultPath()
+	if err != nil || !strings.HasSuffix(p, filepath.Join("3gpp-mcp", DefaultFileName)) {
+		t.Errorf("DefaultPath() = %q, %v", p, err)
+	}
+	s, err := Open(Options{LimitBytes: -1})
+	if err != nil {
+		t.Fatalf("Open(default path): %v", err)
+	}
+	s.Close()
+	if _, err := os.Stat(p); err != nil {
+		t.Errorf("default cache file not created: %v", err)
+	}
+}

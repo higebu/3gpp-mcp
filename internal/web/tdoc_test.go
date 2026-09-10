@@ -247,3 +247,18 @@ func TestHandleTDoc_Unavailable(t *testing.T) {
 		t.Errorf("bad id: status = %d, want 404", resp.StatusCode)
 	}
 }
+
+func TestHandleTDoc_StoreError(t *testing.T) {
+	ts, src := setupTDocServer(t, cannedTDoc)
+	if err := src.TDocs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resp, _ := get(t, ts.URL+"/tdocs/"+url.PathEscape(reportPath))
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", resp.StatusCode)
+	}
+	resp, _ = get(t, ts.URL+"/tdocs/"+url.PathEscape(reportPath)+"/images/image1.png")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("image: status = %d, want 404", resp.StatusCode)
+	}
+}

@@ -337,10 +337,15 @@ func (s *Store) put(doc tdoc.Document, f *tdoc.Fetched) error {
 		bytes += int64(len(img.Data)) + int64(len(img.Name))
 	}
 
+	// A document is always shown under some title; the ID is the fallback.
+	title := f.Title
+	if title == "" {
+		title = doc.ID
+	}
 	now := time.Now().Unix()
 	if _, err := tx.Exec(
 		"INSERT OR REPLACE INTO tdocs (id, title, path, group_name, meeting_code, meeting_title, meeting_dir, main_file, files, bytes, fetched_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		doc.ID, f.Title, doc.Path, doc.Group.Name, doc.Meeting.Code, doc.Meeting.Title, doc.Meeting.Dir,
+		doc.ID, title, doc.Path, doc.Group.Name, doc.Meeting.Code, doc.Meeting.Title, doc.Meeting.Dir,
 		f.MainFile, strings.Join(f.Files, "\n"), bytes, now, now,
 	); err != nil {
 		return fmt.Errorf("record cache entry: %w", err)
