@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 const ALL_TOOLS = [
   'list_specs', 'list_versions', 'get_toc', 'get_section', 'get_asn1',
   'compare_versions', 'search', 'list_openapi', 'get_openapi',
-  'search_openapi', 'get_references', 'list_images', 'get_image',
+  'search_openapi', 'get_references', 'list_images', 'get_image', 'get_tdoc',
 ];
 
 // Installs a stub document.modelContext before any page script runs, so
