@@ -212,7 +212,7 @@ func TestParseSections_XMLElementContentSplit(t *testing.T) {
 		xmlTestPara(`</xs:documentation></xs:annotation>`),
 		xmlTestPara("Trailing prose."),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -254,7 +254,7 @@ func TestParseSections_XMLBlockUnstyled(t *testing.T) {
 		xmlTestPara(`</xs:schema>`),
 		xmlTestPara("Trailing prose."),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -292,7 +292,7 @@ func TestParseSections_XMLUnterminatedNotSwallowingProse(t *testing.T) {
 		xmlTestPara("This prose paragraph must stay outside the fence."),
 		xmlTestPara("And so must this one, even without a '>' anywhere."),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -325,7 +325,7 @@ func TestParseSections_XMLUnbalancedStopsAbsorbingProse(t *testing.T) {
 	for i := 1; i <= proseCount; i++ {
 		elements = append(elements, xmlTestPara(fmt.Sprintf("Prose paragraph %d of the clause.", i)))
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -361,7 +361,7 @@ func TestParseSections_XMLLongElementContentStaysFenced(t *testing.T) {
 		xmlTestPara(`</xs:documentation></xs:annotation>`),
 		xmlTestPara("Trailing prose."),
 	)
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -397,7 +397,7 @@ func TestParseSections_XMLMixedContentStaysFenced(t *testing.T) {
 		xmlTestPara(`</tuple>`),
 		xmlTestPara("Trailing prose."),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -430,7 +430,7 @@ func TestParseSections_XMLCloseAndSiblingOpenConfirmsContent(t *testing.T) {
 		xmlTestPara(`</a><b>`),
 		xmlTestPara("Prose absorbed by the unclosed sibling."),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	content := sections[0].Content
 	if len(content) != 2 {
 		t.Fatalf("expected fence + prose, got %v", content)
@@ -452,7 +452,7 @@ func TestParseSections_XMLCloseAndSiblingOpenConfirmsContent(t *testing.T) {
 		xmlTestPara(`</c></b>`),
 		xmlTestPara("Trailing prose."),
 	}
-	sections = parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections = parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	content = sections[0].Content
 	if len(content) != 2 {
 		t.Fatalf("expected fence + prose, got %v", content)
@@ -473,7 +473,7 @@ func TestParseSections_XMLContentClosingItsOwnElement(t *testing.T) {
 		xmlTestPara("some text </a>"),
 		xmlTestPara("Trailing prose."),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	content := sections[0].Content
 	if len(content) != 2 {
 		t.Fatalf("expected fence + prose, got %v", content)
@@ -499,7 +499,7 @@ func TestParseSections_XMLDepthNeutralMarkupDoesNotConfirm(t *testing.T) {
 			xmlTestPara(neutral),
 			xmlTestPara("Tail prose."),
 		}
-		sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+		sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 		content := sections[0].Content
 		if len(content) != 4 {
 			t.Fatalf("%s: expected fence + 3 replayed paragraphs, got %v", neutral, content)
@@ -526,7 +526,7 @@ func TestParseSections_XMLHeldProseNotFencedByUnrelatedMarkup(t *testing.T) {
 		xmlTestPara(`<status>Open</status>`),
 		xmlTestPara("Tail prose."),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -562,7 +562,7 @@ func TestParseSections_XMLPendingJoinKeepsDepthBalanced(t *testing.T) {
 		xmlTestPara("Trailing prose."),
 		xmlTestPara("More trailing prose."),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -596,7 +596,7 @@ func TestParseSections_XMLBoldRunsWeakStart(t *testing.T) {
 		boldPara(`</auids>`),
 		boldPara(`</xcap-caps>`),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -626,7 +626,7 @@ func TestParseSections_XMLAttributeContinuation(t *testing.T) {
 		xmlTestPara(`</mcpttinfo>`),
 		xmlTestPara("Trailing prose."),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -651,7 +651,7 @@ func TestParseSections_XMLDoctypeInternalSubset(t *testing.T) {
 		xmlTestPara(`]>`),
 		xmlTestPara("Trailing prose."),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -675,7 +675,7 @@ func TestParseSections_XMLProseReferenceNotFenced(t *testing.T) {
 		xmlTestPara(`<userid>`),
 		xmlTestPara("is encoded as a string."),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -699,7 +699,7 @@ func TestParseSections_XMLFlushedByHeadingAndTable(t *testing.T) {
 		xmlTestPara(`<body>`),
 		{Tag: "tbl", Table: tableInfo{Rows: []tableRow{{Cells: []tableCell{{Paras: []paragraphInfo{{Text: "cell", Runs: []runInfo{{Text: "cell"}}}}}}}}}},
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 2 {
 		t.Fatalf("expected 2 sections, got %d", len(sections))
 	}
@@ -729,7 +729,7 @@ func TestParseSections_XMLCodeStyledUnchanged(t *testing.T) {
 		codePara(`<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">`),
 		codePara(`</xs:schema>`),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -765,7 +765,7 @@ func TestParseSections_XMLNotSwallowingMathOrImages(t *testing.T) {
 	images := map[string]*EmbeddedImage{
 		"media/image1.png": {Name: "image1.png", MIMEType: "image/png"},
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, relMap, images)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, relMap, images, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -797,7 +797,7 @@ func TestParseSections_XMLNotSwallowingConvertedMath(t *testing.T) {
 		{Tag: "p", Paragraph: mathPara("", `x=y`, false, []string{"where "}, nil)},
 		xmlTestPara("Trailing prose."),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	joined := strings.Join(sections[0].Content, "\n")
 	if strings.Contains(joined, "```xml\n<?xml version=\"1.0\"?>\n<body>\nwhere $x=y$") {
 		t.Errorf("converted math swallowed into the fence: %v", sections[0].Content)
@@ -826,7 +826,7 @@ func TestParseSections_XMLCodeStyledStopsPendingAndContinuation(t *testing.T) {
 		xmlTestPara(`<?xml version="1.0"?>`),
 		codePara(`<code-styled-tag>`),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 2 {
 		t.Fatalf("expected 2 sections, got %d", len(sections))
 	}
@@ -859,7 +859,7 @@ func TestParseSections_XMLPendingAbandonedByCodePara(t *testing.T) {
 			Text: "yaml: sample", Runs: []runInfo{{Text: "yaml: sample"}}, IsCode: true,
 		}},
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}

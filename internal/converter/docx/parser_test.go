@@ -514,7 +514,7 @@ func TestParseSections_CodeBlockGrouping(t *testing.T) {
 		}},
 	}
 	styleMap := map[string]string{"Heading1": "Heading 1"}
-	sections := parseSections(elements, styleMap, nil, nil, nil)
+	sections := parseSections(elements, styleMap, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -553,7 +553,7 @@ func TestParseSections_CodeBlockAtEnd(t *testing.T) {
 		}},
 	}
 	styleMap := map[string]string{"Heading1": "Heading 1"}
-	sections := parseSections(elements, styleMap, nil, nil, nil)
+	sections := parseSections(elements, styleMap, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -595,7 +595,7 @@ func TestParseSections_LetteredSectionNumbers(t *testing.T) {
 		}},
 	}
 	styleMap := map[string]string{"Heading1": "Heading 1", "Heading2": "Heading 2"}
-	sections := parseSections(elements, styleMap, nil, nil, nil)
+	sections := parseSections(elements, styleMap, nil, nil, nil, ParseOptions{})
 
 	want := map[string]string{
 		"4.2.1a":   "Some title",
@@ -651,7 +651,7 @@ func TestParseSections_UnnumberedDashHeadings(t *testing.T) {
 		}},
 	}
 	styleMap := map[string]string{"Heading1": "Heading 1", "Heading2": "Heading 2"}
-	sections := parseSections(elements, styleMap, nil, nil, nil)
+	sections := parseSections(elements, styleMap, nil, nil, nil, ParseOptions{})
 
 	want := []string{"MRB-Identity", "MeasSequence"}
 	sectionMap := make(map[string]*Section)
@@ -749,7 +749,7 @@ func TestParseSections_SectionNumberFormats(t *testing.T) {
 				}},
 			}
 			styleMap := map[string]string{"Heading1": "Heading 1"}
-			sections := parseSections(elements, styleMap, nil, nil, nil)
+			sections := parseSections(elements, styleMap, nil, nil, nil, ParseOptions{})
 			if len(sections) != 1 {
 				t.Fatalf("parsed %d sections, want 1", len(sections))
 			}
@@ -787,7 +787,7 @@ func TestParseSections_MultiLetterAnnex(t *testing.T) {
 		}})
 	}
 	styleMap := map[string]string{"Heading1": "Heading 1", "Heading2": "Heading 2", "Heading3": "Heading 3"}
-	sections := parseSections(elements, styleMap, nil, nil, nil)
+	sections := parseSections(elements, styleMap, nil, nil, nil, ParseOptions{})
 
 	sectionMap := make(map[string]*Section)
 	for _, s := range sections {
@@ -1014,7 +1014,7 @@ func TestParseSections_ASN1MarkerBlock(t *testing.T) {
 		para("-- ASN1STOP"),
 		para("Trailing prose."),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -1063,7 +1063,7 @@ func TestParseSections_ASN1MultipleBlocksAcrossHeadings(t *testing.T) {
 		para("RRCReject ::= SEQUENCE {}"),
 		para("-- ASN1STOP"),
 	}
-	sections := parseSections(elements, map[string]string{"Heading2": "Heading 2"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading2": "Heading 2"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 2 {
 		t.Fatalf("expected 2 sections, got %d", len(sections))
 	}
@@ -1098,7 +1098,7 @@ func TestParseSections_ASN1UnterminatedFlushedByHeading(t *testing.T) {
 		}},
 		para("Second section prose."),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 2 {
 		t.Fatalf("expected 2 sections, got %d", len(sections))
 	}
@@ -1125,7 +1125,7 @@ func TestParseSections_ASN1UnterminatedFlushedByTable(t *testing.T) {
 		para("Unterminated ::= SEQUENCE {"),
 		{Tag: "tbl", Table: tableInfo{Rows: []tableRow{{Cells: []tableCell{{Paras: []paragraphInfo{{Text: "cell", Runs: []runInfo{{Text: "cell"}}}}}}}}}},
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -1203,7 +1203,7 @@ func TestParseSections_DiameterCommandBlock(t *testing.T) {
 		para("*[ AVP ]"),
 		para("Trailing prose."),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -1254,7 +1254,7 @@ func TestParseSections_DiameterGroupedAVPVariants(t *testing.T) {
 		para("[ MIP-Home-Agent-Address ]"),
 		para("*[ AVP ]"),
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -1289,7 +1289,7 @@ func TestParseSections_DiameterFlushedByHeadingAndTable(t *testing.T) {
 		para("{ Result-Code }"),
 		{Tag: "tbl", Table: tableInfo{Rows: []tableRow{{Cells: []tableCell{{Paras: []paragraphInfo{{Text: "cell", Runs: []runInfo{{Text: "cell"}}}}}}}}}},
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 2 {
 		t.Fatalf("expected 2 sections, got %d", len(sections))
 	}
@@ -1316,7 +1316,7 @@ func TestParseSections_DiameterFalsePositiveProse(t *testing.T) {
 			Runs: []runInfo{{Text: "where X ::= Y denotes a production"}},
 		}},
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -1342,7 +1342,7 @@ func TestParseSections_DiameterAfterCodeStyledBlock(t *testing.T) {
 			Text: "{ Origin-Host }", Runs: []runInfo{{Text: "{ Origin-Host }"}},
 		}},
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("expected 1 section, got %d", len(sections))
 	}
@@ -1422,4 +1422,58 @@ func TestReadAllLimited_Cap(t *testing.T) {
 	if _, err := decompressPCZ(buf.Bytes()); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("decompressPCZ over-limit error = %v; want an 'exceeds' error", err)
 	}
+}
+
+// TestParseSections_KeepPreamble covers ParseOptions.KeepPreamble: the
+// paragraphs and tables before the first heading, which specifications
+// discard, become a leading section numbered "" — and no such section
+// appears when the document opens with a heading.
+func TestParseSections_KeepPreamble(t *testing.T) {
+	styleMap := map[string]string{"Heading1": "Heading 1"}
+	para := func(text string) bodyElement {
+		return bodyElement{Tag: "p", Paragraph: paragraphInfo{Text: text, Runs: []runInfo{{Text: text}}}}
+	}
+	heading := func(text string) bodyElement {
+		return bodyElement{Tag: "p", Paragraph: paragraphInfo{StyleID: "Heading1", Text: text, Runs: []runInfo{{Text: text}}}}
+	}
+	elements := []bodyElement{
+		para("Title: LS on something"),
+		para("Source: RAN WG1"),
+		heading("1 Overall description"),
+		para("Body text."),
+	}
+
+	t.Run("default drops the preamble", func(t *testing.T) {
+		sections := parseSections(elements, styleMap, nil, nil, nil, ParseOptions{})
+		if len(sections) != 1 || sections[0].Number != "1" {
+			t.Fatalf("got %d sections, want only clause 1: %+v", len(sections), sections)
+		}
+	})
+
+	t.Run("keeps the preamble", func(t *testing.T) {
+		sections := parseSections(elements, styleMap, nil, nil, nil, ParseOptions{KeepPreamble: true})
+		if len(sections) != 2 {
+			t.Fatalf("got %d sections, want 2", len(sections))
+		}
+		pre := sections[0]
+		if pre.Number != "" || pre.Title != PreambleTitle || pre.Level != 1 {
+			t.Errorf("preamble = %+v, want number \"\", title %q, level 1", pre, PreambleTitle)
+		}
+		if strings.Join(pre.Content, "\n") != "Title: LS on something\nSource: RAN WG1" {
+			t.Errorf("preamble content = %q", pre.Content)
+		}
+		if sections[1].Number != "1" || sections[1].ParentNumber != "" {
+			t.Errorf("clause 1 = %+v, want no parent", sections[1])
+		}
+		if got := SectionToMarkdown(pre); !strings.HasPrefix(got, "# "+PreambleTitle+"\n") {
+			t.Errorf("markdown heading = %q", got)
+		}
+	})
+
+	t.Run("omits an empty preamble", func(t *testing.T) {
+		sections := parseSections(elements[2:], styleMap, nil, nil, nil, ParseOptions{KeepPreamble: true})
+		if len(sections) != 1 || sections[0].Number != "1" {
+			t.Fatalf("got %d sections, want only clause 1: %+v", len(sections), sections)
+		}
+	})
 }

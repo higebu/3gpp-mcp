@@ -193,7 +193,7 @@ func TestParseSections_StandaloneEquationsBecomeLatexFences(t *testing.T) {
 		{Tag: "p", Paragraph: mathPara("", `d_{2D}`, false, []string{"where "}, []string{" is the distance."})},
 	}
 	styleMap := map[string]string{"Heading1": "Heading 1"}
-	sections := parseSections(elements, styleMap, nil, nil, nil)
+	sections := parseSections(elements, styleMap, nil, nil, nil, ParseOptions{})
 	if len(sections) != 1 {
 		t.Fatalf("sections = %d, want 1", len(sections))
 	}
@@ -233,7 +233,7 @@ func TestParseSections_EquationInsideCodeBlockStaysInline(t *testing.T) {
 		}},
 		{Tag: "p", Paragraph: code},
 	}
-	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	sections := parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 	all := strings.Join(sections[0].Content, "\n")
 	if strings.Contains(all, "```latex") {
 		t.Errorf("equation inside a code listing was promoted:\n%s", all)
