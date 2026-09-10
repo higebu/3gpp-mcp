@@ -19,6 +19,8 @@ import (
 	"github.com/higebu/3gpp-mcp/internal/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/openapiindex"
+	"github.com/higebu/3gpp-mcp/internal/tdoc"
+	"github.com/higebu/3gpp-mcp/internal/tdocstore"
 	"github.com/higebu/3gpp-mcp/internal/testutil"
 	"github.com/higebu/3gpp-mcp/internal/tools"
 	"github.com/higebu/3gpp-mcp/internal/versionstore"
@@ -1223,6 +1225,172 @@ func TestCmdGetSection_ArgOrder(t *testing.T) {
 	err := cmd.Run()
 	if err == nil {
 		t.Fatal("expected non-zero exit for missing section number")
+	}
+	if !strings.Contains(stderr.String(), "Options must come before positional arguments.") {
+		t.Errorf("expected usage reminder on stderr, got: %s", stderr.String())
+	}
+}
+
+// tdocReportPath names a meeting report by FTP path, which tdoc.Resolve
+// handles without consulting the meeting index — so the test never touches
+// the network.
+const tdocReportPath = "tsg_ran/WG1_RL1/TSGR1_123/Report/Final_Minutes_report_RAN1#123_v100.zip"
+
+// fakeTDocFetch stands in for the download-and-convert step, mirroring the
+// fake in internal/tools/get_tdoc_test.go.
+func fakeTDocFetch(_ context.Context, doc tdoc.Document) (*tdoc.Fetched, error) {
+	return &tdoc.Fetched{
+		Title:    "Final Report of RAN1#123",
+		MainFile: "Final_Minutes_report_RAN1#123_v100.docx",
+		Files:    []string{"Final_Minutes_report_RAN1#123_v100.docx", "TDoc_List.xlsx"},
+		Sections: []db.Section{
+			{SpecID: doc.ID, Number: "", Title: "Preamble", Level: 1, Content: "# Preamble\n\nTitle: Final Report of RAN1#123"},
+			{SpecID: doc.ID, Number: "1", Title: "Opening of the meeting", Level: 1, Content: "# 1 Opening of the meeting\n\nThe chair opened the meeting."},
+			{SpecID: doc.ID, Number: "2", Title: "Approval of the agenda", Level: 1, Content: "# 2 Approval of the agenda\n\nThe agenda was approved."},
+		},
+	}, nil
+}
+
+// tdocQuerySource wires a Source to a meeting-document cache in a temp
+// directory whose fetches never leave the process.
+func tdocQuerySource(t *testing.T) *tools.Source {
+	t.Helper()
+	store, err := tdocstore.Open(tdocstore.Options{
+		Path:       filepath.Join(t.TempDir(), "tdocs.db"),
+		LimitBytes: -1,
+		Fetcher:    fakeTDocFetch,
+	})
+	if err != nil {
+		t.Fatalf("tdocstore.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	src := tools.NewSource(testutil.SetupTestDB(t))
+	src.TDocs = store
+	src.Budget = 10 * time.Second
+	return src
+}
+
+func TestRunGetTDoc(t *testing.T) {
+	src := tdocQuerySource(t)
+
+	t.Run("whole document", func(t *testing.T) {
+		var out, errOut bytes.Buffer
+		if err := runGetTDoc(t.Context(), &out, &errOut, src, tdocReportPath, "", ""); err != nil {
+			t.Fatalf("runGetTDoc: %v", err)
+		}
+		for _, want := range []string{
+			"[Source: " + tdocReportPath,
+			"Title: Final Report of RAN1#123",
+			"Files: Final_Minutes_report_RAN1#123_v100.docx, TDoc_List.xlsx (converted: Final_Minutes_report_RAN1#123_v100.docx; the others are attachments)",
+			"The chair opened the meeting.",
+			"The agenda was approved.",
+		} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("expected output to contain %q, got:\n%s", want, out.String())
+			}
+		}
+	})
+
+	t.Run("one section", func(t *testing.T) {
+		var out, errOut bytes.Buffer
+		if err := runGetTDoc(t.Context(), &out, &errOut, src, tdocReportPath, "1", ""); err != nil {
+			t.Fatalf("runGetTDoc: %v", err)
+		}
+		if !strings.Contains(out.String(), "The chair opened the meeting.") {
+			t.Errorf("missing section content:\n%s", out.String())
+		}
+		if strings.Contains(out.String(), "The agenda was approved.") {
+			t.Errorf("other sections leaked into a single-section read:\n%s", out.String())
+		}
+	})
+
+	t.Run("preamble", func(t *testing.T) {
+		var out, errOut bytes.Buffer
+		// The name is matched case-insensitively, like get_tdoc's
+		// section_number.
+		if err := runGetTDoc(t.Context(), &out, &errOut, src, tdocReportPath, "Preamble", ""); err != nil {
+			t.Fatalf("runGetTDoc: %v", err)
+		}
+		if !strings.Contains(out.String(), "# Preamble") {
+			t.Errorf("expected the preamble section:\n%s", out.String())
+		}
+		if strings.Contains(out.String(), "The chair opened the meeting.") {
+			t.Errorf("preamble read spilled into the body:\n%s", out.String())
+		}
+	})
+
+	t.Run("missing section", func(t *testing.T) {
+		var out, errOut bytes.Buffer
+		err := runGetTDoc(t.Context(), &out, &errOut, src, tdocReportPath, "9", "")
+		if err == nil || !strings.Contains(err.Error(), "section 9 not found") {
+			t.Errorf("expected a missing-section error naming the section, got %v", err)
+		}
+	})
+
+	t.Run("unavailable", func(t *testing.T) {
+		var out, errOut bytes.Buffer
+		// A spec ID is not a TDoc number, so it never reaches the network.
+		if err := runGetTDoc(t.Context(), &out, &errOut, src, "TS 23.501", "", ""); err == nil {
+			t.Error("expected an error for a request that is not a TDoc")
+		}
+	})
+}
+
+// TestRunGetTDoc_WaitsForFetch pins that get-tdoc polls a running fetch out
+// instead of telling the user to retry, and that the progress note names a
+// document without a version by its ID alone.
+func TestRunGetTDoc_WaitsForFetch(t *testing.T) {
+	origPoll := fetchPollInterval
+	fetchPollInterval = time.Millisecond
+	defer func() { fetchPollInterval = origPoll }()
+
+	release := make(chan struct{})
+	store, err := tdocstore.Open(tdocstore.Options{
+		Path:       filepath.Join(t.TempDir(), "tdocs.db"),
+		LimitBytes: -1,
+		Fetcher: func(ctx context.Context, doc tdoc.Document) (*tdoc.Fetched, error) {
+			<-release
+			return fakeTDocFetch(ctx, doc)
+		},
+	})
+	if err != nil {
+		t.Fatalf("tdocstore.Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	src := tools.NewSource(testutil.SetupTestDB(t))
+	src.TDocs = store
+	src.Budget = 10 * time.Millisecond
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		close(release)
+	}()
+
+	var out, errOut bytes.Buffer
+	if err := runGetTDoc(t.Context(), &out, &errOut, src, tdocReportPath, "", ""); err != nil {
+		t.Fatalf("runGetTDoc: %v", err)
+	}
+	if !strings.Contains(out.String(), "The chair opened the meeting.") {
+		t.Errorf("expected the fetched document, got:\n%s", out.String())
+	}
+	if note := errOut.String(); note != "" && !strings.Contains(note, "Downloading and converting "+tdocReportPath+";") {
+		t.Errorf("expected the progress note to name the document without a version, got: %s", note)
+	}
+}
+
+// TestCmdGetTDoc_ArgOrder covers the options-before-positionals guard for
+// get-tdoc via subprocess, mirroring TestCmdGetSection_ArgOrder.
+func TestCmdGetTDoc_ArgOrder(t *testing.T) {
+	if os.Getenv("CMD_GET_TDOC_ARGS_HELPER") == "1" {
+		cmdGetTDoc(nil)
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestCmdGetTDoc_ArgOrder")
+	cmd.Env = append(os.Environ(), "CMD_GET_TDOC_ARGS_HELPER=1")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		t.Fatal("expected non-zero exit for a missing document ID")
 	}
 	if !strings.Contains(stderr.String(), "Options must come before positional arguments.") {
 		t.Errorf("expected usage reminder on stderr, got: %s", stderr.String())

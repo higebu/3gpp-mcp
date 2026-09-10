@@ -23,6 +23,7 @@ import (
 	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/openapiindex"
 	"github.com/higebu/3gpp-mcp/internal/specver"
+	"github.com/higebu/3gpp-mcp/internal/tdocstore"
 	"github.com/higebu/3gpp-mcp/internal/tools"
 	"github.com/higebu/3gpp-mcp/internal/versionstore"
 	"github.com/higebu/3gpp-mcp/internal/web"
@@ -122,6 +123,7 @@ func init() {
 		{name: "get-references", desc: "Print cross-references as JSON", run: cmdGetReferences},
 		{name: "list-images", desc: "List embedded images in a specification", run: cmdListImages},
 		{name: "get-image", desc: "Write an embedded image to a file or stdout", run: cmdGetImage},
+		{name: "get-tdoc", desc: "Print a meeting document (TDoc) as markdown", run: cmdGetTDoc},
 		{name: "completion", desc: "Generate shell completion scripts", run: cmdCompletion},
 	}
 }
@@ -179,6 +181,18 @@ func defaultVersionCacheMB() int64 {
 	return versionstore.DefaultLimitBytes >> 20
 }
 
+// defaultTDocCacheMB reads the meeting-document cache limit from the
+// environment, falling back to the tdocstore default.
+func defaultTDocCacheMB() int64 {
+	if v := os.Getenv("THREEGPP_TDOC_CACHE_MB"); v != "" {
+		if mb, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return mb
+		}
+		log.Printf("WARNING: ignoring invalid THREEGPP_TDOC_CACHE_MB=%q", v)
+	}
+	return tdocstore.DefaultLimitBytes >> 20
+}
+
 // defaultFetchBudget reads the on-demand fetch budget from the environment.
 func defaultFetchBudget() time.Duration {
 	if v := os.Getenv("THREEGPP_FETCH_BUDGET"); v != "" {
@@ -215,6 +229,8 @@ func cmdServe(args []string) {
 	noFetch := fs.Bool("no-fetch", false, "Disable on-demand fetching of spec versions that are not in the database")
 	versionCache := fs.String("version-cache", "", "Path to the on-demand version cache (default: $XDG_CACHE_HOME/3gpp-mcp/versions.db)")
 	versionCacheMB := fs.Int64("version-cache-mb", defaultVersionCacheMB(), "Size limit of the version cache in MB, or -1 for unlimited (env: THREEGPP_VERSION_CACHE_MB)")
+	tdocCache := fs.String("tdoc-cache", "", "Path to the on-demand meeting document (TDoc) cache (default: $XDG_CACHE_HOME/3gpp-mcp/tdocs.db)")
+	tdocCacheMB := fs.Int64("tdoc-cache-mb", defaultTDocCacheMB(), "Size limit of the meeting document cache in MB, or -1 for unlimited (env: THREEGPP_TDOC_CACHE_MB)")
 	fetchBudget := fs.Duration("fetch-budget", defaultFetchBudget(), "How long a tool call waits for an on-demand fetch before asking the caller to retry (env: THREEGPP_FETCH_BUDGET)")
 	_ = fs.Parse(args)
 
@@ -244,6 +260,18 @@ func cmdServe(args []string) {
 		} else {
 			defer store.Close()
 			src.Store = store
+		}
+		// The meeting document cache is a third SQLite file, opened and
+		// disabled independently of the version cache.
+		tdocs, err := tdocstore.Open(tdocstore.Options{
+			Path:       *tdocCache,
+			LimitBytes: *tdocCacheMB << 20,
+		})
+		if err != nil {
+			log.Printf("WARNING: on-demand fetching of meeting documents disabled: %v", err)
+		} else {
+			defer tdocs.Close()
+			src.TDocs = tdocs
 		}
 	}
 
