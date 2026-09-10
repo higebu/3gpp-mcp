@@ -11,6 +11,7 @@ import (
 	"github.com/higebu/3gpp-mcp/internal/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/specver"
+	"github.com/higebu/3gpp-mcp/internal/tdocstore"
 	"github.com/higebu/3gpp-mcp/internal/versionstore"
 )
 
@@ -20,7 +21,10 @@ type Source struct {
 	DB *db.DB
 	// Store is nil when on-demand fetching is unavailable, either because the
 	// cache file could not be opened or because it was turned off explicitly.
-	Store  *versionstore.Store
+	Store *versionstore.Store
+	// TDocs caches meeting documents fetched on demand. Nil disables the
+	// TDoc tools the same way a nil Store disables past versions.
+	TDocs  *tdocstore.Store
 	Client *http.Client
 	// Budget bounds how long a tool call waits for a fetch before telling the
 	// caller to retry. Zero means the versionstore default.
@@ -43,9 +47,14 @@ type FetchInProgressError struct {
 }
 
 func (e *FetchInProgressError) Error() string {
-	subject := fmt.Sprintf("%s v%s is", e.SpecID, e.Version)
+	// A meeting document has no version: SpecID alone names it.
+	name := e.SpecID
+	if e.Version != "" {
+		name += " v" + e.Version
+	}
+	subject := name + " is"
 	if e.Images {
-		subject = fmt.Sprintf("Images for %s v%s are", e.SpecID, e.Version)
+		subject = "Images for " + name + " are"
 	}
 	return subject + " being downloaded and converted. This takes up to a few minutes for a large specification. Call the same tool again to get the content."
 }
