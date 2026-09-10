@@ -29,6 +29,7 @@ make e2e                  # Playwright suite for web viewer JS behavior (CI job 
 - `internal/converter/docx/` — DOCX → Markdown parser; `internal/converter/pipeline/` — streaming download + convert worker pool
 - `internal/db/` — SQLite schema, queries, FTS5
 - `internal/versionstore/` — on-demand cache of spec versions not in the prebuilt database
+- `internal/tdoc/` — locating, downloading and converting meeting documents (TDocs); `internal/tdocstore/` — their on-demand cache; `internal/ondemand/` — the detached single-flight fetch helper both stores share
 - `internal/tools/` — MCP tool handlers; `internal/web/` — web viewer (reads through the same `tools.Source`, so it is version-aware)
 - `internal/specver/` — base-36 archive token (`k20`) ↔ dotted version (`20.2.0`)
 - `internal/structdiff/`, `internal/textdiff/` — compare_versions diff logic, shared with the web compare page
@@ -46,6 +47,18 @@ make e2e                  # Playwright suite for web viewer JS behavior (CI job 
   entries are evicted LRU, and a version's text and images evict as one unit.
   Images are fetched lazily on the first `get_image`/`list_images` call.
   OpenAPI YAML and cross-references are prebuilt-only.
+- **Meeting documents (TDocs) live in a third SQLite file**
+  (`$XDG_CACHE_HOME/3gpp-mcp/tdocs.db`, `internal/tdocstore`): never in the
+  main database and never in search. Entries are keyed by TDoc number or FTP
+  path and fetched by `internal/tdoc` — the group's DynaReport meeting index
+  gives the meeting whose TDoc range covers the number, and the document is
+  downloaded from that meeting's `Docs/<id>.zip` (the listing is cached 24h).
+  Conversion runs with `docx.ParseOptions{KeepPreamble: true}` so a CR cover
+  sheet / LS header survives as the `""` (preamble) section, and repeated
+  unnumbered headings are de-duplicated with `" (2)"` suffixes at store time.
+  A converter change that alters TDoc output needs a bump of
+  `tdocstore.cacheSchemaVersion`, which is separate from
+  `versionstore.cacheSchemaVersion`.
 - **OpenAPI search is a second FTS index.** `openapi_chunks` / `openapi_chunks_fts`
   (`db.OpenAPIIndexSchema`) hold one row per schema and per operation, derived
   from `openapi_specs` by `internal/openapiindex` and **rebuilt wholesale** —
