@@ -19,11 +19,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/higebu/3gpp-mcp/internal/converter/pipeline"
 	"github.com/higebu/3gpp-mcp/internal/db"
+	"github.com/higebu/3gpp-mcp/internal/ondemand"
 	"github.com/higebu/3gpp-mcp/internal/specver"
 	_ "modernc.org/sqlite"
 )
@@ -31,7 +31,7 @@ import (
 // ErrInProgress reports that a fetch did not finish within the caller's budget.
 // The fetch keeps running in the background, so repeating the same call later
 // returns the content.
-var ErrInProgress = errors.New("version fetch still in progress")
+var ErrInProgress = ondemand.ErrInProgress
 
 // ErrImagesEvicted reports that a version was evicted from the cache while its
 // images were downloading, so the newly fetched images could not be recorded.
@@ -44,11 +44,7 @@ const DefaultLimitBytes int64 = 1024 << 20 // 1 GiB
 
 // DefaultBudget is how long a caller waits for a fetch before being told to
 // come back. MCP clients time out well before a large spec finishes.
-const DefaultBudget = 60 * time.Second
-
-// maxFetchDuration bounds a detached background fetch. Large specs take a few
-// minutes to download and convert; anything beyond this is a stalled transfer.
-const maxFetchDuration = 30 * time.Minute
+const DefaultBudget = ondemand.DefaultBudget
 
 // DefaultFileName is the cache file created inside the XDG cache directory.
 const DefaultFileName = "versions.db"
@@ -108,8 +104,9 @@ type Store struct {
 	fetcher      Fetcher
 	imageFetcher ImageFetcher
 
-	mu       sync.Mutex
-	inflight map[string]*fetch
+	// group deduplicates in-flight fetches and detaches them from the
+	// caller's context.
+	group ondemand.Group
 }
 
 // Fetcher downloads and converts one archive entry. Only tests set it; the
@@ -119,13 +116,6 @@ type Fetcher func(ctx context.Context, sv *pipeline.SpecVersion) (db.Spec, []db.
 // ImageFetcher downloads one archive entry's images. Only tests set it; the
 // zero value uses the real pipeline.
 type ImageFetcher func(ctx context.Context, sv *pipeline.SpecVersion) ([]db.Image, error)
-
-// fetch tracks one in-progress download so concurrent callers asking for the
-// same version share a single download instead of racing.
-type fetch struct {
-	done chan struct{}
-	err  error
-}
 
 // Options configures a Store.
 type Options struct {
@@ -209,7 +199,6 @@ func Open(opts Options) (*Store, error) {
 		timeout:      opts.Timeout,
 		fetcher:      opts.Fetcher,
 		imageFetcher: opts.ImageFetcher,
-		inflight:     map[string]*fetch{},
 	}, nil
 }
 
@@ -488,92 +477,27 @@ func (s *Store) touch(specID, version string) {
 // caller's, and Ensure returns ErrInProgress. Repeating the call later joins
 // the same fetch and eventually returns the cached content. Concurrent callers
 // asking for the same version share one download.
-// specID and version are the keys callers will look the result up by; they win
-// over whatever the downloaded document says about itself, which for legacy
-// specs is often wrong or missing.
 func (s *Store) Ensure(ctx context.Context, specID, version string, sv *pipeline.SpecVersion, budget time.Duration) error {
 	cached, err := s.Has(specID, version)
-	if err != nil {
+	if err != nil || cached {
 		return err
 	}
-	if cached {
-		return nil
-	}
-	if budget <= 0 {
-		budget = DefaultBudget
-	}
-
 	key := specID + "@" + version
-	s.mu.Lock()
-	f, running := s.inflight[key]
-	if !running {
-		// Re-check under the lock: a fetch that completed between the Has
-		// call above and here has already been removed from inflight, and
-		// starting a fresh download for it would repeat minutes of work.
-		if cached, err := s.Has(specID, version); err != nil || cached {
-			s.mu.Unlock()
+	return s.group.Do(ctx, key, budget, func() (bool, error) { return s.Has(specID, version) }, func(ctx context.Context) error {
+		spec, sections, err := s.fetch(ctx, sv)
+		if err != nil {
 			return err
 		}
-		f = &fetch{done: make(chan struct{})}
-		s.inflight[key] = f
-		// The fetch outlives this request on purpose: a caller that gives up
-		// waiting should not throw away minutes of download and conversion.
-		// It still gets a generous deadline: the download path has no overall
-		// timeout of its own, so a stalled connection would otherwise keep
-		// this inflight entry - and every future caller - stuck forever.
-		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maxFetchDuration)
-		go func() {
-			defer cancel()
-			s.run(fetchCtx, key, specID, version, sv, f)
-		}()
-	}
-	s.mu.Unlock()
-
-	timer := time.NewTimer(budget)
-	defer timer.Stop()
-	select {
-	case <-f.done:
-		return f.err
-	case <-timer.C:
-		return fmt.Errorf("%w: %s v%s", ErrInProgress, specID, version)
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// run performs one fetch and publishes its outcome to everyone waiting on it.
-func (s *Store) run(ctx context.Context, key, specID, version string, sv *pipeline.SpecVersion, f *fetch) {
-	defer func() {
-		// The pipeline parses untrusted third-party binaries on a goroutine
-		// detached from any request, so a parser panic here would take down the
-		// whole server. Recover before close(f.done) publishes the outcome, and
-		// set f.err first so waiters do not report success for content that was
-		// never cached.
-		if r := recover(); r != nil {
-			f.err = fmt.Errorf("version fetch for %s v%s panicked: %v", specID, version, r)
-			// The fetch is detached, so the last waiter is often gone by
-			// the time a panic fires; log it or it is lost entirely.
-			log.Printf("warning: %v", f.err)
+		// specID and version are the keys callers look the result up by;
+		// they win over whatever the document says about itself, which for
+		// legacy specs is often wrong or missing.
+		spec.ID, spec.Version = specID, version
+		for i := range sections {
+			sections[i].SpecID = specID
+			sections[i].Version = version
 		}
-		s.mu.Lock()
-		delete(s.inflight, key)
-		s.mu.Unlock()
-		close(f.done)
-	}()
-
-	spec, sections, err := s.fetch(ctx, sv)
-	if err != nil {
-		f.err = err
-		return
-	}
-	spec.ID, spec.Version = specID, version
-	for i := range sections {
-		sections[i].SpecID = specID
-		sections[i].Version = version
-	}
-	if err := s.put(spec, sections); err != nil {
-		f.err = err
-	}
+		return s.put(spec, sections)
+	})
 }
 
 // fetch downloads and converts one archive entry. It is a field so tests can
@@ -653,79 +577,23 @@ func (s *Store) put(spec db.Spec, sections []db.Section) error {
 // repeating the call later returns the cached images.
 func (s *Store) EnsureImages(ctx context.Context, specID, version string, sv *pipeline.SpecVersion, budget time.Duration) error {
 	fetched, err := s.HasImages(specID, version)
-	if err != nil {
+	if err != nil || fetched {
 		return err
 	}
-	if fetched {
-		return nil
-	}
-	if budget <= 0 {
-		budget = DefaultBudget
-	}
-
 	// The "#" keeps this key disjoint from Ensure's section keys, so a section
 	// fetch and an image fetch of the same version never share an entry.
 	key := specID + "@" + version + "#images"
-	s.mu.Lock()
-	f, running := s.inflight[key]
-	if !running {
-		// Re-check under the lock: a fetch that completed between the HasImages
-		// call above and here has already been removed from inflight, and
-		// starting a fresh download for it would repeat minutes of work.
-		if fetched, err := s.HasImages(specID, version); err != nil || fetched {
-			s.mu.Unlock()
+	return s.group.Do(ctx, key, budget, func() (bool, error) { return s.HasImages(specID, version) }, func(ctx context.Context) error {
+		images, err := s.fetchImages(ctx, sv)
+		if err != nil {
 			return err
 		}
-		f = &fetch{done: make(chan struct{})}
-		s.inflight[key] = f
-		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maxFetchDuration)
-		go func() {
-			defer cancel()
-			s.runImages(fetchCtx, key, specID, version, sv, f)
-		}()
-	}
-	s.mu.Unlock()
-
-	timer := time.NewTimer(budget)
-	defer timer.Stop()
-	select {
-	case <-f.done:
-		return f.err
-	case <-timer.C:
-		return fmt.Errorf("%w: images for %s v%s", ErrInProgress, specID, version)
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// runImages performs one image fetch and publishes its outcome to everyone
-// waiting on it.
-func (s *Store) runImages(ctx context.Context, key, specID, version string, sv *pipeline.SpecVersion, f *fetch) {
-	defer func() {
-		// Same as run: recover a parser panic on this detached goroutine, and
-		// set f.err before close(f.done) publishes the outcome.
-		if r := recover(); r != nil {
-			f.err = fmt.Errorf("image fetch for %s v%s panicked: %v", specID, version, r)
-			log.Printf("warning: %v", f.err)
+		for i := range images {
+			images[i].SpecID = specID
+			images[i].Version = version
 		}
-		s.mu.Lock()
-		delete(s.inflight, key)
-		s.mu.Unlock()
-		close(f.done)
-	}()
-
-	images, err := s.fetchImages(ctx, sv)
-	if err != nil {
-		f.err = err
-		return
-	}
-	for i := range images {
-		images[i].SpecID = specID
-		images[i].Version = version
-	}
-	if err := s.putImages(specID, version, images); err != nil {
-		f.err = err
-	}
+		return s.putImages(specID, version, images)
+	})
 }
 
 // fetchImages downloads one archive entry's images. It is a field so tests can
