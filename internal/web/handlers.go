@@ -157,11 +157,11 @@ func (h *handler) initTemplates() {
 			return u
 		},
 		"refURL": refURL,
-		"tdocURL": func(id string) string {
-			return "/tdocs/" + url.PathEscape(id)
-		},
-		"tdocSectionURL": func(id, number string) string {
-			return "/tdocs/" + url.PathEscape(id) + "/sections/" + url.PathEscape(number)
+		// tdocSectionURL carries the meeting the document was looked up with:
+		// a document whose number resolves only when its meeting is named
+		// must be re-resolvable after the cache evicts it.
+		"tdocSectionURL": func(id, number, meeting string) string {
+			return "/tdocs/" + url.PathEscape(id) + "/sections/" + url.PathEscape(number) + meetingQuery(meeting)
 		},
 		// releaseLabel renders a bare release number as "Rel-18"; anything else
 		// is shown unchanged.

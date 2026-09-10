@@ -64,7 +64,7 @@ func TestHandleGetTDoc(t *testing.T) {
 			"[Source: " + reportPath + " — https://www.3gpp.org/ftp/tsg_ran/WG1_RL1/TSGR1_123/Report/Final_Minutes_report_RAN1%23123_v100.zip]",
 			"Title: Final Report of RAN1#123",
 			"Files: Final_Minutes_report_RAN1#123_v100.docx, TDoc_List.xlsx (converted: Final_Minutes_report_RAN1#123_v100.docx; the others are attachments)",
-			"Sections: preamble; 1 Opening of the meeting; Agreement",
+			"Sections: preamble; 1 (Opening of the meeting); Agreement",
 			"The chair opened the meeting.",
 			"Agreed.",
 		} {
@@ -77,7 +77,7 @@ func TestHandleGetTDoc(t *testing.T) {
 	t.Run("one section", func(t *testing.T) {
 		result, _, _ := handler(context.Background(), nil, GetTDocInput{TDocID: reportPath, SectionNumber: "1"})
 		text := getTextContent(result)
-		if result.IsError || !strings.Contains(text, "Section: 1 Opening of the meeting") || strings.Contains(text, "Agreed.") {
+		if result.IsError || !strings.Contains(text, "Section: 1 (Opening of the meeting)") || strings.Contains(text, "Agreed.") {
 			t.Errorf("got:\n%s", text)
 		}
 		result, _, _ = handler(context.Background(), nil, GetTDocInput{TDocID: reportPath, SectionNumber: "Preamble"})
@@ -151,6 +151,28 @@ func TestHandleGetTDoc_FetchOutcomes(t *testing.T) {
 		if !result.IsError || !strings.Contains(getTextContent(result), "not a TDoc number") {
 			t.Errorf("got %s", getTextContent(result))
 		}
+		// The cause survives on the error for callers that test for it.
+		_, err := src.TDoc(context.Background(), "TS 23.501", "")
+		var unavailable *DocumentUnavailableError
+		if !errors.As(err, &unavailable) || !errors.Is(err, tdoc.ErrNotFound) {
+			t.Errorf("err = %v, want DocumentUnavailableError wrapping tdoc.ErrNotFound", err)
+		}
+	})
+
+	t.Run("section labels round-trip", func(t *testing.T) {
+		src := tdocSource(t, fakeFetch)
+		handler := HandleGetTDoc(src)
+		result, _, _ := handler(context.Background(), nil, GetTDocInput{TDocID: reportPath})
+		for _, label := range []string{"1", "Agreement", "preamble"} {
+			r, _, _ := handler(context.Background(), nil, GetTDocInput{TDocID: reportPath, SectionNumber: label})
+			if r.IsError {
+				t.Errorf("section_number %q from the Sections line: %s", label, getTextContent(r))
+			}
+		}
+		if got := sectionLabel(db.Section{Number: "Agreement (2)", Title: "Agreement"}); got != "Agreement (2)" {
+			t.Errorf("de-duplicated label = %q", got)
+		}
+		_ = result
 	})
 }
 

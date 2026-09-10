@@ -310,7 +310,7 @@ func TestResolve(t *testing.T) {
 	})
 
 	t.Run("rejects foreign and traversing paths", func(t *testing.T) {
-		for _, req := range []string{"https://example.com/ftp/x.zip", "../etc/passwd", "tsg_ran/../../x.zip", "TS 23.501"} {
+		for _, req := range []string{"https://example.com/ftp/x.zip", "//evil.example/ftp/x.zip", "../etc/passwd", "tsg_ran/../../x.zip", "TS 23.501"} {
 			if doc, err := Resolve(ctx, client, req, "", false); err == nil {
 				t.Errorf("Resolve(%q) = %+v, want error", req, doc)
 			}
@@ -409,7 +409,7 @@ func TestFetch(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f, err := Fetch(ctx, client, doc, 0)
+		f, err := Fetch(ctx, client, doc)
 		if err != nil {
 			t.Fatalf("Fetch: %v", err)
 		}
@@ -437,7 +437,7 @@ func TestFetch(t *testing.T) {
 
 	t.Run("prefers the file named after the TDoc", func(t *testing.T) {
 		doc, _ := Resolve(ctx, client, "R1-2508301", "", false)
-		f, err := Fetch(ctx, client, doc, 0)
+		f, err := Fetch(ctx, client, doc)
 		if err != nil {
 			t.Fatalf("Fetch: %v", err)
 		}
@@ -451,7 +451,7 @@ func TestFetch(t *testing.T) {
 
 	t.Run("falls back to a nested zip", func(t *testing.T) {
 		doc, _ := Resolve(ctx, client, "R1-2509000", "", false)
-		f, err := Fetch(ctx, client, doc, 0)
+		f, err := Fetch(ctx, client, doc)
 		if err != nil {
 			t.Fatalf("Fetch: %v", err)
 		}
@@ -462,7 +462,7 @@ func TestFetch(t *testing.T) {
 
 	t.Run("unsupported format lists the files", func(t *testing.T) {
 		doc, _ := Resolve(ctx, client, "R1-2509001", "", false)
-		_, err := Fetch(ctx, client, doc, 0)
+		_, err := Fetch(ctx, client, doc)
 		if !errors.Is(err, ErrUnsupported) || !strings.Contains(err.Error(), "slides.pptx") {
 			t.Errorf("err = %v", err)
 		}
@@ -472,7 +472,7 @@ func TestFetch(t *testing.T) {
 		defer func(orig func(string) (string, error)) { lookPath = orig }(lookPath)
 		lookPath = func(string) (string, error) { return "", errors.New("not found") }
 		doc, _ := Resolve(ctx, client, "R1-2509002", "", false)
-		_, err := Fetch(ctx, client, doc, 0)
+		_, err := Fetch(ctx, client, doc)
 		if !errors.Is(err, ErrNeedsLibreOffice) {
 			t.Errorf("err = %v", err)
 		}
@@ -480,14 +480,14 @@ func TestFetch(t *testing.T) {
 
 	t.Run("corrupt archive", func(t *testing.T) {
 		doc, _ := Resolve(ctx, client, "R1-2509003", "", false)
-		if _, err := Fetch(ctx, client, doc, 0); err == nil {
-			t.Error("expected an error")
+		if _, err := Fetch(ctx, client, doc); !errors.Is(err, ErrUnsupported) {
+			t.Errorf("err = %v, want ErrUnsupported", err)
 		}
 	})
 
 	t.Run("bare docx by path", func(t *testing.T) {
 		doc, _ := Resolve(ctx, client, "tsg_ran/WG1_RL1/TSGR1_123/Report/report.docx", "", false)
-		f, err := Fetch(ctx, client, doc, 0)
+		f, err := Fetch(ctx, client, doc)
 		if err != nil {
 			t.Fatalf("Fetch: %v", err)
 		}
@@ -498,7 +498,7 @@ func TestFetch(t *testing.T) {
 
 	t.Run("missing", func(t *testing.T) {
 		doc, _ := Resolve(ctx, client, "R1-2509700", "", false)
-		if _, err := Fetch(ctx, client, doc, 0); err == nil {
+		if _, err := Fetch(ctx, client, doc); err == nil {
 			t.Error("expected an error for a 404")
 		}
 	})

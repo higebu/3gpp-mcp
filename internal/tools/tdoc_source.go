@@ -16,11 +16,16 @@ import (
 type DocumentUnavailableError struct {
 	ID     string
 	Reason string
+	// Err is the underlying error, when there is one, so callers can still
+	// test for tdoc.ErrNotFound, tdoc.ErrUnsupported or a cancelled context.
+	Err error
 }
 
 func (e *DocumentUnavailableError) Error() string {
 	return fmt.Sprintf("%s is not available: %s", e.ID, e.Reason)
 }
+
+func (e *DocumentUnavailableError) Unwrap() error { return e.Err }
 
 // TDoc returns a meeting document's record, fetching the document on demand.
 // request is a TDoc number or an FTP path; meeting optionally names the
@@ -43,14 +48,14 @@ func (s *Source) TDoc(ctx context.Context, request, meeting string) (*tdocstore.
 
 	doc, err := tdoc.Resolve(ctx, s.Client, request, meeting, s.UseCache)
 	if err != nil {
-		return nil, &DocumentUnavailableError{ID: request, Reason: err.Error()}
+		return nil, &DocumentUnavailableError{ID: request, Reason: err.Error(), Err: err}
 	}
 	switch err := s.TDocs.Ensure(ctx, doc, s.Budget); {
 	case err == nil:
 	case errors.Is(err, tdocstore.ErrInProgress):
 		return nil, &FetchInProgressError{SpecID: doc.ID}
 	default:
-		return nil, &DocumentUnavailableError{ID: doc.ID, Reason: err.Error()}
+		return nil, &DocumentUnavailableError{ID: doc.ID, Reason: err.Error(), Err: err}
 	}
 	return s.cachedTDoc(doc.ID)
 }

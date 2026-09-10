@@ -16,7 +16,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/higebu/3gpp-mcp/internal/converter/docx"
 	"github.com/higebu/3gpp-mcp/internal/converter/pipeline"
@@ -65,13 +64,10 @@ type member struct {
 // that is where a change request's cover sheet and a liaison statement's
 // header live. EMF/WMF figures are converted to PNG and .doc files to .docx
 // when LibreOffice is installed.
-func Fetch(ctx context.Context, client *http.Client, doc Document, timeout time.Duration) (*Fetched, error) {
-	if client == nil {
-		if timeout == 0 {
-			timeout = 30 * time.Second
-		}
-		client = &http.Client{Timeout: timeout}
-	}
+//
+// The download has no timeout of its own — a large report must not be cut
+// off mid-transfer — so callers bound it through ctx.
+func Fetch(ctx context.Context, client *http.Client, doc Document) (*Fetched, error) {
 	data, err := pipeline.DownloadZip(ctx, client, doc.URL())
 	if err != nil {
 		return nil, fmt.Errorf("download %s: %w", doc.URL(), err)
@@ -98,7 +94,9 @@ func Fetch(ctx context.Context, client *http.Client, doc Document, timeout time.
 	default:
 		r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 		if err != nil {
-			return nil, fmt.Errorf("%s is not a zip archive: %w", base, err)
+			// A PDF or spreadsheet published bare, or a corrupt archive:
+			// either way nothing here converts.
+			return nil, fmt.Errorf("%w: %s is not a zip archive (%v)", ErrUnsupported, base, err)
 		}
 		members, err := listMembers(r)
 		if err != nil {

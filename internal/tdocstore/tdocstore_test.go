@@ -133,6 +133,20 @@ func TestEnsureAndRead(t *testing.T) {
 	}
 }
 
+// TestDedupeNumbersAvoidsLiteralCollision covers a repeated heading whose
+// generated suffix already exists as a literal heading: every number must
+// still be unique, or the UNIQUE constraint fails the whole insert.
+func TestDedupeNumbersAvoidsLiteralCollision(t *testing.T) {
+	in := []db.Section{{Number: "Note"}, {Number: "Note (2)"}, {Number: "Note"}, {Number: "Note"}, {Number: "Note (2)"}}
+	var got []string
+	for _, s := range dedupeNumbers(in) {
+		got = append(got, s.Number)
+	}
+	if want := "Note|Note (2)|Note (3)|Note (4)|Note (2) (2)"; strings.Join(got, "|") != want {
+		t.Errorf("got %q, want %q", strings.Join(got, "|"), want)
+	}
+}
+
 func TestEnsureBudgetAndJoin(t *testing.T) {
 	release := make(chan struct{})
 	s := openStore(t, DefaultLimitBytes, func(_ context.Context, d tdoc.Document) (*tdoc.Fetched, error) {

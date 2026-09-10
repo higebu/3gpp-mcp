@@ -173,6 +173,26 @@ func TestHandleTDoc(t *testing.T) {
 	}
 }
 
+// TestHandleTDoc_MeetingCarried checks that a meeting named on the request
+// is carried on every in-page link, so a document that resolves only with
+// its meeting stays reachable after the cache evicts it.
+func TestHandleTDoc_MeetingCarried(t *testing.T) {
+	ts, _ := setupTDocServer(t, cannedTDoc)
+	_, body := get(t, ts.URL+"/tdocs/"+url.PathEscape(reportPath)+"/sections/1?meeting=RAN1%23123")
+	for _, want := range []string{
+		`/sections/2?meeting=RAN1%23123"`,
+		`/sections/?meeting=RAN1%23123"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
+	}
+	_, body = get(t, ts.URL+"/tdocs/"+url.PathEscape(reportPath)+"/sections/?meeting=RAN1%23123")
+	if !strings.Contains(body, `/images/image1.png?meeting=RAN1%23123"`) {
+		t.Errorf("image URL must carry the meeting, got:\n%s", body)
+	}
+}
+
 func TestHandleTDocImage(t *testing.T) {
 	ts, _ := setupTDocServer(t, cannedTDoc)
 	base := ts.URL + "/tdocs/" + url.PathEscape(reportPath) + "/images/"

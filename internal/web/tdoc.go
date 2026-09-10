@@ -34,6 +34,16 @@ type tdocData struct {
 	Current  string
 	Prev     *db.Section
 	Next     *db.Section
+	// Meeting is the meeting named in the request, carried on every link.
+	Meeting string
+}
+
+// meetingQuery renders the query string that carries a meeting name.
+func meetingQuery(meeting string) string {
+	if meeting == "" {
+		return ""
+	}
+	return "?meeting=" + url.QueryEscape(meeting)
 }
 
 // handleTDocLookup shows the lookup form; with an id it redirects to the
@@ -101,6 +111,7 @@ func (h *handler) renderTDocPage(w http.ResponseWriter, r *http.Request, id, num
 	rendered := renderSections(sections, renderOpts{
 		specID:     rec.ID,
 		imageBase:  "/tdocs/" + url.PathEscape(rec.ID) + "/images/",
+		imageQuery: meetingQuery(meeting),
 		targetInfo: h.targetInfo(r.Context(), "", "", nil),
 	})
 	prev, next := adjacentSections(toc, number)
@@ -112,6 +123,7 @@ func (h *handler) renderTDocPage(w http.ResponseWriter, r *http.Request, id, num
 		Current:  number,
 		Prev:     prev,
 		Next:     next,
+		Meeting:  meeting,
 	}
 	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "tdoc", Data: data}); err != nil {
 		log.Printf("template error: %v", err)

@@ -123,10 +123,10 @@ type Options struct {
 	// LimitBytes caps the total size of cached content. A negative value
 	// disables eviction; zero keeps only the most recently fetched document.
 	LimitBytes int64
-	// Client is used for downloads. Nil means a default client.
+	// Client is used for downloads. Nil means a default client. Downloads
+	// are bounded by the detached fetch's own deadline
+	// (ondemand.DefaultMaxDuration), not by a client timeout.
 	Client *http.Client
-	// Timeout bounds a single download. Zero means the pipeline default.
-	Timeout time.Duration
 	// Fetcher replaces the download-and-convert step. Only tests set it.
 	Fetcher Fetcher
 }
@@ -136,7 +136,6 @@ type Store struct {
 	conn       *sql.DB
 	limitBytes int64
 	client     *http.Client
-	timeout    time.Duration
 	fetcher    Fetcher
 	group      ondemand.Group
 
@@ -202,7 +201,6 @@ func Open(opts Options) (*Store, error) {
 		conn:       conn,
 		limitBytes: opts.LimitBytes,
 		client:     opts.Client,
-		timeout:    opts.Timeout,
 		fetcher:    opts.Fetcher,
 	}, nil
 }
@@ -291,7 +289,7 @@ func (s *Store) fetch(ctx context.Context, doc tdoc.Document) (*tdoc.Fetched, er
 	if s.fetcher != nil {
 		return s.fetcher(ctx, doc)
 	}
-	return tdoc.Fetch(ctx, s.client, doc, s.timeout)
+	return tdoc.Fetch(ctx, s.client, doc)
 }
 
 // put writes a fetched document into the cache and enforces the size limit.
@@ -361,15 +359,23 @@ func (s *Store) put(doc tdoc.Document, f *tdoc.Fetched) error {
 // dedupeNumbers makes section numbers unique within a document. Meeting
 // documents repeat unnumbered headings ("Agreement", "Conclusion"), whose
 // number is their title; a repeat gets " (2)", " (3)", ... appended so every
-// section stays addressable.
+// section stays addressable. The suffixed number is checked against every
+// number already taken — a heading literally titled "Note (2)" exists in the
+// wild — so the UNIQUE(tdoc_id, number) constraint never fails the insert.
 func dedupeNumbers(sections []db.Section) []db.Section {
-	seen := map[string]int{}
+	used := make(map[string]bool, len(sections))
 	out := make([]db.Section, len(sections))
 	for i, sec := range sections {
-		seen[sec.Number]++
-		if n := seen[sec.Number]; n > 1 {
-			sec.Number = fmt.Sprintf("%s (%d)", sec.Number, n)
+		if used[sec.Number] {
+			for n := 2; ; n++ {
+				candidate := fmt.Sprintf("%s (%d)", sec.Number, n)
+				if !used[candidate] {
+					sec.Number = candidate
+					break
+				}
+			}
 		}
+		used[sec.Number] = true
 		out[i] = sec
 	}
 	return out

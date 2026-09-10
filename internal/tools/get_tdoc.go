@@ -14,7 +14,7 @@ import (
 type GetTDocInput struct {
 	TDocID        string `json:"tdoc_id" jsonschema:"required,TDoc number (e.g. R1-2509715, S2-2510076, RP-253000), or the path of a zip/.docx under https://www.3gpp.org/ftp/ for a document that has no TDoc number, such as a meeting report (tsg_ran/WG1_RL1/TSGR1_123/Report/Final_Minutes_report_RAN1#123_v100.zip)"`
 	Meeting       string `json:"meeting,omitempty" jsonschema:"Meeting the TDoc belongs to, only needed when the number is not found by itself: R1-123, RAN1#123, the folder name TSGR1_123, or the folder path"`
-	SectionNumber string `json:"section_number,omitempty" jsonschema:"Section to read, as listed in the document header's table of contents; the cover sheet / header section is named preamble. Default: the whole document"`
+	SectionNumber string `json:"section_number,omitempty" jsonschema:"Section to read: the number exactly as listed in the header's Sections line (the part before the parenthesised title, e.g. 1, 2.3, Agreement (2)); the cover sheet / header section is named preamble. Default: the whole document"`
 	Offset        int    `json:"offset,omitempty" jsonschema:"Start line number (0-based, default: 0)"`
 	MaxLines      int    `json:"max_lines,omitempty" jsonschema:"Maximum number of lines to return (default: 200)"`
 	MaxChars      int    `json:"max_chars,omitempty" jsonschema:"Maximum number of characters to return (can be combined with max_lines)"`
@@ -120,14 +120,16 @@ func tdocSectionList(sections []db.Section) string {
 	return "Sections: " + strings.Join(labels, "; ")
 }
 
-// sectionLabel names a section the way section_number accepts it.
+// sectionLabel names a section by the exact section_number that reads it,
+// with the title in parentheses when the number does not already carry it:
+// "1 (Opening of the meeting)", "Agreement", "Agreement (2)", "preamble".
 func sectionLabel(s db.Section) string {
-	switch s.Number {
-	case "":
+	switch {
+	case s.Number == "":
 		return preambleName
-	case s.Title:
+	case s.Number == s.Title, strings.HasPrefix(s.Number, s.Title+" ("):
 		return s.Number
 	default:
-		return s.Number + " " + s.Title
+		return s.Number + " (" + s.Title + ")"
 	}
 }

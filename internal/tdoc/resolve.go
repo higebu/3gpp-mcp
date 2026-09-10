@@ -130,7 +130,10 @@ func documentPath(request string) (string, bool) {
 	if !strings.Contains(p, "/") {
 		return "", false
 	}
-	if u, err := url.Parse(p); err == nil && u.Scheme != "" {
+	// A URL — including a protocol-relative "//host/..." one, which parses
+	// with an empty scheme — must name the 3GPP site, or a request for a
+	// foreign file would silently resolve to a different file under BaseURL.
+	if u, err := url.Parse(p); err == nil && (u.Scheme != "" || u.Host != "") {
 		if !strings.EqualFold(u.Host, "www.3gpp.org") && !strings.EqualFold(u.Host, "3gpp.org") {
 			return "", false
 		}

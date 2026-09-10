@@ -67,27 +67,21 @@ func (g *Group) Do(ctx context.Context, key string, budget time.Duration, done f
 		maxDuration = DefaultMaxDuration
 	}
 
-	g.mu.Lock()
-	if g.inflight == nil {
-		g.inflight = map[string]*call{}
-	}
-	c, running := g.inflight[key]
-	if !running {
-		if done != nil {
-			if ok, err := done(); err != nil || ok {
-				g.mu.Unlock()
-				return err
-			}
+	c, running := g.join(key)
+	if !running && done != nil {
+		// done is a store query that may wait behind a running fetch's
+		// insert transaction, so it runs outside the lock: holding the lock
+		// meanwhile would stall every caller of every other key. The key is
+		// re-checked afterwards, as another caller may have started the
+		// fetch in between.
+		if ok, err := done(); err != nil || ok {
+			return err
 		}
-		c = &call{done: make(chan struct{})}
-		g.inflight[key] = c
-		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maxDuration)
-		go func() {
-			defer cancel()
-			g.run(fetchCtx, key, c, fn)
-		}()
+		c, running = g.join(key)
 	}
-	g.mu.Unlock()
+	if !running {
+		c = g.start(ctx, key, maxDuration, fn)
+	}
 
 	timer := time.NewTimer(budget)
 	defer timer.Stop()
@@ -99,6 +93,35 @@ func (g *Group) Do(ctx context.Context, key string, budget time.Duration, done f
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// join returns the in-flight call for key, if any.
+func (g *Group) join(key string) (*call, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	c, ok := g.inflight[key]
+	return c, ok
+}
+
+// start registers a fetch for key and runs fn detached from ctx, unless a
+// fetch for key was registered meanwhile, which is then joined instead.
+func (g *Group) start(ctx context.Context, key string, maxDuration time.Duration, fn func(ctx context.Context) error) *call {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if c, ok := g.inflight[key]; ok {
+		return c
+	}
+	if g.inflight == nil {
+		g.inflight = map[string]*call{}
+	}
+	c := &call{done: make(chan struct{})}
+	g.inflight[key] = c
+	fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maxDuration)
+	go func() {
+		defer cancel()
+		g.run(fetchCtx, key, c, fn)
+	}()
+	return c
 }
 
 // run performs one fetch and publishes its outcome to everyone waiting.
