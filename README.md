@@ -115,7 +115,7 @@ Browse specifications in your browser by adding `--web` to the HTTP transport:
 # Web viewer:   http://localhost:8080/
 ```
 
-Features: spec list with filtering, section viewer with TOC sidebar, full-text search with pagination, past-version browsing (versions are listed per spec and downloaded on demand, like the MCP tools), version comparison (structural summary and per-section diffs), embedded images, meeting documents (TDocs) fetched on demand at `/tdocs`, cross-reference links, OpenAPI definitions with syntax highlighting, KaTeX rendering of the [LaTeX formulas](#formulas) the converter emits, dark mode, responsive design. Code blocks are syntax-highlighted per notation — ASN.1, Diameter, SIP/RTSP, SDP and XML (see [Code blocks](#code-blocks)).
+Features: spec list with filtering, section viewer with TOC sidebar, full-text search with pagination, past-version browsing (versions are listed per spec and downloaded on demand, like the MCP tools), version comparison (structural summary and per-section diffs), embedded images, meeting lists and documents (TDocs) fetched on demand at `/meetings` and `/tdocs`, cross-reference links, OpenAPI definitions with syntax highlighting, KaTeX rendering of the [LaTeX formulas](#formulas) the converter emits, dark mode, responsive design. Code blocks are syntax-highlighted per notation — ASN.1, Diameter, SIP/RTSP, SDP and XML (see [Code blocks](#code-blocks)).
 
 #### WebMCP
 
@@ -356,6 +356,8 @@ image format: `![Figure](image://NAME?w=&h=)` in body text and
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
+| `list_meetings` | List a group's meetings, newest first, with codes, dates, TDoc ranges and FTP folders; without a group, the supported groups | `group` (`R1`, `RAN1`, `SA2`, ...), `limit`, `offset` (all optional) |
+| `list_tdocs` | List a meeting's documents from its official TDoc list, with type, status, source, agenda item, title and CR/LS details | `meeting` (required): `R1-123`, `RAN1#123` or the folder path; `group`, `agenda_item`, `type`, `status`, `source`, `spec`, `query`, `details`, `limit`, `offset` (all optional) |
 | `get_tdoc` | Read a meeting document (TDoc) as Markdown | `tdoc_id` (required): TDoc number (`R1-2509715`) or an FTP path (`tsg_ran/WG1_RL1/TSGR1_123/Report/Final_Minutes_report_RAN1#123_v100.zip`), `meeting`, `section_number`, `offset`, `max_lines`, `max_chars` (all optional) |
 
 TDocs are the working documents of a 3GPP meeting: contributions, change
@@ -368,7 +370,18 @@ number falls in no listed range. A document with no TDoc number — a meeting
 report, for instance — is named by its path under
 <https://www.3gpp.org/ftp/> instead.
 
-Converted documents are kept in their own size-bounded cache
+`list_meetings` reads the same DynaReport page, and `list_tdocs` the
+`TDoc_List_Meeting_<group>#<n>.xlsx` a meeting publishes in its `Docs/`
+folder — the secretary's record of every document's type, status (`agreed`,
+`noted`, `revised`, ...), source, agenda item, revision chain, and for a CR
+the spec, CR number and category, for an LS the addressees. Without filters
+the output opens with the agenda items and their document counts; `query` is
+a full-text search over titles, sources, abstracts, agenda item descriptions
+and work items, scoped to that meeting. The list is re-downloaded daily while
+the meeting is less than 30 days past its end date and kept as final after
+that.
+
+Converted documents and TDoc lists are kept in their own size-bounded cache
 (`tdocs.db`, see [`--tdoc-cache`](#serve)), separate from the main database:
 TDocs are never imported into it and `search` does not cover them.
 
@@ -564,13 +577,14 @@ spec.
 
 The query commands (`list-specs`, `list-versions`, `get-toc`, `get-section`,
 `get-asn1`, `compare-versions`, `search`, `list-openapi`, `get-openapi`,
-`search-openapi`, `get-references`, `list-images`, `get-image`, `get-tdoc`)
-mirror the MCP read tools 1:1, so
+`search-openapi`, `get-references`, `list-images`, `get-image`,
+`list-meetings`, `list-tdocs`, `get-tdoc`) mirror the MCP read tools 1:1, so
 the database can be inspected and scripted from a shell without an MCP client:
 
 ```bash
 3gpp-mcp search --db data/3gpp.db --limit 3 "AMF AND authentication" | jq '.results[].section_number'
 3gpp-mcp get-section --db data/3gpp.db "TS 23.501" 5.15.2 | less
+3gpp-mcp list-tdocs --db data/3gpp.db --type CR --status agreed --spec 38.214 R1-123
 3gpp-mcp get-tdoc --db data/3gpp.db R1-2509715 | less
 ```
 
@@ -589,9 +603,12 @@ Conventions shared by all of them:
   cache to report `cached` availability, but will not create one).
 - `get-tdoc` takes a TDoc number or an FTP path and an optional section
   ([`preamble`](#meeting-documents-tdocs) for a CR cover sheet or an LS
-  header), plus `--meeting`, and shares `serve`'s meeting-document flags
-  `--no-fetch`, `--tdoc-cache`, `--tdoc-cache-mb` and `--fetch-budget`. It
-  reads its own cache only, never the version cache.
+  header), plus `--meeting`; `list-meetings` takes a group and `list-tdocs` a
+  meeting with the same filters as the tool (`--agenda-item`, `--type`,
+  `--status`, `--source`, `--spec`, `--query`, `--details`). The three share
+  `serve`'s meeting-document flags `--no-fetch`, `--tdoc-cache`,
+  `--tdoc-cache-mb` and `--fetch-budget` and read their own cache only, never
+  the version cache.
 - Every command takes `--db` (default `3gpp.db`).
 
 ## Environment Variables

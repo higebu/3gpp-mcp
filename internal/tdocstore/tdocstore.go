@@ -129,15 +129,18 @@ type Options struct {
 	Client *http.Client
 	// Fetcher replaces the download-and-convert step. Only tests set it.
 	Fetcher Fetcher
+	// ListFetcher replaces the TDoc list download. Only tests set it.
+	ListFetcher ListFetcher
 }
 
 // Store is a size-bounded cache of converted meeting documents.
 type Store struct {
-	conn       *sql.DB
-	limitBytes int64
-	client     *http.Client
-	fetcher    Fetcher
-	group      ondemand.Group
+	conn        *sql.DB
+	limitBytes  int64
+	client      *http.Client
+	fetcher     Fetcher
+	listFetcher ListFetcher
+	group       ondemand.Group
 
 	// mu serializes put against evict so a document is never evicted
 	// between its insert and the eviction pass that must keep it.
@@ -198,10 +201,11 @@ func Open(opts Options) (*Store, error) {
 	}
 
 	return &Store{
-		conn:       conn,
-		limitBytes: opts.LimitBytes,
-		client:     opts.Client,
-		fetcher:    opts.Fetcher,
+		conn:        conn,
+		limitBytes:  opts.LimitBytes,
+		client:      opts.Client,
+		fetcher:     opts.Fetcher,
+		listFetcher: opts.ListFetcher,
 	}, nil
 }
 
@@ -235,7 +239,7 @@ func migrateAndCreate(ctx context.Context, c *sql.Conn) error {
 		return fmt.Errorf("read tdoc cache generation: %w", err)
 	}
 	if generation != cacheSchemaVersion {
-		for _, table := range []string{"tdoc_images", "tdoc_sections", "tdocs"} {
+		for _, table := range append(listTables, "tdoc_images", "tdoc_sections", "tdocs") {
 			if _, err := c.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 				return fmt.Errorf("reset tdoc cache: %w", err)
 			}
@@ -244,8 +248,10 @@ func migrateAndCreate(ctx context.Context, c *sql.Conn) error {
 			return fmt.Errorf("stamp tdoc cache generation: %w", err)
 		}
 	}
-	if _, err := c.ExecContext(ctx, schema); err != nil {
-		return fmt.Errorf("create tdoc cache schema: %w", err)
+	for _, ddl := range []string{schema, listSchema} {
+		if _, err := c.ExecContext(ctx, ddl); err != nil {
+			return fmt.Errorf("create tdoc cache schema: %w", err)
+		}
 	}
 	return nil
 }

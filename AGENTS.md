@@ -58,7 +58,18 @@ make e2e                  # Playwright suite for web viewer JS behavior (CI job 
   unnumbered headings are de-duplicated with `" (2)"` suffixes at store time.
   A converter change that alters TDoc output needs a bump of
   `tdocstore.cacheSchemaVersion`, which is separate from
-  `versionstore.cacheSchemaVersion`.
+  `versionstore.cacheSchemaVersion`. The same file holds **meeting TDoc lists**
+  (`tdoc_lists` / `tdoc_entries`, plus `tdoc_entries_fts` — the only FTS
+  index there, scoped to one meeting per query): `internal/tdoc/tdoclist.go`
+  reads the `TDoc_List_Meeting_<group>#<n>.xlsx` from the meeting's `Docs/`
+  folder with its own minimal SpreadsheetML reader (`xlsx.go`, no
+  dependency), matching columns by header text because the column set has
+  grown over the years. The file name is derived from the DynaReport title
+  and the folder listing is the fallback. A list is re-fetched when older
+  than the listing cache TTL and the meeting ended less than
+  `tdocstore.ListFreshFor` ago; a failed refresh keeps serving the stale copy.
+  At most `tdocstore.MaxLists` lists are kept, LRU, independent of the
+  byte limit on documents.
 - **OpenAPI search is a second FTS index.** `openapi_chunks` / `openapi_chunks_fts`
   (`db.OpenAPIIndexSchema`) hold one row per schema and per operation, derived
   from `openapi_specs` by `internal/openapiindex` and **rebuilt wholesale** —

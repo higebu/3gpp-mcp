@@ -25,6 +25,7 @@ import (
 	"github.com/higebu/3gpp-mcp/internal/asn1index"
 	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/structdiff"
+	"github.com/higebu/3gpp-mcp/internal/tdoc"
 	"github.com/higebu/3gpp-mcp/internal/tdocstore"
 	"github.com/higebu/3gpp-mcp/internal/textdiff"
 	"github.com/higebu/3gpp-mcp/internal/tools"
@@ -1028,5 +1029,98 @@ func runGetTDoc(ctx context.Context, out, errOut io.Writer, src *tools.Source, r
 	for _, s := range sections {
 		fmt.Fprintf(out, "%s\n\n", s.Content)
 	}
+	return nil
+}
+
+func cmdListMeetings(args []string) {
+	fs := flag.NewFlagSet("list-meetings", flag.ExitOnError)
+	qf := addQueryFlags(fs, true)
+	limit := fs.Int("limit", 0, "Maximum number of meetings to print, newest first (default: 20)")
+	offset := fs.Int("offset", 0, "Number of meetings to skip")
+	_ = fs.Parse(args)
+	if fs.NArg() > 1 {
+		fmt.Fprintln(os.Stderr, "Usage: 3gpp-mcp list-meetings [options] [group]")
+		fmt.Fprintln(os.Stderr, "Options must come before positional arguments.")
+		os.Exit(1)
+	}
+
+	runQuery("list-meetings", func(ctx context.Context) error {
+		src, cleanup, err := qf.openTDocSource()
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		return runListMeetings(ctx, os.Stdout, src, fs.Arg(0), *limit, *offset)
+	})
+}
+
+func runListMeetings(ctx context.Context, out io.Writer, src *tools.Source, group string, limit, offset int) error {
+	if group == "" {
+		fmt.Fprint(out, tools.FormatGroups(tdoc.Groups()))
+		return nil
+	}
+	g, meetings, err := src.Meetings(ctx, group)
+	if err != nil {
+		return err
+	}
+	fmt.Fprint(out, tools.FormatMeetings(g, meetings, limit, offset))
+	return nil
+}
+
+func cmdListTDocs(args []string) {
+	fs := flag.NewFlagSet("list-tdocs", flag.ExitOnError)
+	qf := addQueryFlags(fs, true)
+	group := fs.String("group", "", "Group of the meeting (R1, RAN1, ...), only needed when the meeting name does not carry it")
+	var f tdocstore.Filter
+	fs.StringVar(&f.AgendaItem, "agenda-item", "", "Agenda item to list, with its sub-items")
+	fs.StringVar(&f.Type, "type", "", "Document type (CR, LS in, discussion, ...)")
+	fs.StringVar(&f.Status, "status", "", "Outcome (agreed, noted, revised, ...)")
+	fs.StringVar(&f.Source, "source", "", "Company or group named in the source (substring)")
+	fs.StringVar(&f.Spec, "spec", "", "Specification a CR or draft changes (38.331)")
+	fs.StringVar(&f.Query, "query", "", "Full-text query over title, source, abstract, agenda item description and work items")
+	details := fs.Bool("details", false, "Also print abstract, work items, clauses affected and LS addressees")
+	fs.IntVar(&f.Limit, "limit", 0, "Maximum number of documents to print (default: 50)")
+	fs.IntVar(&f.Offset, "offset", 0, "Number of matching documents to skip")
+	_ = fs.Parse(args)
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "Usage: 3gpp-mcp list-tdocs [options] <meeting>")
+		fmt.Fprintln(os.Stderr, "Options must come before positional arguments.")
+		os.Exit(1)
+	}
+
+	runQuery("list-tdocs", func(ctx context.Context) error {
+		src, cleanup, err := qf.openTDocSource()
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		return runListTDocs(ctx, os.Stdout, os.Stderr, src, fs.Arg(0), *group, f, *details)
+	})
+}
+
+func runListTDocs(ctx context.Context, out, errOut io.Writer, src *tools.Source, meeting, group string, f tdocstore.Filter, details bool) error {
+	if f.Limit <= 0 {
+		f.Limit = 50
+	}
+	var ml *tools.MeetingList
+	err := waitForFetch(ctx, errOut, func() error {
+		var err error
+		ml, err = src.TDocList(ctx, meeting, group)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	res, err := src.TDocs.ListEntries(ml.Meeting.Dir, f)
+	if err != nil {
+		return err
+	}
+	var agenda []tdocstore.AgendaItem
+	if f.IsEmpty() && f.Offset <= 0 {
+		if agenda, err = src.TDocs.AgendaItems(ml.Meeting.Dir); err != nil {
+			return err
+		}
+	}
+	fmt.Fprint(out, tools.FormatTDocList(ml, f, res, agenda, details))
 	return nil
 }

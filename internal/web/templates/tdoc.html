@@ -2,7 +2,7 @@
 <header class="spec-header tdoc-header">
     <div class="spec-header-id">
         <h1 class="spec-header-title">{{.Doc.ID}}</h1>
-        {{if .Doc.MeetingTitle}}<span class="spec-header-version">{{.Doc.MeetingTitle}}{{if .Doc.MeetingCode}} ({{.Doc.MeetingCode}}){{end}}</span>{{end}}
+        {{if .Doc.MeetingTitle}}<span class="spec-header-version">{{with meetingURL .Doc.Group .Doc.MeetingCode}}<a href="{{.}}">{{end}}{{.Doc.MeetingTitle}}{{if .Doc.MeetingCode}} ({{.Doc.MeetingCode}}){{end}}{{if meetingURL .Doc.Group .Doc.MeetingCode}}</a>{{end}}</span>{{end}}
         <span class="badge badge-cached">on demand</span>
     </div>
     {{if and .Doc.Title (ne .Doc.Title .Doc.ID)}}<p class="tdoc-title">{{.Doc.Title}}</p>{{end}}

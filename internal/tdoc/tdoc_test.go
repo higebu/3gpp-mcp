@@ -175,7 +175,7 @@ type redirectTransport struct {
 }
 
 func (rt *redirectTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	target, err := url.Parse(rt.testURL + req.URL.Path + "?" + req.URL.RawQuery)
+	target, err := url.Parse(rt.testURL + req.URL.EscapedPath() + "?" + req.URL.RawQuery)
 	if err != nil {
 		return nil, err
 	}

@@ -1,7 +1,9 @@
 {{define "fetching.html"}}
 <div class="fetching-page">
-    <h1>Preparing {{.SpecID}}{{if .Version}} v{{.Version}}{{end}}</h1>
-    {{if .Images}}
+    <h1>Preparing {{if .List}}the TDoc list of {{end}}{{.SpecID}}{{if .Version}} v{{.Version}}{{end}}</h1>
+    {{if .List}}
+    <p>The meeting's TDoc list is being downloaded. This takes a few seconds.</p>
+    {{else if .Images}}
     <p>The images of this version are being downloaded and converted.</p>
     {{else if .Version}}
     <p>This version is being downloaded and converted. This takes up to a few minutes for a large specification.</p>

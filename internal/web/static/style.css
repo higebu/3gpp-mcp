@@ -1760,3 +1760,53 @@ body:has(dialog.lightbox[open]) {
     font-size: 0.9rem;
     max-width: 60rem;
 }
+
+/* Meetings */
+.group-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin: 0 0 1rem;
+}
+
+.group-link {
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.9rem;
+    text-decoration: none;
+}
+
+.group-link.active {
+    background: var(--link);
+    color: #fff;
+    border-color: var(--link);
+}
+
+.meetings-table .nowrap,
+.tdoc-table .nowrap {
+    white-space: nowrap;
+}
+
+.meeting-filter {
+    flex-wrap: wrap;
+}
+
+.meeting-filter select {
+    max-width: 22rem;
+}
+
+.tdoc-abstract {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    margin: 0.25rem 0 0;
+}
+
+.tdoc-details {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.tdoc-details span {
+    display: block;
+}
