@@ -20,6 +20,7 @@ var meetingEntries = []tdoc.Entry{
 	{TDoc: "R1-2508300", Title: "Draft Agenda", Source: "RAN1 Chair", Type: "agenda", AgendaItem: "2", AgendaDescription: "Approval of Agenda", Status: "revised", RevisedTo: "R1-2509000"},
 	{TDoc: "R1-2508303", Title: "Reply LS on 6Rx", Source: "RAN2, Qualcomm", Type: "LS in", AgendaItem: "5", AgendaDescription: "Incoming LSs", Status: "noted", Release: "Rel-19", To: "RAN4"},
 	{TDoc: "R1-2509526", Title: "CR on ISAC <channel> model", Source: "Xiaomi, AT&T", Type: "CR", AgendaItem: "8.8", AgendaDescription: "Maintenance on others", Status: "agreed", Spec: "38.901", CR: "0033", CRRevision: "1", CRCategory: "F", Abstract: "An abstract", IsRevisionOf: "R1-2509000"},
+	{TDoc: "R1-2509527", Title: "No agenda item", Source: "Apple", Type: "other", Status: "available"},
 }
 
 // setupMeetingServer serves the web viewer over a fake 3GPP site with one
@@ -161,9 +162,10 @@ func TestHandleMeeting(t *testing.T) {
 	for _, want := range []string{
 		`<h1 class="spec-header-title">3GPPRAN1#123</h1>`,
 		`<a href="/meetings/r1">RAN1</a>`,
-		"3 TDocs from the",
+		"4 TDocs from the",
 		`href="https://www.3gpp.org/ftp/tsg_ran/WG1_RL1/TSGR1_123/docs/TDoc_List_Meeting_RAN1%23123.xlsx"`,
 		`<option value="8.8" >8.8 Maintenance on others (1)</option>`,
+		"<option value=\"\">All</option>",
 		`<option value="CR" >CR</option>`,
 		`<option value="agreed" >agreed</option>`,
 		`<a href="/tdocs/R1-2509526?meeting=R1-123">R1-2509526</a>`,
@@ -173,11 +175,15 @@ func TestHandleMeeting(t *testing.T) {
 		`revision of <a href="/tdocs/R1-2509000?meeting=R1-123">R1-2509000</a>`,
 		`revised to <a href="/tdocs/R1-2509000?meeting=R1-123">R1-2509000</a>`,
 		"<span>to RAN4</span>",
-		`<p class="subtitle">3 TDocs</p>`,
+		`<p class="subtitle">4 TDocs</p>`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in:\n%s", want, body)
 		}
+	}
+
+	if strings.Contains(body, `<option value="" >`) {
+		t.Error("the documents without an agenda item are offered as an option that resets the filter")
 	}
 
 	// Filters narrow the table and are kept in the form and the paging links.
@@ -235,6 +241,13 @@ func TestHandleMeetingPagination(t *testing.T) {
 	_, body = get(t, ts.URL+"/meetings/r1/R1-123?type=discussion&page=2")
 	if !strings.Contains(body, "Page 2 of 2") || !strings.Contains(body, fmt.Sprintf("R1-25%05d", tdocsPerPage)) || strings.Contains(body, "R1-2500000<") {
 		t.Errorf("page 2:\n%s", body)
+	}
+	// A page past the end, or one too large to multiply, clamps to the last.
+	for _, p := range []string{"?page=99", "?page=92233720368547758"} {
+		_, body = get(t, ts.URL+"/meetings/r1/R1-123"+p)
+		if !strings.Contains(body, "Page 2 of 2") || !strings.Contains(body, fmt.Sprintf("R1-25%05d", tdocsPerPage)) {
+			t.Errorf("%s:\n%s", p, body)
+		}
 	}
 }
 

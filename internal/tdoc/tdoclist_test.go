@@ -165,8 +165,9 @@ func TestParseTDocList_Errors(t *testing.T) {
 
 func TestParseSheetCells(t *testing.T) {
 	// Cells without a reference land after the previous one; a shared
-	// string index out of range reads as empty.
-	sheet := `<worksheet><sheetData><row r="1"><c t="s"><v>0</v></c><c t="s"><v>7</v></c><c r="D1"><v>3</v></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>x</t></is></c></row></sheetData></worksheet>`
+	// string index out of range reads as empty; a reference past the last
+	// possible column is dropped instead of grown into.
+	sheet := `<worksheet><sheetData><row r="1"><c t="s"><v>0</v></c><c t="s"><v>7</v></c><c r="D1"><v>3</v></c><c r="ZZZZZZZZ1"><v>bomb</v></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>x</t></is></c></row></sheetData></worksheet>`
 	rows, err := parseSheet([]byte(sheet), []string{"first"})
 	if err != nil {
 		t.Fatal(err)
@@ -228,7 +229,9 @@ func TestFetchTDocList(t *testing.T) {
 	t.Run("found by listing", func(t *testing.T) {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/ftp/tsg_ran/WG1_RL1/TSGR1_123/docs/{$}", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprint(w, `<a href="https://www.3gpp.org/ftp/tsg_ran/WG1_RL1/TSGR1_123/docs/R1-2508300.zip">R1-2508300.zip</a> <a href="https://www.3gpp.org/ftp/tsg_ran/WG1_RL1/TSGR1_123/docs/TDoc_List_Meeting_RAN1%23123-final.xlsx">TDoc_List_Meeting_RAN1#123-final.xlsx</a>`)
+			// A literal "#" in the href, as some listings write it, must not
+			// be read as a fragment.
+			fmt.Fprint(w, `<a href="https://www.3gpp.org/ftp/tsg_ran/WG1_RL1/TSGR1_123/docs/R1-2508300.zip">R1-2508300.zip</a> <a href="https://www.3gpp.org/ftp/tsg_ran/WG1_RL1/TSGR1_123/docs/TDoc_List_Meeting_RAN1#123-final.xlsx">TDoc_List_Meeting_RAN1#123-final.xlsx</a>`)
 		})
 		mux.HandleFunc("/ftp/tsg_ran/WG1_RL1/TSGR1_123/docs/TDoc_List_Meeting_RAN1#123-final.xlsx", func(w http.ResponseWriter, r *http.Request) {
 			w.Write(list)
@@ -348,5 +351,26 @@ func TestReadSheetRejectsBrokenZip(t *testing.T) {
 	_ = zw.Close()
 	if _, err := readSheet(buf.Bytes(), "x"); err == nil {
 		t.Error("empty zip accepted")
+	}
+}
+
+func TestResolvePrefersListedRange(t *testing.T) {
+	// R1-2506700 is in RAN1#122-bis's range; naming RAN1#123 as a hint
+	// must not send the download to the wrong Docs folder. A number in no
+	// range still goes where the hint says.
+	client := fakeSite(t, nil)
+	doc, err := Resolve(context.Background(), client, "R1-2506700", "R1-123", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Meeting.Code != "R1-122-bis" || doc.Path != "tsg_ran/WG1_RL1/TSGR1_122b/docs/R1-2506700.zip" {
+		t.Errorf("resolved to %+v", doc)
+	}
+	doc, err = Resolve(context.Background(), client, "R1-2599999", "R1-123", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Meeting.Code != "R1-123" {
+		t.Errorf("unlisted number resolved to %+v", doc)
 	}
 }

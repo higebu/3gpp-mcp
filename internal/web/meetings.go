@@ -117,6 +117,12 @@ func (h *handler) handleMeeting(w http.ResponseWriter, r *http.Request) {
 	if page < 1 {
 		page = 1
 	}
+	// Bounded before the offset multiplication can overflow; clamped to the
+	// last page once the count is known.
+	const maxPage = 1_000_000
+	if page > maxPage {
+		page = maxPage
+	}
 	f := tdocstore.Filter{
 		AgendaItem: strings.TrimSpace(q.Get("agenda_item")),
 		Type:       strings.TrimSpace(q.Get("type")),
@@ -133,16 +139,27 @@ func (h *handler) handleMeeting(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, http.StatusInternalServerError, "Failed to load the TDoc list")
 		return
 	}
+	totalPages := max((res.Total+tdocsPerPage-1)/tdocsPerPage, 1)
+	if page > totalPages {
+		page = totalPages
+		f.Offset = (page - 1) * tdocsPerPage
+		if res, err = h.src.TDocs.ListEntries(ml.Meeting.Dir, f); err != nil {
+			log.Printf("tdoc list error: %v", err)
+			h.renderError(w, http.StatusInternalServerError, "Failed to load the TDoc list")
+			return
+		}
+	}
 	agenda, err := h.src.TDocs.AgendaItems(ml.Meeting.Dir)
 	if err != nil {
 		log.Printf("tdoc list error: %v", err)
 		h.renderError(w, http.StatusInternalServerError, "Failed to load the TDoc list")
 		return
 	}
+	// The filter form's choices are a convenience: a failure here leaves
+	// the selects empty and the list still renders.
 	types, _ := h.src.TDocs.Values(ml.Meeting.Dir, "type")
 	statuses, _ := h.src.TDocs.Values(ml.Meeting.Dir, "status")
 
-	totalPages := max((res.Total+tdocsPerPage-1)/tdocsPerPage, 1)
 	data := meetingData{
 		Group:      ml.Group,
 		Meeting:    ml.Meeting,

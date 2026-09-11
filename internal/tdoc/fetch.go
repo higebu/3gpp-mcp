@@ -211,7 +211,7 @@ func readAllLimited(r io.Reader, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("nested zip exceeds %d MB", limit>>20)
+		return nil, fmt.Errorf("exceeds %d MB", limit>>20)
 	}
 	return data, nil
 }

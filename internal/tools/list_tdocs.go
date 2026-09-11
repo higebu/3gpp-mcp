@@ -70,6 +70,10 @@ func HandleListTDocs(src *Source) func(ctx context.Context, req *mcp.CallToolReq
 // FormatTDocList renders one page of a meeting's TDoc list. It is shared
 // with the CLI's list-tdocs command.
 func FormatTDocList(ml *MeetingList, f tdocstore.Filter, res *tdocstore.ListResult, agenda []tdocstore.AgendaItem, details bool) string {
+	// The store clamps a negative offset to 0; the page range must agree.
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
 	var sb strings.Builder
 	m := ml.Meeting
 	fmt.Fprintf(&sb, "[Meeting: %s (%s)", m.Title, m.Code)
@@ -105,7 +109,10 @@ func FormatTDocList(ml *MeetingList, f tdocstore.Filter, res *tdocstore.ListResu
 				fmt.Fprintf(&sb, "%s (%d)", item, it.Count)
 			}
 		}
-		sb.WriteString("\nColumns: TDoc | type | status | source | agenda item | title | CR or LS details | revision chain\n")
+		sb.WriteByte('\n')
+	}
+	if len(res.Entries) > 0 {
+		sb.WriteString("Columns: TDoc | type | status | source | agenda item | title | CR or LS details | revision chain\n")
 	}
 	for _, e := range res.Entries {
 		sb.WriteString(formatEntry(e, details))
@@ -129,10 +136,10 @@ func pageRange(total, offset, n int) string {
 func formatEntry(e tdoc.Entry, details bool) string {
 	cols := []string{e.TDoc, orDash(e.Type), orDash(e.Status), orDash(e.Source), orDash(e.AgendaItem), e.Title}
 	var extra []string
-	if e.Spec != "" {
+	if e.Spec != "" || e.CR != "" {
 		s := e.Spec
 		if e.CR != "" {
-			s += " CR " + e.CR
+			s = strings.TrimSpace(s + " CR " + e.CR)
 			if e.CRRevision != "" {
 				s += "r" + e.CRRevision
 			}

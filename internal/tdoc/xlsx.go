@@ -8,7 +8,13 @@ import (
 	"io"
 	"path"
 	"strings"
+
+	"github.com/higebu/3gpp-mcp/internal/converter/pipeline"
 )
+
+// maxColumns is the widest a worksheet can be (column XFD); a cell
+// reference past it is malformed and is dropped rather than grown into.
+const maxColumns = 16384
 
 // The TDoc list a meeting publishes is an .xlsx workbook. Only the little of
 // the SpreadsheetML format that the list uses is read here — shared strings,
@@ -36,7 +42,12 @@ func readSheet(data []byte, name string) ([][]string, error) {
 			return nil, fmt.Errorf("open %s: %w", p, err)
 		}
 		defer rc.Close()
-		b, err := io.ReadAll(rc)
+		// The workbook comes from the network: bound the inflated size like
+		// every other archive part, so a crafted file cannot exhaust memory.
+		if f.UncompressedSize64 > uint64(pipeline.MaxZipSize()) {
+			return nil, fmt.Errorf("%s exceeds %d MB", p, pipeline.MaxZipSize()>>20)
+		}
+		b, err := readAllLimited(rc, pipeline.MaxZipSize())
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", p, err)
 		}
@@ -231,6 +242,9 @@ func parseSheet(data []byte, shared []string) ([][]string, error) {
 				col := columnIndex(cellRef)
 				if col < 0 {
 					col = len(row)
+				}
+				if col >= maxColumns {
+					continue
 				}
 				for len(row) <= col {
 					row = append(row, "")

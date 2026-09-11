@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 
@@ -193,11 +193,9 @@ func findTDocList(ctx context.Context, client *http.Client, m Meeting) (string, 
 		return "", fmt.Errorf("list %s: %w", listing, err)
 	}
 	for _, match := range xlsxHrefRE.FindAllStringSubmatch(page, -1) {
-		u, err := url.Parse(match[1])
-		if err != nil {
-			continue
-		}
-		if p, ok := documentPath(u.Path); ok {
+		// documentPath takes the href whole: a list name carries "#", which
+		// url.Parse would otherwise split off as a fragment.
+		if p, ok := documentPath(html.UnescapeString(match[1])); ok {
 			return p, nil
 		}
 	}

@@ -21,9 +21,9 @@
     <span class="filter-field"><label for="agenda_item">Agenda item:</label>
     <select name="agenda_item" id="agenda_item" onchange="this.form.submit()">
         <option value="">All</option>
-        {{range .Agenda}}
-        <option value="{{.Item}}" {{if eq .Item $.Filter.AgendaItem}}selected{{end}}>{{if .Item}}{{.Item}} {{end}}{{.Description}} ({{.Count}})</option>
-        {{end}}
+        {{range .Agenda}}{{if .Item}}
+        <option value="{{.Item}}" {{if eq .Item $.Filter.AgendaItem}}selected{{end}}>{{.Item}} {{.Description}} ({{.Count}})</option>
+        {{end}}{{end}}
     </select></span>
     <span class="filter-field"><label for="type">Type:</label>
     <select name="type" id="type" onchange="this.form.submit()">

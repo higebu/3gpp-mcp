@@ -1035,8 +1035,8 @@ func runGetTDoc(ctx context.Context, out, errOut io.Writer, src *tools.Source, r
 func cmdListMeetings(args []string) {
 	fs := flag.NewFlagSet("list-meetings", flag.ExitOnError)
 	qf := addQueryFlags(fs, true)
-	limit := fs.Int("limit", 0, "Maximum number of meetings to print, newest first (default: 20)")
-	offset := fs.Int("offset", 0, "Number of meetings to skip")
+	limit := fs.Int("limit", 0, "Maximum number of meetings to print, newest first, when a group is named (default: 20)")
+	offset := fs.Int("offset", 0, "Number of meetings to skip, when a group is named")
 	_ = fs.Parse(args)
 	if fs.NArg() > 1 {
 		fmt.Fprintln(os.Stderr, "Usage: 3gpp-mcp list-meetings [options] [group]")

@@ -162,7 +162,7 @@ func TestHandleListTDocs(t *testing.T) {
 				t.Errorf("missing %q in:\n%s", want, text)
 			}
 		}
-		if strings.Contains(text, "Agenda items") || strings.Contains(text, "R1-2508303") {
+		if strings.Contains(text, "Agenda items") || strings.Contains(text, "R1-2508303") || !strings.Contains(text, "Columns: TDoc |") {
 			t.Errorf("filtered output:\n%s", text)
 		}
 		result, _, _ = handler(ctx, nil, ListTDocsInput{Meeting: "R1-123", Details: true, Limit: 1})
@@ -174,6 +174,14 @@ func TestHandleListTDocs(t *testing.T) {
 		text = getTextContent(result)
 		if !strings.Contains(text, "    Cc: RAN1") || !strings.Contains(text, "showing 2-2]") || !strings.Contains(text, "[1 more; call again with offset=2]") || strings.Contains(text, "Agenda items") {
 			t.Errorf("details page 2:\n%s", text)
+		}
+	})
+
+	t.Run("negative offset", func(t *testing.T) {
+		result, _, _ := handler(ctx, nil, ListTDocsInput{Meeting: "R1-123", Offset: -4, Limit: 1})
+		text := getTextContent(result)
+		if !strings.Contains(text, "showing 1-1]") || !strings.Contains(text, "[2 more; call again with offset=1]") {
+			t.Errorf("negative offset:\n%s", text)
 		}
 	})
 
@@ -244,4 +252,23 @@ func TestHandleListTDocs(t *testing.T) {
 			t.Errorf("after the fetch:\n%s", text)
 		}
 	})
+}
+
+func TestFormatEntryCRWithoutSpec(t *testing.T) {
+	line := formatEntry(tdoc.Entry{TDoc: "R1-1", Title: "t", Type: "CR", CR: "0033", CRCategory: "F"}, false)
+	if !strings.Contains(line, "| CR 0033 cat F") {
+		t.Errorf("CR details dropped: %s", line)
+	}
+}
+
+func TestFormatMeetingsHugeLimit(t *testing.T) {
+	g, _ := tdoc.GroupByCode("R1")
+	meetings := []tdoc.Meeting{{Code: "R1-1", Title: "a", Start: "2025-01-01"}, {Code: "R1-2", Title: "b", Start: "2025-01-01"}}
+	text := FormatMeetings(g, meetings, int(^uint(0)>>1), 1)
+	if !strings.Contains(text, "showing 2-2") || !strings.Contains(text, "R1-2 |") {
+		t.Errorf("huge limit:\n%s", text)
+	}
+	if text := FormatMeetings(g, meetings, 0, -1); !strings.Contains(text, "showing 1-2") {
+		t.Errorf("negative offset:\n%s", text)
+	}
 }

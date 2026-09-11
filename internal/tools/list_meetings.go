@@ -59,7 +59,12 @@ func FormatMeetings(g tdoc.Group, meetings []tdoc.Meeting, limit, offset int) st
 		fmt.Fprintf(&sb, "[%s (%s) has %d meetings; none at offset %d]\n", g.Name, g.Code, len(meetings), offset)
 		return sb.String()
 	}
-	end := min(offset+limit, len(meetings))
+	// offset+limit overflows for a client-supplied huge limit; compare
+	// against the remainder instead, as paginateText does.
+	end := len(meetings)
+	if limit < len(meetings)-offset {
+		end = offset + limit
+	}
 	fmt.Fprintf(&sb, "[%s (%s): %d meetings, newest first; showing %d-%d. Columns: code | title | town | dates | TDoc range | FTP folder]\n", g.Name, g.Code, len(meetings), offset+1, end)
 	for _, m := range meetings[offset:end] {
 		sb.WriteString(formatMeeting(m))
