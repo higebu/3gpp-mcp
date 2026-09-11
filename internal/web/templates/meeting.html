@@ -1,0 +1,93 @@
+{{define "meeting.html"}}
+<header class="spec-header tdoc-header">
+    <div class="spec-header-id">
+        <h1 class="spec-header-title">{{.Meeting.Title}}</h1>
+        <span class="spec-header-version">{{.Meeting.Code}}</span>
+        <span class="badge badge-cached">on demand</span>
+    </div>
+    <p class="tdoc-meta">
+        <a href="/meetings/{{.Group.Code | lower}}">{{.Group.Name}}</a>
+        {{if .Meeting.Town}}&mdash; {{.Meeting.Town}}{{end}}
+        {{if .Meeting.Start}}&mdash; {{.Meeting.Start}}{{if and .Meeting.End (ne .Meeting.End .Meeting.Start)}} – {{.Meeting.End}}{{end}}{{end}}
+        &mdash; <a href="https://www.3gpp.org/ftp/{{.Meeting.Dir}}/" target="_blank" rel="noopener">{{.Meeting.Folder}}</a>
+        (<a href="https://www.3gpp.org/ftp/{{.Meeting.Dir}}/Agenda/" target="_blank" rel="noopener">Agenda</a>,
+        <a href="https://www.3gpp.org/ftp/{{.Meeting.Dir}}/Report/" target="_blank" rel="noopener">Report</a>,
+        <a href="https://www.3gpp.org/ftp/{{.Meeting.DocsDir}}/" target="_blank" rel="noopener">Docs</a>)
+        &mdash; {{.List.Entries}} TDocs from the <a href="{{.List.URL}}" target="_blank" rel="noopener">TDoc list</a>
+    </p>
+</header>
+
+<form class="filter-form meeting-filter" method="get" action="">
+    <span class="filter-field"><label for="agenda_item">Agenda item:</label>
+    <select name="agenda_item" id="agenda_item" onchange="this.form.submit()">
+        <option value="">All</option>
+        {{range .Agenda}}{{if .Item}}
+        <option value="{{.Item}}" {{if eq .Item $.Filter.AgendaItem}}selected{{end}}>{{.Item}} {{.Description}} ({{.Count}})</option>
+        {{end}}{{end}}
+    </select></span>
+    <span class="filter-field"><label for="type">Type:</label>
+    <select name="type" id="type" onchange="this.form.submit()">
+        <option value="">All</option>
+        {{range .Types}}<option value="{{.}}" {{if eq . $.Filter.Type}}selected{{end}}>{{.}}</option>{{end}}
+    </select></span>
+    <span class="filter-field"><label for="status">Status:</label>
+    <select name="status" id="status" onchange="this.form.submit()">
+        <option value="">All</option>
+        {{range .Statuses}}<option value="{{.}}" {{if eq . $.Filter.Status}}selected{{end}}>{{.}}</option>{{end}}
+    </select></span>
+    <span class="filter-field"><label for="source">Source:</label>
+    <input type="text" name="source" id="source" value="{{.Filter.Source}}" placeholder="e.g. Ericsson"></span>
+    <span class="filter-field"><label for="spec">Spec:</label>
+    <input type="text" name="spec" id="spec" value="{{.Filter.Spec}}" placeholder="e.g. 38.331" size="8"></span>
+    <span class="filter-field"><label for="q">Search:</label>
+    <input type="text" name="q" id="q" value="{{.Filter.Query}}" placeholder="title, abstract, work item"></span>
+    <button type="submit" class="filter-btn">Filter</button>
+</form>
+
+<p class="subtitle">{{.Total}} {{if .Filter.IsEmpty}}TDocs{{else}}matching {{.Filter}}{{end}}</p>
+
+<div class="table-responsive">
+    <table class="specs-table tdoc-table">
+        <thead>
+            <tr>
+                <th>TDoc</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Source</th>
+                <th>AI</th>
+                <th>Title</th>
+                <th>Details</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Entries}}
+            <tr>
+                <td class="nowrap"><a href="{{tdocListURL .TDoc $.Meeting.Code}}">{{.TDoc}}</a></td>
+                <td>{{.Type}}</td>
+                <td>{{.Status}}</td>
+                <td>{{.Source}}</td>
+                <td class="nowrap">{{.AgendaItem}}</td>
+                <td class="title-cell">{{.Title}}{{if .Abstract}}<p class="tdoc-abstract">{{.Abstract}}</p>{{end}}</td>
+                <td class="tdoc-details">
+                    {{if .Spec}}<span>{{.Spec}}{{if .CR}} CR {{.CR}}{{if .CRRevision}}r{{.CRRevision}}{{end}}{{end}}{{if .CRCategory}} cat {{.CRCategory}}{{end}}{{if .Version}} v{{.Version}}{{end}}</span>{{end}}
+                    {{if .Release}}<span>{{.Release}}</span>{{end}}
+                    {{if .To}}<span>to {{.To}}</span>{{end}}
+                    {{if .IsRevisionOf}}<span>revision of <a href="{{tdocListURL .IsRevisionOf $.Meeting.Code}}">{{.IsRevisionOf}}</a></span>{{end}}
+                    {{if .RevisedTo}}<span>revised to <a href="{{tdocListURL .RevisedTo $.Meeting.Code}}">{{.RevisedTo}}</a></span>{{end}}
+                </td>
+            </tr>
+            {{else}}
+            <tr><td colspan="7" class="empty">No documents match.</td></tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+
+{{if gt .TotalPages 1}}
+<nav class="pagination" aria-label="Pagination">
+    {{if .HasPrev}}<a href="?page={{sub .Page 1}}{{.Query}}" class="page-link">&laquo; Previous</a>{{else}}<span class="page-link disabled">&laquo; Previous</span>{{end}}
+    <span class="page-info">Page {{.Page}} of {{.TotalPages}}</span>
+    {{if .HasNext}}<a href="?page={{add .Page 1}}{{.Query}}" class="page-link">Next &raquo;</a>{{else}}<span class="page-link disabled">Next &raquo;</span>{{end}}
+</nav>
+{{end}}
+{{end}}

@@ -34,6 +34,7 @@
             <a href="/" class="navbar-brand">3GPP Spec Viewer</a>
             <nav class="navbar-nav">
                 <a href="/" class="nav-link">Specs</a>
+                <a href="/meetings" class="nav-link">Meetings</a>
                 <a href="/tdocs" class="nav-link">TDocs</a>
                 <form class="navbar-search" method="get" action="/search">
                     <input type="text" name="q" value="{{.NavQuery}}" placeholder="Search specs..." class="navbar-search-input">
@@ -79,6 +80,10 @@
             {{template "tdocs.html" .Data}}
         {{else if eq .Page "tdoc"}}
             {{template "tdoc.html" .Data}}
+        {{else if eq .Page "meetings"}}
+            {{template "meetings.html" .Data}}
+        {{else if eq .Page "meeting"}}
+            {{template "meeting.html" .Data}}
         {{else if eq .Page "error"}}
             <div class="error-page">
                 <h1>{{.Data.Code}}</h1>

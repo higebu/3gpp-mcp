@@ -2,9 +2,13 @@
 package testutil
 
 import (
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,4 +130,66 @@ func DownloadTestZip(t testing.TB, url string) []byte {
 		t.Skipf("skipping: read body failed: %v", err)
 	}
 	return data
+}
+
+// redirectTransport routes every request to a test server, keeping the
+// path and query, so production URLs can be used unchanged.
+type redirectTransport struct {
+	base    http.RoundTripper
+	testURL string
+}
+
+func (rt *redirectTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	target, err := url.Parse(rt.testURL + req.URL.EscapedPath() + "?" + req.URL.RawQuery)
+	if err != nil {
+		return nil, err
+	}
+	req.URL = target
+	return rt.base.RoundTrip(req)
+}
+
+// FakeSite serves handler on a test server and returns a client that sends
+// every request there, whatever host the request names. It stands in for
+// www.3gpp.org in tests of the meeting-document code.
+func FakeSite(t testing.TB, handler http.Handler) *http.Client {
+	t.Helper()
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+	return &http.Client{Transport: &redirectTransport{base: http.DefaultTransport, testURL: ts.URL}}
+}
+
+// DynaReportRow is one meeting of a DynaReportPage.
+type DynaReportRow struct {
+	Code, Title, Town, Start, End string
+	// Dir is the meeting folder relative to /ftp/; empty for a meeting
+	// without one.
+	Dir string
+	// First and Last bound the TDoc range; empty for a meeting without
+	// documents.
+	First, Last string
+}
+
+// DynaReportPage renders a DynaReport meeting page in the markup the
+// 3GPP site produces, one row per meeting.
+func DynaReportPage(rows ...DynaReportRow) string {
+	var sb strings.Builder
+	sb.WriteString("<table>\n<tr><th>Meeting</th><th>Title</th><th>Town</th><th>Start</th><th>End</th><th>First &amp; Last tdoc</th><th>Register</th><th>Participants</th><th>Files</th></tr>\n")
+	for _, r := range rows {
+		link := func(sub, text string) string {
+			if r.Dir == "" {
+				return text
+			}
+			return `<a target="_blank" href="/../../../\ftp\` + strings.ReplaceAll(r.Dir, "/", `\`) + `\` + sub + `">` + text + `</a>`
+		}
+		fmt.Fprintf(&sb, `<tr><td><a name="%s" href="https://portal.3gpp.org/Home.aspx#/meeting?MtgId=1">%s</a></td><td><a name="bm%s">%s</a></td><td>%s</td><td>%s</td><td>%s</td>`,
+			r.Code, r.Code, r.Code, r.Title, link("Invitation/", r.Town), link("Agenda/", r.Start), link("Report/", r.End))
+		if r.First != "" {
+			fmt.Fprintf(&sb, "<td>%s</td>", link(`\docs\`, r.First+" - "+r.Last))
+		} else {
+			sb.WriteString("<td>-</td>")
+		}
+		fmt.Fprintf(&sb, "<td>-</td><td>-</td><td>%s</td></tr>\n", link("", "Files"))
+	}
+	sb.WriteString("</table>")
+	return sb.String()
 }

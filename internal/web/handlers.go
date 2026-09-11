@@ -85,6 +85,7 @@ type fetchingData struct {
 	SpecID  string
 	Version string
 	Images  bool
+	List    bool
 }
 
 type versionsData struct {
@@ -163,6 +164,9 @@ func (h *handler) initTemplates() {
 		"tdocSectionURL": func(id, number, meeting string) string {
 			return "/tdocs/" + url.PathEscape(id) + "/sections/" + url.PathEscape(number) + meetingQuery(meeting)
 		},
+		"tdocListURL": tdocListURL,
+		"meetingURL":  meetingURL,
+		"lower":       strings.ToLower,
 		// releaseLabel renders a bare release number as "Rel-18"; anything else
 		// is shown unchanged.
 		"releaseLabel": specver.ReleaseLabel,
@@ -323,7 +327,7 @@ func (h *handler) renderVersionError(w http.ResponseWriter, err error) {
 // resolves as soon as the download finishes.
 func (h *handler) renderFetching(w http.ResponseWriter, inProgress *tools.FetchInProgressError) {
 	w.WriteHeader(http.StatusAccepted)
-	data := fetchingData{SpecID: inProgress.SpecID, Version: inProgress.Version, Images: inProgress.Images}
+	data := fetchingData{SpecID: inProgress.SpecID, Version: inProgress.Version, Images: inProgress.Images, List: inProgress.List}
 	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "fetching", Data: data, Refresh: 10}); err != nil {
 		log.Printf("template error: %v", err)
 	}

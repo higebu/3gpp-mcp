@@ -123,6 +123,8 @@ func init() {
 		{name: "get-references", desc: "Print cross-references as JSON", run: cmdGetReferences},
 		{name: "list-images", desc: "List embedded images in a specification", run: cmdListImages},
 		{name: "get-image", desc: "Write an embedded image to a file or stdout", run: cmdGetImage},
+		{name: "list-meetings", desc: "List the meetings of a TSG or working group", run: cmdListMeetings},
+		{name: "list-tdocs", desc: "List the documents (TDocs) of a meeting", run: cmdListTDocs},
 		{name: "get-tdoc", desc: "Print a meeting document (TDoc) as markdown", run: cmdGetTDoc},
 		{name: "completion", desc: "Generate shell completion scripts", run: cmdCompletion},
 	}

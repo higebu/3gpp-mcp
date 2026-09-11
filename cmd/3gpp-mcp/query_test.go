@@ -1453,3 +1453,149 @@ func TestDefaultTDocCacheMB(t *testing.T) {
 		t.Errorf("defaultTDocCacheMB() with an invalid value = %d, want the default", got)
 	}
 }
+
+// meetingQuerySource returns a Source whose meeting index is a fake site
+// with one RAN1 meeting and whose TDoc list has three entries.
+func meetingQuerySource(t *testing.T) *tools.Source {
+	t.Helper()
+	store, err := tdocstore.Open(tdocstore.Options{
+		Path:       filepath.Join(t.TempDir(), "tdocs.db"),
+		LimitBytes: -1,
+		ListFetcher: func(_ context.Context, m tdoc.Meeting) ([]tdoc.Entry, string, error) {
+			return []tdoc.Entry{
+				{TDoc: "R1-2508300", Title: "Draft Agenda", Source: "RAN1 Chair", Type: "agenda", AgendaItem: "2", AgendaDescription: "Approval of Agenda", Status: "revised"},
+				{TDoc: "R1-2508303", Title: "Reply LS on 6Rx", Source: "RAN2", Type: "LS in", AgendaItem: "5", AgendaDescription: "Incoming LSs", Status: "noted"},
+				{TDoc: "R1-2509526", Title: "CR on ISAC", Source: "Xiaomi", Type: "CR", AgendaItem: "8.8", AgendaDescription: "Maintenance", Status: "agreed", Spec: "38.901", CR: "0033", Abstract: "An abstract"},
+			}, tdoc.TDocListPath(m), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("tdocstore.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dynareport", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("code") != "Meetings-R1.htm" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, testutil.DynaReportPage(
+			testutil.DynaReportRow{Code: "R1-123", Title: "3GPPRAN1#123", Town: "Dallas", Start: "2025-11-17", End: "2025-11-21", Dir: "tsg_ran/WG1_RL1/TSGR1_123", First: "R1-2508300", Last: "R1-2509718"},
+		))
+	})
+	src := tools.NewSource(testutil.SetupTestDB(t))
+	src.TDocs = store
+	src.Client = testutil.FakeSite(t, mux)
+	src.UseCache = false
+	src.Budget = 10 * time.Second
+	return src
+}
+
+func TestRunListMeetings(t *testing.T) {
+	src := meetingQuerySource(t)
+	var out bytes.Buffer
+	if err := runListMeetings(t.Context(), &out, src, "", 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "RAN1 (R1)") {
+		t.Errorf("groups:\n%s", out.String())
+	}
+	out.Reset()
+	if err := runListMeetings(t.Context(), &out, src, "RAN1", 5, 0); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "R1-123 | 3GPPRAN1#123 | Dallas | 2025-11-17..2025-11-21 | R1-2508300..R1-2509718 | tsg_ran/WG1_RL1/TSGR1_123") {
+		t.Errorf("meetings:\n%s", out.String())
+	}
+	if err := runListMeetings(t.Context(), &out, src, "XX", 0, 0); err == nil || !strings.Contains(err.Error(), "unknown group") {
+		t.Errorf("unknown group: %v", err)
+	}
+}
+
+func TestRunListTDocs(t *testing.T) {
+	src := meetingQuerySource(t)
+	var out, errOut bytes.Buffer
+	if err := runListTDocs(t.Context(), &out, &errOut, src, "R1-123", "", tdocstore.Filter{}, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"[Meeting: 3GPPRAN1#123 (R1-123), Dallas, 2025-11-17..2025-11-21",
+		"3 TDocs; showing 1-3]",
+		"Agenda items (documents): 2 Approval of Agenda (1); 5 Incoming LSs (1); 8.8 Maintenance (1)",
+		"R1-2509526 | CR | agreed | Xiaomi | 8.8 | CR on ISAC | 38.901 CR 0033",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	out.Reset()
+	if err := runListTDocs(t.Context(), &out, &errOut, src, "TSGR1_123", "R1", tdocstore.Filter{Type: "CR", Limit: 1}, true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "1 match type CR") || !strings.Contains(out.String(), "    Abstract: An abstract") || strings.Contains(out.String(), "Agenda items") {
+		t.Errorf("filtered:\n%s", out.String())
+	}
+	if err := runListTDocs(t.Context(), &out, &errOut, src, "R1-999", "", tdocstore.Filter{}, false); err == nil || !strings.Contains(err.Error(), "lists no meeting") {
+		t.Errorf("unknown meeting: %v", err)
+	}
+	if err := runListTDocs(t.Context(), &out, &errOut, src, "TSGR1_123", "", tdocstore.Filter{}, false); err == nil || !strings.Contains(err.Error(), "names no group") {
+		t.Errorf("no group: %v", err)
+	}
+}
+
+// TestCmdListMeetings_And_ListTDocs covers the command wrappers: flag
+// parsing, the groups listing that needs no network, and the exit on an
+// error — here meeting-document fetching turned off.
+func TestCmdListMeetings_And_ListTDocs(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "3gpp.db")
+	cmdInitDB([]string{"-db", dbPath})
+	cache := filepath.Join(t.TempDir(), "tdocs.db")
+
+	code := captureExit(t)
+	out := captureStdout(t, func() {
+		cmdListMeetings([]string{"-db", dbPath, "-tdoc-cache", cache, "-no-fetch", "-limit", "3"})
+	})
+	if *code != -1 || !strings.Contains(out, "RAN1 (R1)") {
+		t.Errorf("list-meetings groups: exit %d, output:\n%s", *code, out)
+	}
+
+	errOut := captureStderr(t, func() {
+		cmdListMeetings([]string{"-db", dbPath, "-tdoc-cache", cache, "-no-fetch", "RAN1"})
+	})
+	if *code != 1 || !strings.Contains(errOut, "list-meetings failed") || !strings.Contains(errOut, "disabled") {
+		t.Errorf("list-meetings with fetching off: exit %d, stderr:\n%s", *code, errOut)
+	}
+
+	*code = -1
+	errOut = captureStderr(t, func() {
+		cmdListTDocs([]string{"-db", dbPath, "-tdoc-cache", cache, "-no-fetch", "-type", "CR", "-details", "R1-123"})
+	})
+	if *code != 1 || !strings.Contains(errOut, "list-tdocs failed") || !strings.Contains(errOut, "disabled") {
+		t.Errorf("list-tdocs with fetching off: exit %d, stderr:\n%s", *code, errOut)
+	}
+}
+
+// TestCmdListTDocs_ArgOrder covers the options-before-positionals guards of
+// list-meetings and list-tdocs via subprocess, like TestCmdGetSection_ArgOrder.
+func TestCmdListTDocs_ArgOrder(t *testing.T) {
+	switch os.Getenv("CMD_LIST_TDOCS_ARGS_HELPER") {
+	case "meetings":
+		cmdListMeetings([]string{"RAN1", "extra"})
+		return
+	case "tdocs":
+		cmdListTDocs([]string{})
+		return
+	}
+	for _, mode := range []string{"meetings", "tdocs"} {
+		cmd := exec.Command(os.Args[0], "-test.run=TestCmdListTDocs_ArgOrder")
+		cmd.Env = append(os.Environ(), "CMD_LIST_TDOCS_ARGS_HELPER="+mode)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err == nil {
+			t.Errorf("%s: expected a non-zero exit", mode)
+		}
+		if !strings.Contains(stderr.String(), "Options must come before positional arguments.") {
+			t.Errorf("%s: expected the usage reminder on stderr, got: %s", mode, stderr.String())
+		}
+	}
+}

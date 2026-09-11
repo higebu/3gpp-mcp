@@ -82,6 +82,13 @@ func Resolve(ctx context.Context, client *http.Client, request, meeting string, 
 				return Document{}, fmt.Errorf("%w: %s has no meeting %q", ErrNotFound, g.Name, meeting)
 			}
 			m = found
+			// The meeting is a hint for a number no range covers. A number
+			// some range does cover lives there — a meeting's list refers
+			// to revisions from earlier meetings by number alone, and those
+			// are not in its own Docs folder.
+			if holder, ok := meetingForID(meetings, id); ok {
+				m = holder
+			}
 		}
 	} else {
 		found, ok := meetingForID(meetings, id)

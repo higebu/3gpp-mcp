@@ -44,6 +44,9 @@ type FetchInProgressError struct {
 	Version string
 	// Images marks a fetch of a version's images rather than its text.
 	Images bool
+	// List marks a fetch of a meeting's TDoc list; SpecID then names the
+	// meeting.
+	List bool
 }
 
 func (e *FetchInProgressError) Error() string {
@@ -55,6 +58,9 @@ func (e *FetchInProgressError) Error() string {
 	subject := name + " is"
 	if e.Images {
 		subject = "Images for " + name + " are"
+	}
+	if e.List {
+		return "The TDoc list of " + name + " is being downloaded. This takes a few seconds. Call the same tool again to get the list."
 	}
 	return subject + " being downloaded and converted. This takes up to a few minutes for a large specification. Call the same tool again to get the content."
 }

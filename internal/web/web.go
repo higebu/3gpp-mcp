@@ -46,6 +46,9 @@ func NewServer(src *tools.Source) http.Handler {
 	mux.HandleFunc("GET /tdocs/{id}", h.handleTDoc)
 	mux.HandleFunc("GET /tdocs/{id}/sections/{number...}", h.handleTDocSection)
 	mux.HandleFunc("GET /tdocs/{id}/images/{name...}", h.handleTDocImage)
+	mux.HandleFunc("GET /meetings", h.handleMeetingGroups)
+	mux.HandleFunc("GET /meetings/{group}", h.handleMeetings)
+	mux.HandleFunc("GET /meetings/{group}/{meeting}", h.handleMeeting)
 
 	return mux
 }

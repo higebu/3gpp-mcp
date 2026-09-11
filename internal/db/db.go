@@ -2102,3 +2102,16 @@ func (d *DB) queryReferences(ctx context.Context, query string, args []any) ([]R
 	}
 	return refs, nil
 }
+
+// SanitizeFTS5Query prepares user text for an FTS5 MATCH against an index
+// with the given columns: "col:val" tokens are kept as column filters only
+// for those columns, hyphenated and dotted tokens are quoted, and a leading
+// "-term" becomes "NOT term". It is what the sections search applies, made
+// available to the other FTS5 indexes (the meeting TDoc lists).
+func SanitizeFTS5Query(query string, columns []string) string {
+	cols := make(map[string]bool, len(columns))
+	for _, c := range columns {
+		cols[c] = true
+	}
+	return sanitizeFTS5QueryCols(query, cols)
+}
