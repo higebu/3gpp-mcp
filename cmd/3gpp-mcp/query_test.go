@@ -1542,3 +1542,60 @@ func TestRunListTDocs(t *testing.T) {
 		t.Errorf("no group: %v", err)
 	}
 }
+
+// TestCmdListMeetings_And_ListTDocs covers the command wrappers: flag
+// parsing, the groups listing that needs no network, and the exit on an
+// error — here meeting-document fetching turned off.
+func TestCmdListMeetings_And_ListTDocs(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "3gpp.db")
+	cmdInitDB([]string{"-db", dbPath})
+	cache := filepath.Join(t.TempDir(), "tdocs.db")
+
+	code := captureExit(t)
+	out := captureStdout(t, func() {
+		cmdListMeetings([]string{"-db", dbPath, "-tdoc-cache", cache, "-no-fetch", "-limit", "3"})
+	})
+	if *code != -1 || !strings.Contains(out, "RAN1 (R1)") {
+		t.Errorf("list-meetings groups: exit %d, output:\n%s", *code, out)
+	}
+
+	errOut := captureStderr(t, func() {
+		cmdListMeetings([]string{"-db", dbPath, "-tdoc-cache", cache, "-no-fetch", "RAN1"})
+	})
+	if *code != 1 || !strings.Contains(errOut, "list-meetings failed") || !strings.Contains(errOut, "disabled") {
+		t.Errorf("list-meetings with fetching off: exit %d, stderr:\n%s", *code, errOut)
+	}
+
+	*code = -1
+	errOut = captureStderr(t, func() {
+		cmdListTDocs([]string{"-db", dbPath, "-tdoc-cache", cache, "-no-fetch", "-type", "CR", "-details", "R1-123"})
+	})
+	if *code != 1 || !strings.Contains(errOut, "list-tdocs failed") || !strings.Contains(errOut, "disabled") {
+		t.Errorf("list-tdocs with fetching off: exit %d, stderr:\n%s", *code, errOut)
+	}
+}
+
+// TestCmdListTDocs_ArgOrder covers the options-before-positionals guards of
+// list-meetings and list-tdocs via subprocess, like TestCmdGetSection_ArgOrder.
+func TestCmdListTDocs_ArgOrder(t *testing.T) {
+	switch os.Getenv("CMD_LIST_TDOCS_ARGS_HELPER") {
+	case "meetings":
+		cmdListMeetings([]string{"RAN1", "extra"})
+		return
+	case "tdocs":
+		cmdListTDocs([]string{})
+		return
+	}
+	for _, mode := range []string{"meetings", "tdocs"} {
+		cmd := exec.Command(os.Args[0], "-test.run=TestCmdListTDocs_ArgOrder")
+		cmd.Env = append(os.Environ(), "CMD_LIST_TDOCS_ARGS_HELPER="+mode)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err == nil {
+			t.Errorf("%s: expected a non-zero exit", mode)
+		}
+		if !strings.Contains(stderr.String(), "Options must come before positional arguments.") {
+			t.Errorf("%s: expected the usage reminder on stderr, got: %s", mode, stderr.String())
+		}
+	}
+}

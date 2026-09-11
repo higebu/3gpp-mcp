@@ -374,3 +374,38 @@ func TestResolvePrefersListedRange(t *testing.T) {
 		t.Errorf("unlisted number resolved to %+v", doc)
 	}
 }
+
+func TestReadSheetPartErrors(t *testing.T) {
+	workbook := []byte(`<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="a" r:id="rId1"/></sheets></workbook>`)
+	rels := []byte(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`)
+	sheet := []byte(`<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>`)
+	for name, files := range map[string]map[string][]byte{
+		"truncated sharedStrings": {"xl/workbook.xml": workbook, "xl/_rels/workbook.xml.rels": rels, "xl/worksheets/sheet1.xml": sheet, "xl/sharedStrings.xml": []byte("<sst><si><t>a</t>")},
+		"missing sheet part":      {"xl/workbook.xml": workbook, "xl/_rels/workbook.xml.rels": rels},
+		"bad rels":                {"xl/workbook.xml": workbook, "xl/_rels/workbook.xml.rels": []byte("<Relationships")},
+	} {
+		if _, err := readSheet(makeZip(t, files), "a"); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// A part whose deflate stream is corrupt fails on read.
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for p, data := range map[string][]byte{"xl/workbook.xml": workbook, "xl/_rels/workbook.xml.rels": rels} {
+		w, _ := zw.Create(p)
+		w.Write(data)
+	}
+	w, _ := zw.CreateHeader(&zip.FileHeader{Name: "xl/worksheets/sheet1.xml", Method: zip.Deflate})
+	w.Write(sheet)
+	_ = zw.Close()
+	data := buf.Bytes()
+	// Corrupt the deflate payload of the last entry: the local header is
+	// followed by the name, then the compressed bytes.
+	i := bytes.LastIndex(data, []byte("xl/worksheets/sheet1.xml")) + len("xl/worksheets/sheet1.xml")
+	for j := i; j < i+8 && j < len(data); j++ {
+		data[j] ^= 0xff
+	}
+	if _, err := readSheet(data, "a"); err == nil {
+		t.Error("corrupt sheet part accepted")
+	}
+}

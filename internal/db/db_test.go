@@ -2832,3 +2832,19 @@ func TestSanitizeFTS5Query_CaretKeepsAnchor(t *testing.T) {
 		t.Errorf("^system matched %d rows, want 0 (system is never the first token)", got)
 	}
 }
+
+func TestSanitizeFTS5QueryColumns(t *testing.T) {
+	// A column filter is kept only for a column of the given index; the
+	// rest of the sanitizing (quoting a hyphenated term) applies as in
+	// Search.
+	cols := []string{"title", "source"}
+	if got := SanitizeFTS5Query("source:ericsson", cols); got != "source:ericsson" {
+		t.Errorf("known column: %q", got)
+	}
+	if got := SanitizeFTS5Query("Rel-19", cols); got != `"Rel-19"` {
+		t.Errorf("hyphenated term: %q", got)
+	}
+	if got := SanitizeFTS5Query("content:x", cols); got == "content:x" {
+		t.Errorf("unknown column kept as a filter: %q", got)
+	}
+}
