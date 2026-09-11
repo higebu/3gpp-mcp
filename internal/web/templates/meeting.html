@@ -18,29 +18,29 @@
 </header>
 
 <form class="filter-form meeting-filter" method="get" action="">
-    <label for="agenda_item">Agenda item:</label>
+    <span class="filter-field"><label for="agenda_item">Agenda item:</label>
     <select name="agenda_item" id="agenda_item" onchange="this.form.submit()">
         <option value="">All</option>
         {{range .Agenda}}
         <option value="{{.Item}}" {{if eq .Item $.Filter.AgendaItem}}selected{{end}}>{{if .Item}}{{.Item}} {{end}}{{.Description}} ({{.Count}})</option>
         {{end}}
-    </select>
-    <label for="type">Type:</label>
+    </select></span>
+    <span class="filter-field"><label for="type">Type:</label>
     <select name="type" id="type" onchange="this.form.submit()">
         <option value="">All</option>
         {{range .Types}}<option value="{{.}}" {{if eq . $.Filter.Type}}selected{{end}}>{{.}}</option>{{end}}
-    </select>
-    <label for="status">Status:</label>
+    </select></span>
+    <span class="filter-field"><label for="status">Status:</label>
     <select name="status" id="status" onchange="this.form.submit()">
         <option value="">All</option>
         {{range .Statuses}}<option value="{{.}}" {{if eq . $.Filter.Status}}selected{{end}}>{{.}}</option>{{end}}
-    </select>
-    <label for="source">Source:</label>
-    <input type="text" name="source" id="source" value="{{.Filter.Source}}" placeholder="e.g. Ericsson">
-    <label for="spec">Spec:</label>
-    <input type="text" name="spec" id="spec" value="{{.Filter.Spec}}" placeholder="e.g. 38.331" size="8">
-    <label for="q">Search:</label>
-    <input type="text" name="q" id="q" value="{{.Filter.Query}}" placeholder="title, abstract, work item">
+    </select></span>
+    <span class="filter-field"><label for="source">Source:</label>
+    <input type="text" name="source" id="source" value="{{.Filter.Source}}" placeholder="e.g. Ericsson"></span>
+    <span class="filter-field"><label for="spec">Spec:</label>
+    <input type="text" name="spec" id="spec" value="{{.Filter.Spec}}" placeholder="e.g. 38.331" size="8"></span>
+    <span class="filter-field"><label for="q">Search:</label>
+    <input type="text" name="q" id="q" value="{{.Filter.Query}}" placeholder="title, abstract, work item"></span>
     <button type="submit" class="filter-btn">Filter</button>
 </form>
 

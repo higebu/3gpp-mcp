@@ -1792,6 +1792,12 @@ body:has(dialog.lightbox[open]) {
     flex-wrap: wrap;
 }
 
+.meeting-filter .filter-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
 .meeting-filter select {
     max-width: 22rem;
 }
