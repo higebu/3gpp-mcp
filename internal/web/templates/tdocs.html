@@ -1,0 +1,28 @@
+{{define "tdocs.html"}}
+<div class="page-header">
+    <h1>3GPP Meeting Documents</h1>
+    <p class="subtitle">Contributions, change requests, liaison statements, agendas and meeting reports from the <a href="https://www.3gpp.org/ftp/" target="_blank" rel="noopener">3GPP FTP site</a>, downloaded and converted on first view.</p>
+</div>
+
+{{if .Disabled}}
+<p class="search-error">On-demand fetching of meeting documents is disabled on this server.</p>
+{{else}}
+<form class="filter-form tdoc-lookup-form" method="get" action="/tdocs">
+    <label for="tdoc-id">TDoc number or FTP path:</label>
+    <input type="text" name="id" id="tdoc-id" value="{{.Query}}" placeholder="e.g. R1-2509715, S2-2510076, RP-253000" required>
+    <label for="tdoc-meeting">Meeting (optional):</label>
+    <input type="text" name="meeting" id="tdoc-meeting" value="{{.Meeting}}" placeholder="e.g. RAN1#123">
+    <button type="submit" class="filter-btn">Open</button>
+</form>
+{{if .Error}}
+<p class="search-error">{{.Error}}</p>
+{{end}}
+<div class="tdoc-help">
+    <p>A TDoc number is looked up through its group's meeting list (<a href="https://www.3gpp.org/dynareport?code=Meetings-R1.htm" target="_blank" rel="noopener">DynaReport</a>) and downloaded from the meeting's <code>Docs/</code> folder. Name the meeting only when a number cannot be found on its own.</p>
+    <p>A document without a TDoc number, such as a meeting report, can be opened by its path under <code>https://www.3gpp.org/ftp/</code>, for example <code>tsg_ran/WG1_RL1/TSGR1_123/Report/Final_Minutes_report_RAN1#123_v100.zip</code>.</p>
+    <p>Supported groups:
+        {{range $i, $g := .Groups}}{{if $i}}, {{end}}{{$g.Name}} (<code>{{$g.Code}}</code>){{end}}.
+    </p>
+</div>
+{{end}}
+{{end}}

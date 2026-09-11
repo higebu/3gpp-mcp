@@ -18,7 +18,7 @@ func sipHeading(text string) bodyElement {
 }
 
 func sipParse(elements []bodyElement) []*Section {
-	return parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil)
+	return parseSections(elements, map[string]string{"Heading1": "Heading 1"}, nil, nil, nil, ParseOptions{})
 }
 
 func TestSIPStartLineRegex(t *testing.T) {

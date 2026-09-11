@@ -1,0 +1,78 @@
+{{define "tdoc.html"}}
+<header class="spec-header tdoc-header">
+    <div class="spec-header-id">
+        <h1 class="spec-header-title">{{.Doc.ID}}</h1>
+        {{if .Doc.MeetingTitle}}<span class="spec-header-version">{{.Doc.MeetingTitle}}{{if .Doc.MeetingCode}} ({{.Doc.MeetingCode}}){{end}}</span>{{end}}
+        <span class="badge badge-cached">on demand</span>
+    </div>
+    {{if and .Doc.Title (ne .Doc.Title .Doc.ID)}}<p class="tdoc-title">{{.Doc.Title}}</p>{{end}}
+    <p class="tdoc-meta">
+        Source: <a href="{{.Doc.URL}}" target="_blank" rel="noopener">{{.Doc.Path}}</a>
+        {{if .Doc.Files}}&mdash; files: {{range $i, $f := .Doc.Files}}{{if $i}}, {{end}}{{if eq $f $.Doc.MainFile}}<strong>{{$f}}</strong>{{else}}{{$f}}{{end}}{{end}}{{if gt (len .Doc.Files) 1}} (only the Word document in bold is converted){{end}}{{end}}
+    </p>
+</header>
+<div class="spec-layout">
+    <button class="toc-toggle" id="toc-toggle" aria-label="Toggle contents">&#9776; Contents</button>
+
+    <aside class="toc-sidebar" id="toc-sidebar">
+        <div class="toc-header">
+            <button class="toc-close" id="toc-close" aria-label="Close contents">&#10005;</button>
+            <p class="toc-label">Contents</p>
+        </div>
+        <nav class="toc-nav">
+            <ul class="toc-list">
+                {{range .TOC}}
+                <li class="toc-item {{if isActive $.Current .Number}}active{{end}}" style="padding-left: {{indent .Level}}px">
+                    <a href="{{tdocSectionURL $.Doc.ID .Number $.Meeting}}" title="{{if and .Number (ne .Number .Title)}}{{.Number}} {{end}}{{.Title}}">
+                        {{if and .Number (ne .Number .Title)}}<span class="toc-number">{{.Number}}</span>{{end}}
+                        <span class="toc-title">{{.Title}}</span>
+                    </a>
+                </li>
+                {{end}}
+            </ul>
+        </nav>
+    </aside>
+
+    <div class="section-content">
+        {{template "tdoc-section-nav" .}}
+
+        {{range .Sections}}
+        <article class="section">
+            <h{{headingLevel .Level}} class="section-heading depth-{{sectionDepth .Level}}" id="section-{{.Number}}">
+                {{if and .Number (ne .Number .Title)}}<span class="section-number">{{.Number}}</span> {{end}}{{.Title}}
+            </h{{headingLevel .Level}}>
+            <div class="section-body">
+                {{.Content}}
+            </div>
+        </article>
+        {{end}}
+
+        {{template "tdoc-section-nav" .}}
+    </div>
+</div>
+{{end}}
+
+{{define "tdoc-section-nav"}}
+{{if or .Prev .Next}}
+<nav class="section-nav" aria-label="Section navigation">
+    {{if .Prev}}
+    <a class="section-nav-link section-nav-prev" href="{{tdocSectionURL .Doc.ID .Prev.Number .Meeting}}">
+        <span class="section-nav-arrow">&larr;</span>
+        <span class="section-nav-text">
+            <span class="section-nav-hint">Previous</span>
+            <span class="section-nav-label">{{if and .Prev.Number (ne .Prev.Number .Prev.Title)}}{{.Prev.Number}} {{end}}{{.Prev.Title}}</span>
+        </span>
+    </a>
+    {{else}}<span class="section-nav-spacer"></span>{{end}}
+    {{if .Next}}
+    <a class="section-nav-link section-nav-next" href="{{tdocSectionURL .Doc.ID .Next.Number .Meeting}}">
+        <span class="section-nav-text">
+            <span class="section-nav-hint">Next</span>
+            <span class="section-nav-label">{{if and .Next.Number (ne .Next.Number .Next.Title)}}{{.Next.Number}} {{end}}{{.Next.Title}}</span>
+        </span>
+        <span class="section-nav-arrow">&rarr;</span>
+    </a>
+    {{end}}
+</nav>
+{{end}}
+{{end}}

@@ -23,6 +23,12 @@ var defaultCacheTTL = func() time.Duration {
 	return 24 * time.Hour
 }()
 
+// CacheTTL returns the listing cache time-to-live (THREEGPP_CACHE_TTL_HOURS,
+// default 24h), for callers that keep their own entries in the cache.
+func CacheTTL() time.Duration {
+	return defaultCacheTTL
+}
+
 // cacheDir returns the cache directory path.
 // Uses $XDG_CACHE_HOME/3gpp-mcp if set, otherwise ~/.cache/3gpp-mcp.
 func cacheDir() (string, error) {

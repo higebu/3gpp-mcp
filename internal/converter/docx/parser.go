@@ -116,28 +116,52 @@ type bodyElement struct {
 	Table     tableInfo     // populated when Tag == "tbl"
 }
 
+// ParseOptions adjusts how a document is split into sections.
+type ParseOptions struct {
+	// KeepPreamble keeps the content that precedes the first heading as a
+	// section of its own, numbered "" and titled PreambleTitle. Specifications
+	// drop it — their cover page carries nothing the metadata does not — but
+	// meeting documents put their substance there: a change request's cover
+	// sheet, a liaison statement's header and body. The section is omitted
+	// when nothing precedes the first heading.
+	KeepPreamble bool
+}
+
+// PreambleTitle is the title of the section that KeepPreamble creates.
+const PreambleTitle = "Preamble"
+
 // ParseDocx parses a 3GPP .docx file and returns metadata, sections, and images.
 func ParseDocx(path string) (*ParseResult, error) {
+	return ParseDocxWithOptions(path, ParseOptions{})
+}
+
+// ParseDocxWithOptions is ParseDocx with explicit ParseOptions.
+func ParseDocxWithOptions(path string, opts ParseOptions) (*ParseResult, error) {
 	r, err := zip.OpenReader(path)
 	if err != nil {
 		return nil, fmt.Errorf("open docx: %w", err)
 	}
 	defer r.Close()
 
-	return parseFromZipReader(&r.Reader, filepath.Base(path))
+	return parseFromZipReader(&r.Reader, filepath.Base(path), opts)
 }
 
 // ParseDocxFromBytes parses a 3GPP .docx from in-memory bytes.
 func ParseDocxFromBytes(data []byte, filename string) (*ParseResult, error) {
+	return ParseDocxFromBytesWithOptions(data, filename, ParseOptions{})
+}
+
+// ParseDocxFromBytesWithOptions is ParseDocxFromBytes with explicit ParseOptions.
+func ParseDocxFromBytesWithOptions(data []byte, filename string, opts ParseOptions) (*ParseResult, error) {
 	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, fmt.Errorf("open docx from bytes: %w", err)
 	}
 
-	return parseFromZipReader(r, filename)
+	return parseFromZipReader(r, filename, opts)
 }
 
-func parseFromZipReader(r *zip.Reader, filename string) (*ParseResult, error) {
+func parseFromZipReader(r *zip.Reader, filename string, opts ParseOptions) (*ParseResult, error) {
 	// Read styles
 	stylesData, err := readZipFile(r, "word/styles.xml")
 	if err != nil {
@@ -188,7 +212,7 @@ func parseFromZipReader(r *zip.Reader, filename string) (*ParseResult, error) {
 	metadata := extractMetadata(filename, props, bodyElements, styleMap)
 
 	// Parse sections (with image placeholder insertion)
-	sections := parseSections(bodyElements, styleMap, codeStyles, relMap, images)
+	sections := parseSections(bodyElements, styleMap, codeStyles, relMap, images, opts)
 
 	// Collect images into a list
 	var imageList []*EmbeddedImage
@@ -293,11 +317,22 @@ func diagramPlaceholder(labels []string) string {
 }
 
 // parseSections walks the body elements and creates a section hierarchy.
-func parseSections(elements []bodyElement, styleMap map[string]string, codeStyles map[string]bool, relMap map[string]string, images map[string]*EmbeddedImage) []*Section {
+func parseSections(elements []bodyElement, styleMap map[string]string, codeStyles map[string]bool, relMap map[string]string, images map[string]*EmbeddedImage, opts ParseOptions) []*Section {
 	var sections []*Section
 	var currentSection *Section
 	var sectionStack []*Section
 	inAnnex := false
+
+	// The preamble collects everything up to the first heading. It stays out
+	// of sectionStack so the first real heading has no parent, exactly as it
+	// would without a preamble; if nothing precedes the first heading it is
+	// dropped again at the end.
+	var preamble *Section
+	if opts.KeepPreamble {
+		preamble = &Section{Number: "", Title: PreambleTitle, Level: 1}
+		sections = append(sections, preamble)
+		currentSection = preamble
+	}
 
 	// Accumulates consecutive code paragraphs (e.g. OpenAPI YAML samples)
 	// so that they can be emitted as a single fenced code block instead of
@@ -812,6 +847,9 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 	flushSIP()
 	flushCodeBlock()
 
+	if preamble != nil && len(preamble.Content) == 0 {
+		sections = sections[1:]
+	}
 	return sections
 }
 

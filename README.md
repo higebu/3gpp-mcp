@@ -115,7 +115,7 @@ Browse specifications in your browser by adding `--web` to the HTTP transport:
 # Web viewer:   http://localhost:8080/
 ```
 
-Features: spec list with filtering, section viewer with TOC sidebar, full-text search with pagination, past-version browsing (versions are listed per spec and downloaded on demand, like the MCP tools), version comparison (structural summary and per-section diffs), embedded images, cross-reference links, OpenAPI definitions with syntax highlighting, KaTeX rendering of the [LaTeX formulas](#formulas) the converter emits, dark mode, responsive design. Code blocks are syntax-highlighted per notation — ASN.1, Diameter, SIP/RTSP, SDP and XML (see [Code blocks](#code-blocks)).
+Features: spec list with filtering, section viewer with TOC sidebar, full-text search with pagination, past-version browsing (versions are listed per spec and downloaded on demand, like the MCP tools), version comparison (structural summary and per-section diffs), embedded images, meeting documents (TDocs) fetched on demand at `/tdocs`, cross-reference links, OpenAPI definitions with syntax highlighting, KaTeX rendering of the [LaTeX formulas](#formulas) the converter emits, dark mode, responsive design. Code blocks are syntax-highlighted per notation — ASN.1, Diameter, SIP/RTSP, SDP and XML (see [Code blocks](#code-blocks)).
 
 #### WebMCP
 
@@ -352,6 +352,37 @@ image format: `![Figure](image://NAME?w=&h=)` in body text and
 `get_image`; both the original filename (`image3.emf`) and the converted one
 (`image3.png`) resolve.
 
+### Meeting documents (TDocs)
+
+| Tool | Description | Key Parameters |
+|------|-------------|----------------|
+| `get_tdoc` | Read a meeting document (TDoc) as Markdown | `tdoc_id` (required): TDoc number (`R1-2509715`) or an FTP path (`tsg_ran/WG1_RL1/TSGR1_123/Report/Final_Minutes_report_RAN1#123_v100.zip`), `meeting`, `section_number`, `offset`, `max_lines`, `max_chars` (all optional) |
+
+TDocs are the working documents of a 3GPP meeting: contributions, change
+requests (CRs), liaison statements (LSs), agendas and meeting reports. A TDoc
+number is located through the group's DynaReport meeting page
+(<https://www.3gpp.org/dynareport?code=Meetings-R1.htm> and its siblings) by
+TDoc number range, downloaded from that meeting's `Docs/` folder and converted
+on first use. Pass `meeting` (`R1-123`, `RAN1#123`, `TSGR1_123`) when the
+number falls in no listed range. A document with no TDoc number — a meeting
+report, for instance — is named by its path under
+<https://www.3gpp.org/ftp/> instead.
+
+Converted documents are kept in their own size-bounded cache
+(`tdocs.db`, see [`--tdoc-cache`](#serve)), separate from the main database:
+TDocs are never imported into it and `search` does not cover them.
+
+Notes:
+
+- A CR's cover sheet and an LS's header are in the section named `preamble`.
+- A download that holds attachments has only its main Word file converted; the
+  others are listed in the output header so a reader knows they exist.
+- `.doc` documents need LibreOffice (`soffice`) at runtime; `.pptx`, `.xlsx`
+  and `.pdf` are not converted and the tool reports the file list instead.
+- Supported groups: RAN and RAN1-6, SA and SA1-6, CT and CT1, CT3, CT4, CT6,
+  and GERAN — TDoc prefixes `RP`, `R1`-`R6`, `SP`, `S1`-`S6`, `CP`, `C1`,
+  `C3`, `C4`, `C6` and `GP`.
+
 ### Code blocks
 
 Section text carries tagged code fences, so both LLMs and the web viewer can
@@ -467,10 +498,14 @@ Start the MCP server.
 | `--no-fetch` | Disable on-demand fetching of spec versions that are not in the database | `false` |
 | `--version-cache` | Path to the on-demand version cache | `$XDG_CACHE_HOME/3gpp-mcp/versions.db` (`~/.cache/3gpp-mcp/versions.db` when unset) |
 | `--version-cache-mb` | Size limit of the version cache in MB. `0` keeps only the most recently fetched version, `-1` is unlimited (env: `THREEGPP_VERSION_CACHE_MB`) | `1024` |
+| `--tdoc-cache` | Path to the on-demand meeting document (TDoc) cache | `$XDG_CACHE_HOME/3gpp-mcp/tdocs.db` (`~/.cache/3gpp-mcp/tdocs.db` when unset) |
+| `--tdoc-cache-mb` | Size limit of the meeting document cache in MB. `0` keeps only the most recently fetched document, `-1` is unlimited (env: `THREEGPP_TDOC_CACHE_MB`) | `512` |
 | `--fetch-budget` | How long a tool call waits for an on-demand fetch before asking the caller to retry (env: `THREEGPP_FETCH_BUDGET`) | `60s` |
 
 The version cache is a separate SQLite file, so the main database stays
-read-only and is never polluted with extra versions. When the cache cannot be
+read-only and is never polluted with extra versions. The meeting document
+cache is a third file, bounded and evicted the same way; `--no-fetch` disables
+both. When the cache cannot be
 created — a read-only or ephemeral filesystem, such as the `scratch`-based
 container image — the server logs a warning and runs with on-demand fetching
 disabled; everything else keeps working. Cached versions are evicted
@@ -529,13 +564,14 @@ spec.
 
 The query commands (`list-specs`, `list-versions`, `get-toc`, `get-section`,
 `get-asn1`, `compare-versions`, `search`, `list-openapi`, `get-openapi`,
-`search-openapi`, `get-references`, `list-images`, `get-image`) mirror the MCP
-read tools 1:1, so
+`search-openapi`, `get-references`, `list-images`, `get-image`, `get-tdoc`)
+mirror the MCP read tools 1:1, so
 the database can be inspected and scripted from a shell without an MCP client:
 
 ```bash
 3gpp-mcp search --db data/3gpp.db --limit 3 "AMF AND authentication" | jq '.results[].section_number'
 3gpp-mcp get-section --db data/3gpp.db "TS 23.501" 5.15.2 | less
+3gpp-mcp get-tdoc --db data/3gpp.db R1-2509715 | less
 ```
 
 Conventions shared by all of them:
@@ -551,6 +587,11 @@ Conventions shared by all of them:
   `--version-cache`, `--version-cache-mb`, `--fetch-budget`. Queries that name
   no version never create the version cache (`list-versions` reads an existing
   cache to report `cached` availability, but will not create one).
+- `get-tdoc` takes a TDoc number or an FTP path and an optional section
+  ([`preamble`](#meeting-documents-tdocs) for a CR cover sheet or an LS
+  header), plus `--meeting`, and shares `serve`'s meeting-document flags
+  `--no-fetch`, `--tdoc-cache`, `--tdoc-cache-mb` and `--fetch-budget`. It
+  reads its own cache only, never the version cache.
 - Every command takes `--db` (default `3gpp.db`).
 
 ## Environment Variables
@@ -562,6 +603,7 @@ Conventions shared by all of them:
 | `THREEGPP_MCP_BEARER_TOKEN` | Bearer token for HTTP transport auth |
 | `PORT` | PaaS convention (Cloud Run / Heroku); `serve` defaults to HTTP transport on `:$PORT` |
 | `THREEGPP_VERSION_CACHE_MB` | Size limit of the on-demand version cache in MB (default `1024`) |
+| `THREEGPP_TDOC_CACHE_MB` | Size limit of the on-demand meeting document (TDoc) cache in MB (default `512`) |
 | `THREEGPP_FETCH_BUDGET` | How long a tool call waits for an on-demand fetch (default `60s`) |
 | `THREEGPP_MAX_ZIP_SIZE_MB` | Max ZIP download size (default `512`) |
 | `THREEGPP_CACHE_TTL_HOURS` | Spec list cache TTL in hours (default `24`) |

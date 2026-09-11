@@ -599,6 +599,24 @@ func convertedDocxPath(docPath, outputDir string) string {
 	return filepath.Join(outputDir, base+".docx")
 }
 
+// DownloadZip fetches one archive file, bounded by the same size limit as
+// the spec pipeline (THREEGPP_MAX_ZIP_SIZE_MB). The meeting-document fetcher
+// shares it so every 3GPP download honours one limit.
+func DownloadZip(ctx context.Context, client *http.Client, url string) ([]byte, error) {
+	return downloadZip(ctx, client, url)
+}
+
+// MaxZipSize returns the download and extraction size limit in bytes.
+func MaxZipSize() int64 {
+	return maxZipSize
+}
+
+// ExtractFile writes one zip entry to outPath, rejecting path traversal and
+// decompression bombs. Exported for the meeting-document fetcher.
+func ExtractFile(f *zip.File, outPath string) error {
+	return extractFile(f, outPath)
+}
+
 func downloadZip(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 	// Use a client without an overall timeout so that large ZIP files (e.g.
 	// TS 26.274 ~258 MB, TS 26.258 ~170 MB) are not cut off mid-download.

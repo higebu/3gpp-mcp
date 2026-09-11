@@ -25,6 +25,7 @@ import (
 	"github.com/higebu/3gpp-mcp/internal/asn1index"
 	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/structdiff"
+	"github.com/higebu/3gpp-mcp/internal/tdocstore"
 	"github.com/higebu/3gpp-mcp/internal/textdiff"
 	"github.com/higebu/3gpp-mcp/internal/tools"
 	"github.com/higebu/3gpp-mcp/internal/versionstore"
@@ -36,6 +37,8 @@ type queryFlags struct {
 	noFetch        bool
 	versionCache   string
 	versionCacheMB int64
+	tdocCache      string
+	tdocCacheMB    int64
 	fetchBudget    time.Duration
 }
 
@@ -49,6 +52,8 @@ func addQueryFlags(fs *flag.FlagSet, withFetch bool) *queryFlags {
 		fs.BoolVar(&qf.noFetch, "no-fetch", false, "Disable on-demand fetching of spec versions that are not in the database")
 		fs.StringVar(&qf.versionCache, "version-cache", "", "Path to the on-demand version cache (default: $XDG_CACHE_HOME/3gpp-mcp/versions.db)")
 		fs.Int64Var(&qf.versionCacheMB, "version-cache-mb", defaultVersionCacheMB(), "Size limit of the version cache in MB, or -1 for unlimited (env: THREEGPP_VERSION_CACHE_MB)")
+		fs.StringVar(&qf.tdocCache, "tdoc-cache", "", "Path to the on-demand meeting document (TDoc) cache (default: $XDG_CACHE_HOME/3gpp-mcp/tdocs.db)")
+		fs.Int64Var(&qf.tdocCacheMB, "tdoc-cache-mb", defaultTDocCacheMB(), "Size limit of the meeting document cache in MB, or -1 for unlimited (env: THREEGPP_TDOC_CACHE_MB)")
 		fs.DurationVar(&qf.fetchBudget, "fetch-budget", defaultFetchBudget(), "How long one fetch attempt waits before the command polls again (env: THREEGPP_FETCH_BUDGET)")
 	}
 	return qf
@@ -66,6 +71,21 @@ var queryClient *http.Client
 // reads. A cache that cannot open disables past-version reads with a warning,
 // same as serve.
 func (qf *queryFlags) openSource(needStore bool) (*tools.Source, func(), error) {
+	return qf.open(needStore, false)
+}
+
+// openTDocSource opens a Source for get-tdoc: the meeting-document cache and
+// not the version cache, which meeting documents have no use for — they carry
+// no spec version and never come from the spec archive.
+func (qf *queryFlags) openTDocSource() (*tools.Source, func(), error) {
+	return qf.open(false, true)
+}
+
+// open builds the Source behind openSource and openTDocSource. Each on-demand
+// cache is created only when the command actually reads it, and one that
+// cannot open leaves its feature disabled with a warning instead of failing
+// the command, same as serve.
+func (qf *queryFlags) open(needStore, needTDocs bool) (*tools.Source, func(), error) {
 	d, err := db.Open(qf.db)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open database: %w", err)
@@ -73,7 +93,9 @@ func (qf *queryFlags) openSource(needStore bool) (*tools.Source, func(), error) 
 	src := tools.NewSource(d)
 	src.Budget = qf.fetchBudget
 	src.Client = queryClient
-	cleanup := func() { _ = d.Close() }
+	// Closed in reverse: the caches go before the database they were opened
+	// alongside.
+	closers := []func() error{d.Close}
 	if needStore && !qf.noFetch {
 		store, err := versionstore.Open(versionstore.Options{
 			Path:       qf.versionCache,
@@ -83,10 +105,24 @@ func (qf *queryFlags) openSource(needStore bool) (*tools.Source, func(), error) 
 			fmt.Fprintf(os.Stderr, "WARNING: on-demand version fetching disabled: %v\n", err)
 		} else {
 			src.Store = store
-			cleanup = func() {
-				_ = store.Close()
-				_ = d.Close()
-			}
+			closers = append(closers, store.Close)
+		}
+	}
+	if needTDocs && !qf.noFetch {
+		store, err := tdocstore.Open(tdocstore.Options{
+			Path:       qf.tdocCache,
+			LimitBytes: qf.tdocCacheMB << 20,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "WARNING: on-demand fetching of meeting documents disabled: %v\n", err)
+		} else {
+			src.TDocs = store
+			closers = append(closers, store.Close)
+		}
+	}
+	cleanup := func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			_ = closers[i]()
 		}
 	}
 	return src, cleanup, nil
@@ -148,7 +184,12 @@ func waitForFetch(ctx context.Context, errOut io.Writer, call func() error) erro
 			return err
 		}
 		if !announced {
-			subject := fmt.Sprintf("%s v%s", inProgress.SpecID, inProgress.Version)
+			// A meeting document carries no version, so it is announced by ID
+			// alone rather than as "ID v".
+			subject := inProgress.SpecID
+			if inProgress.Version != "" {
+				subject += " v" + inProgress.Version
+			}
 			if inProgress.Images {
 				subject = "images for " + subject
 			}
@@ -929,6 +970,63 @@ func runGetImage(ctx context.Context, out, errOut io.Writer, src *tools.Source, 
 	}
 	if _, err := out.Write(img.Data); err != nil {
 		return fmt.Errorf("write image: %w", err)
+	}
+	return nil
+}
+
+// get-tdoc
+
+// tdocPreambleName is how the CLI names the section whose stored number is
+// "" — a CR cover sheet or an LS header — mirroring get_tdoc's section_number.
+const tdocPreambleName = "preamble"
+
+func cmdGetTDoc(args []string) {
+	fs := flag.NewFlagSet("get-tdoc", flag.ExitOnError)
+	qf := addQueryFlags(fs, true)
+	meeting := fs.String("meeting", "", "Meeting the document belongs to, only needed when the TDoc number is not found by itself (e.g. R1-123, RAN1#123, TSGR1_123)")
+	_ = fs.Parse(args)
+	if fs.NArg() != 1 && fs.NArg() != 2 {
+		fmt.Fprintln(os.Stderr, "Usage: 3gpp-mcp get-tdoc [options] <tdoc-id-or-path> [section]")
+		fmt.Fprintln(os.Stderr, "Options must come before positional arguments.")
+		os.Exit(1)
+	}
+
+	runQuery("get-tdoc", func(ctx context.Context) error {
+		src, cleanup, err := qf.openTDocSource()
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		return runGetTDoc(ctx, os.Stdout, os.Stderr, src, fs.Arg(0), fs.Arg(1), *meeting)
+	})
+}
+
+func runGetTDoc(ctx context.Context, out, errOut io.Writer, src *tools.Source, request, section, meeting string) error {
+	// "*" reads the whole document; the preamble is stored under the empty
+	// number, so it needs a name of its own on the command line.
+	number := "*"
+	if section != "" {
+		number = section
+		if strings.EqualFold(section, tdocPreambleName) {
+			number = ""
+		}
+	}
+	var rec *tdocstore.Document
+	var sections []db.Section
+	err := waitForFetch(ctx, errOut, func() error {
+		var err error
+		rec, sections, err = src.TDocSections(ctx, request, meeting, number, false)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if len(sections) == 0 {
+		return fmt.Errorf("section %s not found in %s", section, rec.ID)
+	}
+	fmt.Fprintln(out, tools.TDocHeader(rec))
+	for _, s := range sections {
+		fmt.Fprintf(out, "%s\n\n", s.Content)
 	}
 	return nil
 }
