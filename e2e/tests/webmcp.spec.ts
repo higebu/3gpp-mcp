@@ -4,7 +4,7 @@ const ALL_TOOLS = [
   'list_specs', 'list_versions', 'get_toc', 'get_section', 'get_asn1',
   'compare_versions', 'search', 'list_openapi', 'get_openapi',
   'search_openapi', 'get_references', 'list_images', 'get_image',
-  'list_meetings', 'list_tdocs', 'get_tdoc',
+  'list_meetings', 'list_tdocs', 'get_tdoc', 'get_meeting_report',
 ];
 
 // Installs a stub document.modelContext before any page script runs, so

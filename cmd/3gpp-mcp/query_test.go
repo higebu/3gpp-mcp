@@ -1599,3 +1599,47 @@ func TestCmdListTDocs_ArgOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestRunGetMeetingReport(t *testing.T) {
+	// meetingQuerySource has one meeting, R1-123, whose list holds an
+	// agenda; its report has no following meeting to be listed by and no
+	// Report folder on the fake site.
+	src := meetingQuerySource(t)
+	store, err := tdocstore.Open(tdocstore.Options{
+		Path: filepath.Join(t.TempDir(), "tdocs.db"), LimitBytes: -1, Fetcher: fakeTDocFetch,
+		ListFetcher: func(_ context.Context, m tdoc.Meeting) ([]tdoc.Entry, string, error) {
+			return []tdoc.Entry{{TDoc: "R1-2509000", Title: "Draft Agenda of RAN1#123", Type: "agenda", Status: "approved"}}, tdoc.TDocListPath(m), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	src.TDocs = store
+
+	var out, errOut bytes.Buffer
+	if err := runGetMeetingReport(t.Context(), &out, &errOut, src, "RAN1#123", "", "agenda", ""); err != nil {
+		t.Fatalf("agenda: %v", err)
+	}
+	if !strings.Contains(out.String(), "[Meeting agenda of 3GPPRAN1#123: R1-2509000 from the meeting's TDoc list]") || !strings.Contains(out.String(), "[Source: R1-2509000") {
+		t.Errorf("agenda output:\n%s", out.String())
+	}
+	if err := runGetMeetingReport(t.Context(), &out, &errOut, src, "RAN1#123", "", "report", ""); err == nil || !strings.Contains(err.Error(), "no following meeting lists a report") {
+		t.Errorf("report without a source: %v", err)
+	}
+	if err := runGetMeetingReport(t.Context(), &out, &errOut, src, "RAN1#123", "", "minutes", ""); err == nil || !strings.Contains(err.Error(), "unknown document kind") {
+		t.Errorf("bad kind: %v", err)
+	}
+}
+
+func TestCmdGetMeetingReport(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "3gpp.db")
+	cmdInitDB([]string{"-db", dbPath})
+	code := captureExit(t)
+	errOut := captureStderr(t, func() {
+		cmdGetMeetingReport([]string{"-db", dbPath, "-tdoc-cache", filepath.Join(t.TempDir(), "tdocs.db"), "-no-fetch", "-kind", "agenda", "R1-123"})
+	})
+	if *code != 1 || !strings.Contains(errOut, "get-meeting-report failed") || !strings.Contains(errOut, "disabled") {
+		t.Errorf("exit %d, stderr:\n%s", *code, errOut)
+	}
+}

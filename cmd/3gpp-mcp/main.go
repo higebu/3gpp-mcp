@@ -126,6 +126,7 @@ func init() {
 		{name: "list-meetings", desc: "List the meetings of a TSG or working group", run: cmdListMeetings},
 		{name: "list-tdocs", desc: "List the documents (TDocs) of a meeting", run: cmdListTDocs},
 		{name: "get-tdoc", desc: "Print a meeting document (TDoc) as markdown", run: cmdGetTDoc},
+		{name: "get-meeting-report", desc: "Print a meeting's report or agenda as markdown", run: cmdGetMeetingReport},
 		{name: "completion", desc: "Generate shell completion scripts", run: cmdCompletion},
 	}
 }

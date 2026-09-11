@@ -34,40 +34,87 @@ func HandleGetTDoc(src *Source) func(ctx context.Context, req *mcp.CallToolReque
 		if strings.TrimSpace(input.TDocID) == "" {
 			return errorResult("tdoc_id is required"), nil, nil
 		}
-
-		number := "*"
-		wholeDocument := true
-		if n := strings.TrimSpace(input.SectionNumber); n != "" {
-			wholeDocument = false
-			number = n
-			if strings.EqualFold(n, preambleName) {
-				number = ""
-			}
-		}
-
-		rec, sections, err := src.TDocSections(ctx, input.TDocID, input.Meeting, number, false)
-		if err != nil {
-			return tdocErrorResult(err), nil, nil
-		}
-		if len(sections) == 0 {
-			return errorResult(fmt.Sprintf("section %s not found in %s; call get_tdoc without section_number to see its sections", input.SectionNumber, rec.ID)), nil, nil
-		}
-
-		var full strings.Builder
-		for _, s := range sections {
-			full.WriteString(s.Content)
-			full.WriteString("\n\n")
-		}
-		result := paginateText(full.String(), input.Offset, input.MaxLines, input.MaxChars)
-
-		header := TDocHeader(rec)
-		if wholeDocument {
-			header += "\n" + tdocSectionList(sections)
-		} else {
-			header += fmt.Sprintf("\nSection: %s", sectionLabel(sections[0]))
-		}
-		return prependLine(header, result), nil, nil
+		return renderTDoc(ctx, src, input.TDocID, input.Meeting, "", tdocPage{
+			Section: input.SectionNumber, Offset: input.Offset, MaxLines: input.MaxLines, MaxChars: input.MaxChars,
+		}), nil, nil
 	}
+}
+
+// tdocPage is the part of a document a tool call asks for.
+type tdocPage struct {
+	Section  string
+	Offset   int
+	MaxLines int
+	MaxChars int
+}
+
+// renderTDoc reads a meeting document and renders one page of it with the
+// provenance header, the metadata pulled out of its cover sheet or LS
+// header, and the section list. lead, when set, is a line placed above the
+// header naming what the document is (the meeting report it was resolved
+// as, for instance).
+func renderTDoc(ctx context.Context, src *Source, request, meeting, lead string, page tdocPage) *mcp.CallToolResult {
+	number := "*"
+	wholeDocument := true
+	if n := strings.TrimSpace(page.Section); n != "" {
+		wholeDocument = false
+		number = n
+		if strings.EqualFold(n, preambleName) {
+			number = ""
+		}
+	}
+
+	rec, sections, err := src.TDocSections(ctx, request, meeting, number, false)
+	if err != nil {
+		return tdocErrorResult(err)
+	}
+	if len(sections) == 0 {
+		return errorResult(fmt.Sprintf("section %s not found in %s; call get_tdoc without section_number to see its sections", page.Section, rec.ID))
+	}
+
+	var full strings.Builder
+	for _, s := range sections {
+		full.WriteString(s.Content)
+		full.WriteString("\n\n")
+	}
+	result := paginateText(full.String(), page.Offset, page.MaxLines, page.MaxChars)
+
+	header := TDocHeader(rec)
+	if lead != "" {
+		header = lead + "\n" + header
+	}
+	if meta := src.TDocMeta(ctx, rec.ID, sections).Text(); meta != "" {
+		header += "\n" + meta
+	}
+	if wholeDocument {
+		header += "\n" + tdocSectionList(sections)
+	} else {
+		header += fmt.Sprintf("\nSection: %s", sectionLabel(sections[0]))
+	}
+	return prependLine(header, result)
+}
+
+// TDocMeta reads the cover sheet or LS header of a cached document. The
+// preamble is taken from sections when it is among them and read from the
+// cache otherwise, so a single-section read still shows what the document
+// is. Nil for a document that is neither a CR nor an LS. It is shared with
+// the CLI's get-tdoc command and the web viewer.
+func (s *Source) TDocMeta(ctx context.Context, id string, sections []db.Section) *TDocMetadata {
+	preamble := ""
+	for _, sec := range sections {
+		if sec.Number == "" {
+			preamble = sec.Content
+			break
+		}
+	}
+	if preamble == "" {
+		secs, err := s.TDocs.GetSection(id, "", false)
+		if err != nil || len(secs) == 0 {
+			return nil
+		}
+		preamble = secs[0].Content
+	}
+	return ParseTDocMetadata(ctx, s.DB, preamble)
 }
 
 // tdocErrorResult renders an error from a meeting-document fetch. A fetch

@@ -49,6 +49,7 @@ func NewServer(src *tools.Source) http.Handler {
 	mux.HandleFunc("GET /meetings", h.handleMeetingGroups)
 	mux.HandleFunc("GET /meetings/{group}", h.handleMeetings)
 	mux.HandleFunc("GET /meetings/{group}/{meeting}", h.handleMeeting)
+	mux.HandleFunc("GET /meetings/{group}/{meeting}/{kind}", h.handleMeetingDocument)
 
 	return mux
 }

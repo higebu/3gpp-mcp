@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/higebu/3gpp-mcp/internal/db"
 	"github.com/higebu/3gpp-mcp/internal/tdoc"
 	"github.com/higebu/3gpp-mcp/internal/tdocstore"
 	"github.com/higebu/3gpp-mcp/internal/testutil"
@@ -289,5 +290,118 @@ func TestMeetingURL(t *testing.T) {
 	}
 	if filterQuery(tdocstore.Filter{}) != "" {
 		t.Error("empty filter renders a query")
+	}
+}
+
+// crCoverPreamble is a CR cover sheet as the converter renders it.
+const crCoverPreamble = `# Preamble
+
+<table><tbody><tr><td colspan="9"><p><strong>CHANGE REQUEST</strong></p></td></tr><tr><td><p></p></td><td><p><strong>23.501</strong></p></td><td><p><strong>CR</strong></p></td><td><p><strong>0748</strong></p></td><td><p><strong>rev</strong></p></td><td><p><strong>-</strong></p></td><td><p><strong>Current version:</strong></p></td><td><p><strong>18.6.0</strong></p></td></tr></tbody></table>
+
+<table><tbody><tr><td><p><strong><em>Title:</em></strong></p></td><td><p>Fix &lt;architecture&gt;</p></td></tr><tr><td><p><strong><em>Source to WG:</em></strong></p></td><td><p>Samsung</p></td></tr><tr><td><p><strong><em>Category:</em></strong></p></td><td><p>F</p></td><td><p><strong><em>Release:</em></strong></p></td><td><p>Rel-18</p></td></tr><tr><td><p><strong><em>Reason for change:</em></strong></p></td><td><p>Because.</p></td></tr><tr><td><p><strong><em>Clauses affected:</em></strong></p></td><td><p>5.1, 5.1.1</p></td></tr></tbody></table>
+`
+
+func crTDoc(_ context.Context, doc tdoc.Document) (*tdoc.Fetched, error) {
+	preamble := crCoverPreamble
+	if doc.ID == "R1-2508303" {
+		preamble = "# Preamble\n\n**Title:**\tLS on X\n\n**Source:**\tRAN WG1\n\n**To:**\tRAN WG2\n\n**Attachments:**\tNone\n"
+	}
+	return &tdoc.Fetched{
+		Title: "Document " + doc.ID, MainFile: doc.ID + ".docx", Files: []string{doc.ID + ".docx"},
+		Sections: []db.Section{
+			{SpecID: doc.ID, Number: "", Title: "Preamble", Level: 1, Content: preamble},
+			{SpecID: doc.ID, Number: "5.1", Title: "General", Level: 2, Content: "## 5.1 General\n\nChanged text."},
+			{SpecID: doc.ID, Number: "Agreement", Title: "Agreement", Level: 1, Content: "# Agreement\n\nAgreed."},
+		},
+	}, nil
+}
+
+func TestTDocPageCoverSheet(t *testing.T) {
+	d := testutil.SetupTestDB(t)
+	store, err := tdocstore.Open(tdocstore.Options{Path: filepath.Join(t.TempDir(), "tdocs.db"), LimitBytes: -1, Fetcher: crTDoc,
+		ListFetcher: func(_ context.Context, m tdoc.Meeting) ([]tdoc.Entry, string, error) {
+			return []tdoc.Entry{
+				{TDoc: "R1-2509000", Title: "Draft Agenda of RAN1#123", Type: "agenda", Status: "approved"},
+				{TDoc: "R1-2509715", Title: "Fix", Type: "CR", Status: "agreed"},
+			}, tdoc.TDocListPath(m), nil
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dynareport", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, testutil.DynaReportPage(
+			testutil.DynaReportRow{Code: "R1-123", Title: "3GPPRAN1#123", Start: "2025-11-17", End: "2025-11-21", Dir: "tsg_ran/WG1_RL1/TSGR1_123", First: "R1-2508300", Last: "R1-2509718"},
+		))
+	})
+	mux.HandleFunc("/ftp/tsg_ran/WG1_RL1/TSGR1_123/Report/{$}", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="https://www.3gpp.org/ftp/tsg_ran/WG1_RL1/TSGR1_123/Report/Final_Minutes_report_RAN1%23123_v100.zip">x</a>`)
+	})
+	src := tools.NewSource(d)
+	src.TDocs = store
+	src.Client = testutil.FakeSite(t, mux)
+	src.UseCache = false
+	src.Budget = 5 * time.Second
+	ts := httptest.NewServer(NewServer(src))
+	t.Cleanup(ts.Close)
+
+	// The CR page: cover sheet, clause links into the spec at the CR's
+	// base version, and a link on the changed clause's heading.
+	_, body := get(t, ts.URL+"/tdocs/R1-2509715")
+	for _, want := range []string{
+		`<dt>Change request</dt><dd><a href="/specs/TS%2023.501">TS 23.501</a> CR 0748, category F, Rel-18, against v18.6.0</dd>`,
+		"<dt>Reason for change</dt><dd>Because.</dd>",
+		`href="/specs/TS%2023.501/sections/5.1?version=18.6.0" title="Current text of clause 5.1 in TS 23.501">5.1 ↗</a>`,
+		`href="/specs/TS%2023.501/sections/5.1.1?version=18.6.0"`,
+		"Fix &lt;architecture&gt;",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
+	}
+	// The section page carries the cover sheet too, read from the cache,
+	// and the heading links to the clause.
+	_, body = get(t, ts.URL+"/tdocs/R1-2509715/sections/5.1")
+	if !strings.Contains(body, "<dt>Change request</dt>") || !strings.Contains(body, `href="/specs/TS%2023.501/sections/5.1?version=18.6.0" title="Current text of this clause in TS 23.501">in TS 23.501 ↗</a>`) {
+		t.Errorf("section page:\n%s", body)
+	}
+	_, body = get(t, ts.URL+"/tdocs/R1-2509715/sections/Agreement")
+	if strings.Contains(body, "in TS 23.501 ↗") {
+		t.Error("an unnumbered heading links to the spec")
+	}
+	// An LS page.
+	_, body = get(t, ts.URL+"/tdocs/R1-2508303")
+	if !strings.Contains(body, "<dt>Liaison statement</dt><dd>from RAN WG1 to RAN WG2</dd>") || strings.Contains(body, "Change request") {
+		t.Errorf("LS page:\n%s", body)
+	}
+
+	// The meeting page links to the report and the agenda, which redirect
+	// to the resolved document.
+	_, body = get(t, ts.URL+"/meetings/r1/R1-123")
+	if !strings.Contains(body, `href="/meetings/r1/R1-123/report">meeting report</a>`) || !strings.Contains(body, `href="/meetings/r1/R1-123/agenda">final agenda</a>`) {
+		t.Errorf("meeting page links:\n%s", body)
+	}
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	for path, want := range map[string]string{
+		"/meetings/r1/R1-123/agenda": "/tdocs/R1-2509000?meeting=R1-123",
+		"/meetings/r1/R1-123/report": "/tdocs/tsg_ran%2FWG1_RL1%2FTSGR1_123%2FReport%2FFinal_Minutes_report_RAN1%23123_v100.zip",
+	} {
+		resp, err := client.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != want {
+			t.Errorf("%s: %d %s, want redirect to %s", path, resp.StatusCode, resp.Header.Get("Location"), want)
+		}
+	}
+	for path, status := range map[string]int{
+		"/meetings/r1/R1-123/minutes": http.StatusNotFound,
+		"/meetings/r1/R1-999/report":  http.StatusNotFound,
+	} {
+		if resp, _ := get(t, ts.URL+path); resp.StatusCode != status {
+			t.Errorf("%s: status %d, want %d", path, resp.StatusCode, status)
+		}
 	}
 }

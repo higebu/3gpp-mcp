@@ -6,6 +6,26 @@
         <span class="badge badge-cached">on demand</span>
     </div>
     {{if and .Doc.Title (ne .Doc.Title .Doc.ID)}}<p class="tdoc-title">{{.Doc.Title}}</p>{{end}}
+    {{with .Meta}}{{if .CR}}
+    <dl class="tdoc-cover">
+        <dt>Change request</dt><dd>{{if $.SpecURL}}<a href="/specs/{{$.Meta.SpecID}}">{{$.Meta.SpecID}}</a>{{else}}{{$.Meta.SpecID}}{{end}} CR {{.CR.CR}}{{if and .CR.Revision (ne .CR.Revision "-")}} rev {{.CR.Revision}}{{end}}{{if .CR.Category}}, category {{.CR.Category}}{{end}}{{if .CR.Release}}, {{.CR.Release}}{{end}}{{if .CR.CurrentVersion}}, against v{{.CR.CurrentVersion}}{{end}}</dd>
+        {{if .CR.SourceWG}}<dt>Source</dt><dd>{{.CR.SourceWG}}{{if .CR.SourceTSG}} / {{.CR.SourceTSG}}{{end}}</dd>{{end}}
+        {{if .CR.WorkItem}}<dt>Work item</dt><dd>{{.CR.WorkItem}}</dd>{{end}}
+        {{if .CR.Reason}}<dt>Reason for change</dt><dd>{{.CR.Reason}}</dd>{{end}}
+        {{if .CR.Summary}}<dt>Summary of change</dt><dd>{{.CR.Summary}}</dd>{{end}}
+        {{if .CR.Consequences}}<dt>Consequences if not approved</dt><dd>{{.CR.Consequences}}</dd>{{end}}
+        {{if .CR.Clauses}}<dt>Clauses affected</dt><dd>{{.CR.Clauses}}{{if $.SpecURL}}{{range .CR.ClauseList}} <a class="tdoc-clause-link" href="{{call $.SpecURL .}}" title="Current text of clause {{.}} in {{$.Meta.SpecID}}">{{.}} ↗</a>{{end}}{{end}}</dd>{{end}}
+    </dl>
+    {{else if .LS}}
+    <dl class="tdoc-cover">
+        <dt>Liaison statement</dt><dd>{{if .LS.Source}}from {{.LS.Source}}{{end}}{{if .LS.To}} to {{.LS.To}}{{end}}{{if .LS.Cc}}, cc {{.LS.Cc}}{{end}}</dd>
+        {{if .LS.ResponseTo}}<dt>Response to</dt><dd>{{.LS.ResponseTo}}</dd>{{end}}
+        {{if .LS.Release}}<dt>Release</dt><dd>{{.LS.Release}}</dd>{{end}}
+        {{if .LS.WorkItem}}<dt>Work item</dt><dd>{{.LS.WorkItem}}</dd>{{end}}
+        {{if .LS.Contact}}<dt>Contact</dt><dd>{{.LS.Contact}}</dd>{{end}}
+        {{if .LS.Attachments}}<dt>Attachments</dt><dd>{{.LS.Attachments}}</dd>{{end}}
+    </dl>
+    {{end}}{{end}}
     <p class="tdoc-meta">
         Source: <a href="{{.Doc.URL}}" target="_blank" rel="noopener">{{.Doc.Path}}</a>
         {{if .Doc.Files}}&mdash; files: {{range $i, $f := .Doc.Files}}{{if $i}}, {{end}}{{if eq $f $.Doc.MainFile}}<strong>{{$f}}</strong>{{else}}{{$f}}{{end}}{{end}}{{if gt (len .Doc.Files) 1}} (only the Word document in bold is converted){{end}}{{end}}
@@ -40,6 +60,7 @@
         <article class="section">
             <h{{headingLevel .Level}} class="section-heading depth-{{sectionDepth .Level}}" id="section-{{.Number}}">
                 {{if and .Number (ne .Number .Title)}}<span class="section-number">{{.Number}}</span> {{end}}{{.Title}}
+                {{if and $.SpecURL (isClauseNumber .Number)}}<a class="tdoc-clause-link" href="{{call $.SpecURL .Number}}" title="Current text of this clause in {{$.Meta.SpecID}}">in {{$.Meta.SpecID}} ↗</a>{{end}}
             </h{{headingLevel .Level}}>
             <div class="section-body">
                 {{.Content}}
