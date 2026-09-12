@@ -125,6 +125,17 @@ type ParseOptions struct {
 	// sheet, a liaison statement's header and body. The section is omitted
 	// when nothing precedes the first heading.
 	KeepPreamble bool
+	// NumberHeadings gives a heading that carries no number in its text the
+	// number Word computes from the heading style's numbering definition
+	// (word/numbering.xml), so "Approval of Agenda" becomes section "2".
+	// Specifications type their clause numbers into the heading text and
+	// are unaffected; meeting reports written on the MCC template rely on
+	// automatic numbering.
+	NumberHeadings bool
+
+	// numbers is the document's numbering state, set up by the parser when
+	// NumberHeadings is on.
+	numbers *numberer
 }
 
 // PreambleTitle is the title of the section that KeepPreamble creates.
@@ -206,6 +217,15 @@ func parseFromZipReader(r *zip.Reader, filename string, opts ParseOptions) (*Par
 	bodyElements, err := parseBody(docData)
 	if err != nil {
 		return nil, fmt.Errorf("parse body: %w", err)
+	}
+
+	if opts.NumberHeadings {
+		numberingData, _ := readZipFile(r, "word/numbering.xml")
+		defs, err := parseNumbering(numberingData)
+		if err != nil {
+			log.Printf("warning: failed to parse numbering.xml in %s: %v", filename, err)
+		}
+		opts.numbers = newNumberer(defs, parseStyleNumbering(stylesData))
 	}
 
 	// Extract metadata
@@ -531,6 +551,10 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 			info := elem.Paragraph
 			styleName := resolveStyleName(info.StyleID, styleMap)
 			headingLevel := getHeadingLevel(styleName)
+			// Every numbered paragraph advances its numbering, heading or
+			// not, so a heading's automatic number is right whatever
+			// precedes it.
+			autoNumber := opts.numbers.paragraphNumber(info)
 
 			// Also detect heading styles beyond level 6
 			if headingLevel == 0 {
@@ -593,6 +617,9 @@ func parseSections(elements []bodyElement, styleMap map[string]string, codeStyle
 					// name distinct IEs/messages).
 					title = strings.TrimSpace(match[1])
 					number = title
+				} else if autoNumber != "" {
+					number = autoNumber
+					title = text
 				} else {
 					number = text
 					title = text

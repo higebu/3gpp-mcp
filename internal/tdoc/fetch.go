@@ -123,7 +123,7 @@ func Fetch(ctx context.Context, client *http.Client, doc Document) (*Fetched, er
 		}
 	}
 
-	parsed, err := docx.ParseDocxWithOptions(docPath, docx.ParseOptions{KeepPreamble: true})
+	parsed, err := docx.ParseDocxWithOptions(docPath, docx.ParseOptions{KeepPreamble: true, NumberHeadings: true})
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", fetched.MainFile, err)
 	}

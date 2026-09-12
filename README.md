@@ -384,7 +384,9 @@ Converted documents and TDoc lists are kept in their own size-bounded cache
 TDocs are never imported into it and `search` does not cover them.
 
 `get_meeting_report` reads a meeting's approved report or final agenda by
-meeting name alone; the output header names the document it resolved to.
+meeting name alone; the output header names the document it resolved to,
+and the sections carry the numbers the document shows, so an agenda item's
+section can be read by number.
 
 Notes:
 
