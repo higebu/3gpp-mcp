@@ -44,7 +44,7 @@ const DefaultFileName = "tdocs.db"
 // entries are re-downloadable, so a wipe is cheaper than migrating. Bump it
 // when the stored content becomes incompatible — it tracks the converter,
 // like versionstore.cacheSchemaVersion, and the tables here.
-const cacheSchemaVersion = 1
+const cacheSchemaVersion = 2
 
 const schema = `
 CREATE TABLE IF NOT EXISTS tdocs (

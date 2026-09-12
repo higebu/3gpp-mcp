@@ -13,10 +13,16 @@ import (
 // paragraphInfo holds extracted information from a w:p element.
 type paragraphInfo struct {
 	StyleID string
-	Text    string
-	Runs    []runInfo
-	Images  []imageRef
-	IsCode  bool // true if the paragraph uses a monospace/code font
+	// HasNumPr, NumID, ILvl and HasILvl carry the paragraph's own w:numPr,
+	// the numbering Word applies on top of the style's (see numbering.go).
+	HasNumPr bool
+	NumID    string
+	ILvl     int
+	HasILvl  bool
+	Text     string
+	Runs     []runInfo
+	Images   []imageRef
+	IsCode   bool // true if the paragraph uses a monospace/code font
 	// SkippedDiagramLabels holds text-box labels found inside a grouped
 	// vector diagram (VML v:group, or DrawingML wpg:wgp reached through
 	// mc:AlternateContent) that had no embeddable raster image anywhere in
@@ -98,7 +104,7 @@ func parseParagraphFromDecoder(d *xml.Decoder, start xml.StartElement) paragraph
 // the parser stays safe for concurrent use.
 func parseParagraphFromDecoderDepth(d *xml.Decoder, _ xml.StartElement, drawDepth int) paragraphInfo {
 	var info paragraphInfo
-	var inPPr, inPPrRPr, inRPr, inR, inT bool
+	var inPPr, inPPrRPr, inRPr, inR, inT, inNumPr bool
 	var paragraphCodeFont bool
 	var currentRun runInfo
 	var runTexts []string
@@ -211,6 +217,21 @@ func parseParagraphFromDecoderDepth(d *xml.Decoder, _ xml.StartElement, drawDept
 			case "pStyle":
 				if inPPr {
 					info.StyleID = getAttrVal(t, "val")
+				}
+			case "numPr":
+				if inPPr {
+					inNumPr = true
+					info.HasNumPr = true
+				}
+			case "numId":
+				if inNumPr {
+					info.NumID = getAttrVal(t, "val")
+				}
+			case "ilvl":
+				if inNumPr {
+					if v, err := strconv.Atoi(getAttrVal(t, "val")); err == nil {
+						info.ILvl, info.HasILvl = v, true
+					}
 				}
 			case "rPr":
 				if inPPr && !inR {
@@ -336,6 +357,8 @@ func parseParagraphFromDecoderDepth(d *xml.Decoder, _ xml.StartElement, drawDept
 			depth--
 			local := t.Name.Local
 			switch local {
+			case "numPr":
+				inNumPr = false
 			case "pPr":
 				inPPr = false
 				inPPrRPr = false

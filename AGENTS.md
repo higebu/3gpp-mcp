@@ -53,8 +53,9 @@ make e2e                  # Playwright suite for web viewer JS behavior (CI job 
   path and fetched by `internal/tdoc` — the group's DynaReport meeting index
   gives the meeting whose TDoc range covers the number, and the document is
   downloaded from that meeting's `Docs/<id>.zip` (the listing is cached 24h).
-  Conversion runs with `docx.ParseOptions{KeepPreamble: true}` so a CR cover
-  sheet / LS header survives as the `""` (preamble) section, and repeated
+  Conversion runs with `docx.ParseOptions{KeepPreamble: true, NumberHeadings:
+  true}` so a CR cover sheet / LS header survives as the `""` (preamble)
+  section (see below for the numbering), and repeated
   unnumbered headings are de-duplicated with `" (2)"` suffixes at store time.
   A converter change that alters TDoc output needs a bump of
   `tdocstore.cacheSchemaVersion`, which is separate from
@@ -80,8 +81,13 @@ make e2e                  # Playwright suite for web viewer JS behavior (CI job 
   `report` TDoc of the following meetings whose title names the meeting
   (`tdoc.ReportTitleMatches`) and falls back to the `Report/` folder
   (`tdoc.FindReportFile`); the agenda is the unrevised `agenda` TDoc of the
-  meeting's own list. Report headings are unnumbered after conversion
-  (Word auto-numbering), so their section numbers are their titles.
+  meeting's own list. Report headings on the MCC template carry no number
+  in their text — Word computes it from the heading style's numbering
+  definition — so TDocs are converted with `docx.ParseOptions
+  {NumberHeadings: true}`: `internal/converter/docx/numbering.go` reads
+  `word/numbering.xml` and the styles' `w:numPr` and numbers every heading
+  whose text has no number, in reading order. Specifications type their
+  numbers and are converted with it off, so their output is unchanged.
 - **OpenAPI search is a second FTS index.** `openapi_chunks` / `openapi_chunks_fts`
   (`db.OpenAPIIndexSchema`) hold one row per schema and per operation, derived
   from `openapi_specs` by `internal/openapiindex` and **rebuilt wholesale** —
