@@ -10,6 +10,7 @@ import (
 
 	"github.com/higebu/3gpp-mcp/internal/tdoc"
 	"github.com/higebu/3gpp-mcp/internal/tdocstore"
+	"github.com/higebu/3gpp-mcp/internal/tools"
 )
 
 // meetingsPerPage bounds the meeting list page; a group has a few hundred
@@ -203,4 +204,20 @@ func filterQuery(f tdocstore.Filter) template.URL {
 // meeting carried along so the number resolves without the meeting index.
 func tdocListURL(id, meeting string) string {
 	return "/tdocs/" + url.PathEscape(id) + meetingQuery(meeting)
+}
+
+// handleMeetingDocument resolves a meeting's report or agenda and redirects
+// to the document's page, so the address bar carries the TDoc.
+func (h *handler) handleMeetingDocument(w http.ResponseWriter, r *http.Request) {
+	kind := tools.MeetingDocumentKind(r.PathValue("kind"))
+	if kind != tools.KindReport && kind != tools.KindAgenda {
+		http.NotFound(w, r)
+		return
+	}
+	doc, err := h.src.ResolveMeetingDocument(r.Context(), r.PathValue("meeting"), r.PathValue("group"), kind)
+	if err != nil {
+		h.renderTDocError(w, err)
+		return
+	}
+	http.Redirect(w, r, tdocListURL(doc.Request, doc.RequestMeeting), http.StatusSeeOther)
 }

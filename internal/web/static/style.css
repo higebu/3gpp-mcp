@@ -1816,3 +1816,28 @@ body:has(dialog.lightbox[open]) {
 .tdoc-details span {
     display: block;
 }
+
+.tdoc-cover {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.2rem 1rem;
+    margin: 0.5rem 0 0.75rem;
+    font-size: 0.9rem;
+}
+
+.tdoc-cover dt {
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.tdoc-cover dd {
+    margin: 0;
+    white-space: pre-line;
+}
+
+.tdoc-clause-link {
+    font-size: 0.75rem;
+    font-weight: normal;
+    margin-left: 0.5rem;
+    white-space: nowrap;
+}

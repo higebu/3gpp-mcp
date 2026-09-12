@@ -69,7 +69,19 @@ make e2e                  # Playwright suite for web viewer JS behavior (CI job 
   than the listing cache TTL and the meeting ended less than
   `tdocstore.ListFreshFor` ago; a failed refresh keeps serving the stale copy.
   At most `tdocstore.MaxLists` lists are kept, LRU, independent of the
-  byte limit on documents.
+  byte limit on documents. **CR cover sheets and LS headers are parsed on
+  read, not at store time** (`internal/tdoc/cover.go`, from the preamble
+  section's HTML tables / bold label lines; `tools.ParseTDocMetadata` names
+  the spec as the database does, by lookup or the xx.8xx/xx.9xx = TR
+  convention), so a parser change needs no cache bump. An LS is recognized
+  only when it is addressed to someone (`To:`): reports and agendas open
+  with `Source:`/`Title:` lines too. **A meeting's report is not in its own
+  folder for every group**: `Source.ResolveMeetingDocument` takes the
+  `report` TDoc of the following meetings whose title names the meeting
+  (`tdoc.ReportTitleMatches`) and falls back to the `Report/` folder
+  (`tdoc.FindReportFile`); the agenda is the unrevised `agenda` TDoc of the
+  meeting's own list. Report headings are unnumbered after conversion
+  (Word auto-numbering), so their section numbers are their titles.
 - **OpenAPI search is a second FTS index.** `openapi_chunks` / `openapi_chunks_fts`
   (`db.OpenAPIIndexSchema`) hold one row per schema and per operation, derived
   from `openapi_specs` by `internal/openapiindex` and **rebuilt wholesale** —

@@ -36,6 +36,13 @@ type tdocData struct {
 	Next     *db.Section
 	// Meeting is the meeting named in the request, carried on every link.
 	Meeting string
+	// Meta is what the cover sheet or LS header says; nil for other
+	// documents.
+	Meta *tools.TDocMetadata
+	// SpecURL links a numbered section of a CR to the same clause of the
+	// spec it changes, at the version the CR is written against; empty
+	// when the document is not a CR.
+	SpecURL func(number string) string
 }
 
 // meetingQuery renders the query string that carries a meeting name.
@@ -124,6 +131,20 @@ func (h *handler) renderTDocPage(w http.ResponseWriter, r *http.Request, id, num
 		Prev:     prev,
 		Next:     next,
 		Meeting:  meeting,
+		Meta:     h.src.TDocMeta(r.Context(), rec.ID, sections),
+	}
+	if data.Meta != nil && data.Meta.CR != nil && data.Meta.SpecID != "" {
+		specID, version := data.Meta.SpecID, data.Meta.CR.CurrentVersion
+		data.SpecURL = func(number string) string {
+			if number == "" {
+				return ""
+			}
+			u := "/specs/" + url.PathEscape(specID) + "/sections/" + url.PathEscape(number)
+			if version != "" {
+				u += "?version=" + url.QueryEscape(version)
+			}
+			return u
+		}
 	}
 	if err := h.tmpls.ExecuteTemplate(w, "layout.html", layoutData{Page: "tdoc", Data: data}); err != nil {
 		log.Printf("template error: %v", err)

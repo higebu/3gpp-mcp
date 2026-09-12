@@ -359,6 +359,7 @@ image format: `![Figure](image://NAME?w=&h=)` in body text and
 | `list_meetings` | List a group's meetings, newest first, with codes, dates, TDoc ranges and FTP folders; without a group, the supported groups | `group` (`R1`, `RAN1`, `SA2`, ...), `limit`, `offset` (all optional) |
 | `list_tdocs` | List a meeting's documents from its official TDoc list, with type, status, source, agenda item, title and CR/LS details | `meeting` (required): `R1-123`, `RAN1#123` or the folder path; `group`, `agenda_item`, `type`, `status`, `source`, `spec`, `query`, `details`, `limit`, `offset` (all optional) |
 | `get_tdoc` | Read a meeting document (TDoc) as Markdown | `tdoc_id` (required): TDoc number (`R1-2509715`) or an FTP path (`tsg_ran/WG1_RL1/TSGR1_123/Report/Final_Minutes_report_RAN1#123_v100.zip`), `meeting`, `section_number`, `offset`, `max_lines`, `max_chars` (all optional) |
+| `get_meeting_report` | Read a meeting's report (minutes) or final agenda by meeting name | `meeting` (required); `group`, `kind` (`report`, default, or `agenda`), `section_number`, `offset`, `max_lines`, `max_chars` (all optional) |
 
 TDocs are the working documents of a 3GPP meeting: contributions, change
 requests (CRs), liaison statements (LSs), agendas and meeting reports. A TDoc
@@ -370,24 +371,31 @@ number falls in no listed range. A document with no TDoc number — a meeting
 report, for instance — is named by its path under
 <https://www.3gpp.org/ftp/> instead.
 
-`list_meetings` reads the same DynaReport page, and `list_tdocs` the
-`TDoc_List_Meeting_<group>#<n>.xlsx` a meeting publishes in its `Docs/`
-folder — the secretary's record of every document's type, status (`agreed`,
-`noted`, `revised`, ...), source, agenda item, revision chain, and for a CR
-the spec, CR number and category, for an LS the addressees. Without filters
-the output opens with the agenda items and their document counts; `query` is
-a full-text search over titles, sources, abstracts, agenda item descriptions
-and work items, scoped to that meeting. The list is re-downloaded daily while
-the meeting is less than 30 days past its end date and kept as final after
-that.
+`list_tdocs` lists a meeting's official TDoc list: every document's type,
+status (`agreed`, `noted`, `revised`, ...), source, agenda item, revision
+chain, and for a CR the spec, CR number and category, for an LS the
+addressees. Without filters the output opens with the agenda items and their
+document counts; `query` is a full-text search over titles, sources,
+abstracts, agenda item descriptions and work items, scoped to that meeting.
+The list is refreshed daily while the meeting is recent.
 
 Converted documents and TDoc lists are kept in their own size-bounded cache
 (`tdocs.db`, see [`--tdoc-cache`](#serve)), separate from the main database:
 TDocs are never imported into it and `search` does not cover them.
 
+`get_meeting_report` reads a meeting's approved report or final agenda by
+meeting name alone; the output header names the document it resolved to.
+
 Notes:
 
-- A CR's cover sheet and an LS's header are in the section named `preamble`.
+- A CR's cover sheet and an LS's header are in the section named `preamble`,
+  and summarized at the top of the output: for a CR the spec, CR number,
+  category, release, source, reason for and summary of the change, the
+  clauses affected, and the `get_section` call that reads a changed clause
+  at the version the CR is written against; for an LS the sender,
+  addressees, the LS it replies to, release, work item and contact. The web
+  viewer shows the same block and links each changed clause, and each
+  numbered section of the CR, to the spec.
 - A download that holds attachments has only its main Word file converted; the
   others are listed in the output header so a reader knows they exist.
 - `.doc` documents need LibreOffice (`soffice`) at runtime; `.pptx`, `.xlsx`
@@ -578,7 +586,8 @@ spec.
 The query commands (`list-specs`, `list-versions`, `get-toc`, `get-section`,
 `get-asn1`, `compare-versions`, `search`, `list-openapi`, `get-openapi`,
 `search-openapi`, `get-references`, `list-images`, `get-image`,
-`list-meetings`, `list-tdocs`, `get-tdoc`) mirror the MCP read tools 1:1, so
+`list-meetings`, `list-tdocs`, `get-tdoc`, `get-meeting-report`) mirror the
+MCP read tools 1:1, so
 the database can be inspected and scripted from a shell without an MCP client:
 
 ```bash
@@ -586,6 +595,7 @@ the database can be inspected and scripted from a shell without an MCP client:
 3gpp-mcp get-section --db data/3gpp.db "TS 23.501" 5.15.2 | less
 3gpp-mcp list-tdocs --db data/3gpp.db --type CR --status agreed --spec 38.214 R1-123
 3gpp-mcp get-tdoc --db data/3gpp.db R1-2509715 | less
+3gpp-mcp get-meeting-report --db data/3gpp.db RAN1#123 | less
 ```
 
 Conventions shared by all of them:
@@ -603,9 +613,11 @@ Conventions shared by all of them:
   cache to report `cached` availability, but will not create one).
 - `get-tdoc` takes a TDoc number or an FTP path and an optional section
   ([`preamble`](#meeting-documents-tdocs) for a CR cover sheet or an LS
-  header), plus `--meeting`; `list-meetings` takes a group and `list-tdocs` a
+  header), plus `--meeting`; `list-meetings` takes a group, `list-tdocs` a
   meeting with the same filters as the tool (`--agenda-item`, `--type`,
-  `--status`, `--source`, `--spec`, `--query`, `--details`). The three share
+  `--status`, `--source`, `--spec`, `--query`, `--details`) and
+  `get-meeting-report` a meeting, an optional section and `--kind agenda`
+  for the agenda. The four share
   `serve`'s meeting-document flags `--no-fetch`, `--tdoc-cache`,
   `--tdoc-cache-mb` and `--fetch-budget` and read their own cache only, never
   the version cache.

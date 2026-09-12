@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -165,8 +166,11 @@ func (h *handler) initTemplates() {
 			return "/tdocs/" + url.PathEscape(id) + "/sections/" + url.PathEscape(number) + meetingQuery(meeting)
 		},
 		"tdocListURL": tdocListURL,
-		"meetingURL":  meetingURL,
-		"lower":       strings.ToLower,
+		// isClauseNumber tells a numbered clause ("7.9.4.2") from an
+		// unnumbered heading stored under its title ("Agreement").
+		"isClauseNumber": func(number string) bool { return clauseNumberRE.MatchString(number) },
+		"meetingURL":     meetingURL,
+		"lower":          strings.ToLower,
 		// releaseLabel renders a bare release number as "Rel-18"; anything else
 		// is shown unchanged.
 		"releaseLabel": specver.ReleaseLabel,
@@ -669,6 +673,8 @@ func (h *handler) targetInfo(ctx context.Context, specID, version string, secNum
 		return e.set[section], e.version, true
 	}
 }
+
+var clauseNumberRE = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)*[a-z]?$`)
 
 func refURL(ref db.Reference) string {
 	target := ref.TargetSpec

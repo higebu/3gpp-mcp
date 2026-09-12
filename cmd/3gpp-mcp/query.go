@@ -1026,6 +1026,9 @@ func runGetTDoc(ctx context.Context, out, errOut io.Writer, src *tools.Source, r
 		return fmt.Errorf("section %s not found in %s", section, rec.ID)
 	}
 	fmt.Fprintln(out, tools.TDocHeader(rec))
+	if meta := src.TDocMeta(ctx, rec.ID, sections).Text(); meta != "" {
+		fmt.Fprintln(out, meta)
+	}
 	for _, s := range sections {
 		fmt.Fprintf(out, "%s\n\n", s.Content)
 	}
@@ -1123,4 +1126,40 @@ func runListTDocs(ctx context.Context, out, errOut io.Writer, src *tools.Source,
 	}
 	fmt.Fprint(out, tools.FormatTDocList(ml, f, res, agenda, details))
 	return nil
+}
+
+func cmdGetMeetingReport(args []string) {
+	fs := flag.NewFlagSet("get-meeting-report", flag.ExitOnError)
+	qf := addQueryFlags(fs, true)
+	group := fs.String("group", "", "Group of the meeting (R1, RAN1, ...), only needed when the meeting name does not carry it")
+	kind := fs.String("kind", "report", "Document to read: report (the minutes) or agenda")
+	_ = fs.Parse(args)
+	if fs.NArg() != 1 && fs.NArg() != 2 {
+		fmt.Fprintln(os.Stderr, "Usage: 3gpp-mcp get-meeting-report [options] <meeting> [section]")
+		fmt.Fprintln(os.Stderr, "Options must come before positional arguments.")
+		os.Exit(1)
+	}
+
+	runQuery("get-meeting-report", func(ctx context.Context) error {
+		src, cleanup, err := qf.openTDocSource()
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		return runGetMeetingReport(ctx, os.Stdout, os.Stderr, src, fs.Arg(0), *group, *kind, fs.Arg(1))
+	})
+}
+
+func runGetMeetingReport(ctx context.Context, out, errOut io.Writer, src *tools.Source, meeting, group, kind, section string) error {
+	var doc *tools.MeetingDocument
+	err := waitForFetch(ctx, errOut, func() error {
+		var err error
+		doc, err = src.ResolveMeetingDocument(ctx, meeting, group, tools.MeetingDocumentKind(strings.ToLower(kind)))
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "[Meeting %s]\n", doc.Note)
+	return runGetTDoc(ctx, out, errOut, src, doc.Request, section, doc.RequestMeeting)
 }

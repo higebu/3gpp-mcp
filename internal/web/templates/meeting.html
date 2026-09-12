@@ -15,6 +15,9 @@
         <a href="https://www.3gpp.org/ftp/{{.Meeting.DocsDir}}/" target="_blank" rel="noopener">Docs</a>)
         &mdash; {{.List.Entries}} TDocs from the <a href="{{.List.URL}}" target="_blank" rel="noopener">TDoc list</a>
     </p>
+    <p class="tdoc-meta meeting-docs">
+        Read the <a href="/meetings/{{.Group.Code | lower}}/{{.Meeting.Code}}/report">meeting report</a> or the <a href="/meetings/{{.Group.Code | lower}}/{{.Meeting.Code}}/agenda">final agenda</a>.
+    </p>
 </header>
 
 <form class="filter-form meeting-filter" method="get" action="">
