@@ -3,6 +3,9 @@ package web
 import (
 	"strings"
 	"testing"
+
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/lexers"
 )
 
 // TestRenderMarkdown_CodeBlockHighlighting pins which code blocks the
@@ -26,5 +29,21 @@ func TestRenderMarkdown_CodeBlockHighlighting(t *testing.T) {
 				t.Errorf("renderMarkdown(%q) = %q, want it to contain %q", tt.content, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestRenderMarkdown_HighlightError pins that a lexer failing to tokenise
+// fails the render instead of emitting partial output. Chroma compiles a
+// lexer's rules on first use, so an invalid pattern surfaces in Tokenise.
+func TestRenderMarkdown_HighlightError(t *testing.T) {
+	lexers.Register(chroma.MustNewLexer(
+		&chroma.Config{Name: "zzzbrokenlexer", Aliases: []string{"zzzbrokenlexer"}},
+		func() chroma.Rules {
+			return chroma.Rules{"root": {{Pattern: `(`, Type: chroma.Text}}}
+		},
+	))
+	got := renderMarkdown("```zzzbrokenlexer\nx\n```\n", renderOpts{specID: "TS 23.501"})
+	if got != "<p>Error rendering content</p>" {
+		t.Errorf("renderMarkdown() = %q, want the render error page", got)
 	}
 }
