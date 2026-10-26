@@ -24,12 +24,8 @@ type highlightExtension struct {
 }
 
 func newHighlightExtension() html.Extension {
-	style := styles.Get("github")
-	if style == nil {
-		style = styles.Fallback
-	}
 	return &highlightExtension{
-		style:     style,
+		style:     styles.Get("github"),
 		formatter: chromahtml.New(chromahtml.WithClasses(true), chromahtml.WithLineNumbers(false)),
 	}
 }
@@ -57,13 +53,9 @@ func (e *highlightExtension) RendererOptions(_ *html.Config) []html.Option {
 			_, _ = n.Value.WriteTo(&code, source)
 			iterator, err := chroma.Coalesce(lexer).Tokenise(nil, code.String())
 			if err != nil {
-				_, _ = next.Render(w, source, node, true, rc)
-				return next.Render(w, source, node, false, rc)
-			}
-			if err := e.formatter.Format(w, e.style, iterator); err != nil {
 				return ast.WalkStop, err
 			}
-			return ast.WalkContinue, nil
+			return ast.WalkContinue, e.formatter.Format(w, e.style, iterator)
 		})
 	}
 	return []html.Option{html.WithNodeRendererDecorator(ast.KindCodeBlock, decorator)}
