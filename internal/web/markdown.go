@@ -18,10 +18,9 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/higebu/3gpp-mcp/internal/db"
-	"github.com/yuin/goldmark"
-	highlighting "github.com/yuin/goldmark-highlighting/v2"
-	"github.com/yuin/goldmark/extension"
-	"github.com/yuin/goldmark/renderer/html"
+	"github.com/yuin/goldmark/v2/extension"
+	"github.com/yuin/goldmark/v2/parser"
+	"github.com/yuin/goldmark/v2/renderer/html"
 )
 
 var (
@@ -40,31 +39,26 @@ var (
 	fallbackTokenCount atomic.Uint64
 )
 
-var md goldmark.Markdown
-
-func init() {
-	md = goldmark.New(
-		goldmark.WithExtensions(
-			extension.Table,
-			extension.Strikethrough,
-			extension.TaskList,
-			highlighting.NewHighlighting(
-				highlighting.WithStyle("github"),
-				highlighting.WithFormatOptions(
-					chromahtml.WithClasses(true),
-					chromahtml.WithLineNumbers(false),
-				),
-			),
+var (
+	mdParser = parser.New(parser.WithExtensions(
+		extension.TableParser,
+		extension.StrikethroughParser,
+		extension.TaskListItemParser,
+	))
+	mdRenderer = html.New(
+		html.WithExtensions(
+			extension.TableHTMLRenderer,
+			extension.StrikethroughHTMLRenderer,
+			extension.TaskListItemHTMLRenderer,
+			newHighlightExtension(),
 		),
-		goldmark.WithRendererOptions(
-			// WithUnsafe is required because the DOCX converter emits raw HTML
-			// on purpose (tables, <sub>/<sup>, <img>). It is safe only because
-			// renderMarkdown escapes non-allowlisted tags before conversion and
-			// sanitizeHTML allowlists the final output.
-			html.WithUnsafe(),
-		),
+		// WithUnsafe is required because the DOCX converter emits raw HTML
+		// on purpose (tables, <sub>/<sup>, <img>). It is safe only because
+		// renderMarkdown escapes non-allowlisted tags before conversion and
+		// sanitizeHTML allowlists the final output.
+		html.WithUnsafe(),
 	)
-}
+)
 
 // renderOpts configures renderMarkdown.
 type renderOpts struct {
@@ -181,8 +175,9 @@ func renderMarkdown(content string, o renderOpts) string {
 	}
 	content = sb.String()
 
+	source := []byte(content)
 	var buf bytes.Buffer
-	if err := md.Convert([]byte(content), &buf); err != nil {
+	if err := mdRenderer.Render(&buf, source, mdParser.Parse(source)); err != nil {
 		return "<p>Error rendering content</p>"
 	}
 	return sanitizeHTML(injectMath(buf.String(), token, mathSpans))
