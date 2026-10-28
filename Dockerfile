@@ -1,5 +1,5 @@
 # 1) Build the static binary.
-FROM golang:1.27-bookworm@sha256:05237276236793ebedaf0b87dab86add9ec9adc66ebef2dbc3107c18254cde1c AS go-builder
+FROM golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS go-builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -15,7 +15,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 #    --convert-doc / --convert-image but lives only in this stage, so it never
 #    bloats the final image. Temp files are deleted as each spec is processed,
 #    keeping disk usage low.
-FROM golang:1.27-bookworm@sha256:05237276236793ebedaf0b87dab86add9ec9adc66ebef2dbc3107c18254cde1c AS db-builder
+FROM golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS db-builder
 ARG RELEASE=latest
 ARG MAX_RELEASE=
 RUN apt-get update \
