@@ -70,7 +70,7 @@ steps:
       - repo
 
   - id: build
-    name: gcr.io/cloud-builders/docker@sha256:0aca0f95e1ba8f9107263d3e9782d5ce99a5b60d35b3f8985e4534b65552636f
+    name: gcr.io/cloud-builders/docker@sha256:fbc05705e6f24467e40ae8a4097ab9b8fae1116551f838fa2c55f4367427fc36
     dir: repo
     args:
       - build
@@ -81,7 +81,7 @@ steps:
       - .
 
   - id: push
-    name: gcr.io/cloud-builders/docker@sha256:0aca0f95e1ba8f9107263d3e9782d5ce99a5b60d35b3f8985e4534b65552636f
+    name: gcr.io/cloud-builders/docker@sha256:fbc05705e6f24467e40ae8a4097ab9b8fae1116551f838fa2c55f4367427fc36
     args:
       - push
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:rel${_RELEASE}${_MAX_RELEASE}
