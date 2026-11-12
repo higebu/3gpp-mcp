@@ -41,15 +41,15 @@ var (
 
 var (
 	mdParser = parser.New(parser.WithExtensions(
-		extension.TableParser,
-		extension.StrikethroughParser,
-		extension.TaskListItemParser,
+		extension.NewTableParser(),
+		extension.NewStrikethroughParser(),
+		extension.NewTaskListItemParser(),
 	))
 	mdRenderer = html.New(
 		html.WithExtensions(
-			extension.TableHTMLRenderer,
-			extension.StrikethroughHTMLRenderer,
-			extension.TaskListItemHTMLRenderer,
+			extension.NewTableHTMLRenderer(),
+			extension.NewStrikethroughHTMLRenderer(),
+			extension.NewTaskListItemHTMLRenderer(),
 			newHighlightExtension(),
 		),
 		// WithUnsafe is required because the DOCX converter emits raw HTML
