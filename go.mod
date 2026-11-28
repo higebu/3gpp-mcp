@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/alecthomas/chroma/v2 v2.27.0
+	github.com/alecthomas/chroma/v3 v3.0.0
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/yuin/goldmark/v2 v2.1.16
@@ -13,7 +14,7 @@ require (
 
 require (
 	github.com/aymerick/douceur v0.2.0 // indirect
-	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
+	github.com/dlclark/regexp2/v2 v2.10.1 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
